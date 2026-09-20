@@ -1,6 +1,6 @@
 # Central R&D Employee Tracking
 
-Internal employee operations portal for profiles, leave records, GitHub commit metadata, trainee assignments, and engineering logbooks.
+Internal L&D and resource-management platform for employee history, skills, training, assessment, availability, project allocation, client interviews, attendance, leave, and supporting work evidence.
 
 The repository is being delivered as a 30-working-day MVP. The implementation is intentionally narrow: it records operational facts, enforces access boundaries, and avoids treating commit counts or leave duration as employee-performance signals.
 
@@ -10,7 +10,7 @@ The project is in its first implementation slice:
 
 - The requirements baseline is documented in [`docs/SRS.md`](docs/SRS.md).
 - Architecture decisions and the proposed data model are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-- A deterministic leave-duration and category module is implemented with boundary tests.
+- A deterministic leave-duration and category module is implemented with boundary tests as a supporting domain component.
 - The web shell is ready for the authenticated workflows that follow.
 
 ## Proposed stack
@@ -37,16 +37,17 @@ Copy `.env.example` to `.env.local` before connecting a Supabase project. Do not
 
 ## Delivery sequence
 
-1. Confirm organisation timezone, holiday authority, supported years, and authentication owner.
-2. Finish the leave vertical slice: schema, RLS, authenticated UI, overlap protection, and integration tests.
-3. Add administrator-managed profiles and account deactivation.
-4. Add assignments and trainee logbooks.
-5. Add authenticated GitHub webhook ingestion and author mapping.
-6. Complete audit logging, backup/restore rehearsal, end-to-end tests, and handover.
+1. Validate L&D terminology, official roles, data sources, evaluation policy and permissions.
+2. Build effective-dated employee profiles and configurable role/skill catalogues.
+3. Add training, assessment evidence, certifications and development goals.
+4. Add projects, allocation, availability and client-interview history.
+5. Add evidence-backed evaluation and L&D/resource dashboards.
+6. Integrate attendance/leave and optional Git activity after confirming authoritative systems and purpose.
 
 ## Documentation
 
 - [Software Requirements Specification](docs/SRS.md)
+- [Company research and product implications](docs/COMPANY_RESEARCH.md)
 - [Architecture and data model](docs/ARCHITECTURE.md)
 - [Contributing workflow](CONTRIBUTING.md)
 

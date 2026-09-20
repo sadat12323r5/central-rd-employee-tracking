@@ -1,9 +1,9 @@
 const modules = [
-  ["Profiles", "Provisioned identities and role-controlled employee records"],
-  ["Leave", "Inclusive working-day records with versioned calendars"],
-  ["GitHub activity", "Signed, allowlisted push metadata without source code"],
-  ["Assignments", "Trainee and Senior Researcher working relationships"],
-  ["Logbooks", "Plain-text blockers, solutions, and milestones"],
+  ["People", "Employment history, role families, experience, and validated skills"],
+  ["Development", "Training, assessments, certifications, and growth plans"],
+  ["Readiness", "Availability, capacity, job fit, and evidence-backed evaluation"],
+  ["Assignments", "Internal and client projects with effective-dated allocation"],
+  ["Opportunities", "Client submissions, interview rounds, outcomes, and follow-up"],
 ];
 
 export default function Home() {
@@ -11,10 +11,10 @@ export default function Home() {
     <main>
       <section className="hero" aria-labelledby="page-title">
         <p className="eyebrow">Central R&amp;D · Internal portal</p>
-        <h1 id="page-title">Employee tracking without the surveillance theatre.</h1>
+        <h1 id="page-title">Develop talent. Find the right fit. Preserve the evidence.</h1>
         <p className="summary">
-          A focused operational record for people, leave, recorded GitHub activity,
-          trainee assignments, and engineering logbooks.
+          One governed view of employee growth, training, readiness, allocation,
+          client interviews, attendance, and work history.
         </p>
         <div className="status" role="status">
           <span aria-hidden="true" /> MVP foundation in progress
@@ -23,8 +23,8 @@ export default function Home() {
 
       <section className="modules" aria-labelledby="modules-title">
         <div className="section-heading">
-          <p className="eyebrow">30-working-day scope</p>
-          <h2 id="modules-title">Five deliberately small modules</h2>
+          <p className="eyebrow">Resource lifecycle</p>
+          <h2 id="modules-title">Five connected views of growth</h2>
         </div>
         <div className="grid">
           {modules.map(([name, description], index) => (

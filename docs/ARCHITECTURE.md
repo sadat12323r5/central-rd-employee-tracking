@@ -2,7 +2,7 @@
 
 ## Design goals
 
-The MVP uses a small modular monolith. One deployable web application owns browser rendering, authenticated server operations, and the GitHub webhook boundary. PostgreSQL owns relational integrity and row-level access rules. This is deliberately less glamorous than microservices and considerably more suitable for a 30-day build.
+The MVP uses a small modular monolith. One deployable web application owns browser rendering, authenticated operations, imports, and optional webhook boundaries. PostgreSQL owns relational integrity, effective-dated history and row/field access rules. This is deliberately less glamorous than microservices and considerably more suitable for a 30-day build.
 
 ## Proposed runtime
 
@@ -27,7 +27,13 @@ The MVP uses a small modular monolith. One deployable web application owns brows
 
 | Entity | Important fields and constraints |
 |---|---|
-| `employees` | UUID PK, unique employee ID, unique canonical primary email, name, role enum, status enum, unique auth user ID, timestamps |
+| `employees` | Stable identity, unique employee ID/auth identity, authorised contact fields and lifecycle state |
+| `employment_events` | Effective-dated join, confirmation, designation, promotion, transfer, manager, leave, exit and rehire history |
+| `catalogue_items` | Versioned/configurable designations, levels, families, skills, domains, locations and statuses |
+| `employee_skills` | Skill, proficiency, evidence source/status, assessor, evidence date and expiry; history retained |
+| `training_items` | Provider, type, capabilities, prerequisites, schedule, mode and status |
+| `training_enrolments` | Person/cohort assignment, workflow state, attendance, assessment, certificate and verification |
+| `development_goals` | Target role/skill, actions, owner, target date, progress and reviews |
 | `employee_git_emails` | UUID PK, employee FK, display email, unique canonical email, verified flag, timestamps |
 | `holiday_calendars` | UUID PK, unique version, jurisdiction, timezone, supported year range, immutable publication timestamp |
 | `holidays` | Calendar FK + date composite unique key, name |
@@ -35,8 +41,13 @@ The MVP uses a small modular monolith. One deployable web application owns brows
 | `repository_configs` | GitHub repository ID unique, display name, active flag, secret reference (never secret value) |
 | `webhook_deliveries` | Provider + delivery ID unique, repository ID, received/processed timestamps, outcome, safe error code |
 | `commits` | Provider + repository ID + SHA unique, repository name, author email, authored time, nullable employee FK, delivery FK |
-| `assignments` | Trainee FK, Senior Researcher FK, name, date range, distinct-participant check, timestamps |
-| `logbook_entries` | Employee FK + entry date unique, three nullable text sections with non-empty aggregate check, timestamps |
+| `projects` | Internal/client project, confidentiality, technologies/domains, engagement model and dates |
+| `assignments` | Resource, project, delivery role, allocation percentage, date range, status and reporting lead |
+| `opportunities` | Confidential client/role demand, required capabilities, work model, stage, owner and dates |
+| `resource_submissions` | Resource/opportunity pipeline, interview rounds, structured evidence, outcome and next action |
+| `evaluations` | Template/scale version, period, reviewer, state and employee acknowledgement |
+| `evaluation_ratings` | Criterion, rating, evidence, confidence and immutable finalisation history |
+| `workday_summaries` | Source-attributed scheduled/worked/leave/holiday/missing totals by period |
 | `audit_events` | Append-only UUID PK, actor, target, action, safe metadata, server timestamp |
 
 PostgreSQL exclusion constraints should enforce same-employee leave-range non-overlap, avoiding race conditions that an application-only pre-check cannot prevent.
@@ -53,19 +64,21 @@ tests            Domain, integration, policy, and end-to-end scenarios
 
 ## First vertical slice
 
-The initial commit implements the pure leave calculator and category boundaries. The next slice will add:
+The initial commit implements the pure leave calculator and category boundaries. Following corrected discovery, the next slice will add:
 
-1. holiday calendar and leave tables;
-2. database constraints and RLS;
-3. authenticated create/list/edit/delete services;
-4. an accessible leave form and list;
-5. integration and browser tests.
+1. effective-dated employee and configurable catalogue tables;
+2. skill evidence and training/development records;
+3. database constraints, field-aware services and RLS;
+4. authenticated employee/resource profile and search;
+5. integration and browser access-control tests.
 
 ## Open decisions
 
-- Organisation IANA timezone
-- Holiday jurisdiction, source, supported years, and initial version
+- Official designation/level/family taxonomy and internal resource terminology
+- Authoritative HRMS, LMS, attendance/leave, project and recruitment sources
+- Evaluation criteria, scale, evidence rules and employee visibility
+- Organisation timezones, calendars and holiday authorities
 - Supabase organisation/project ownership and environments
-- GitHub repository IDs included in the MVP
+- Whether Git activity belongs in the MVP at all
 - Retention periods and authorised production operators
 - Whether deployment remains Vercel/Supabase after the demonstration
