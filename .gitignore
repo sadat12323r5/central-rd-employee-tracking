@@ -1,5 +1,7 @@
 node_modules/
 .next/
+.vercel/
+*.tsbuildinfo
 coverage/
 playwright-report/
 test-results/
