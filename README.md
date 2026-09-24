@@ -51,4 +51,4 @@ The browser tests use installed Microsoft Edge by default and start an isolated 
 
 The owner is Brain Station 23's L&D manager. The primary workflow is reviewing employees' background, development, present assignments and readiness for jobs at other employers. Attendance records establish days worked; Git commits do not. Skill assessments use explicit evidence and human review.
 
-The older [SRS](docs/SRS.md) and [architecture](docs/ARCHITECTURE.md) describe the earlier, narrower MVP and require revision before production implementation. Their exclusions of training/employment history and two-role access model are superseded by this clarified product direction. See [contribution guidance](CONTRIBUTING.md) for the repository workflow.
+The [SRS](docs/SRS.md) and [architecture](docs/ARCHITECTURE.md) documents now describe this implemented prototype directly, plus a separate, clearly-marked roadmap section for what production requires (Supabase auth, persistence, RBAC, editable records). See [contribution guidance](CONTRIBUTING.md) for the repository workflow.

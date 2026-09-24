@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Employee } from "@/data/employees";
+import { toCsv } from "@/domain/csv";
 import { signOut } from "@/server/auth";
 
 type Section = "Overview" | "Employees" | "Learning & development" | "Interviews & placements" | "Attendance & leave";
@@ -37,7 +38,7 @@ export default function Portal({ employees }: { employees: Employee[] }) {
   function open(employee: Employee, nextTab: Tab = "Overview") { setSelected(employee); setTab(nextTab); setNotice(""); window.scrollTo({ top: 0, behavior: "smooth" }); }
   function exportDirectory() {
     const rows = [["Employee ID", "Name", "Designation", "Team", "Status", "Email"], ...visible.map(e => [e.id, e.name, e.title, e.team, e.status, e.email])];
-    const csv = rows.map(row => row.map(cell => `"${cell.replaceAll('"', '""')}"`).join(",")).join("\r\n");
+    const csv = toCsv(rows);
     const link = document.createElement("a"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" })); link.href = url; link.download = "bs23-demo-employees.csv"; link.click(); URL.revokeObjectURL(url); setNotice(`Exported ${visible.length} demo employee records.`);
   }
   const employeeTable = <div className="table-scroll"><table><thead><tr><th>Employee</th><th>Designation & team</th><th>Core skills</th><th>Current status</th><th><span className="sr-only">Profile</span></th></tr></thead><tbody>{visible.map(e => <tr key={e.id}><td><button className="person-button" onClick={() => open(e)}><Avatar employee={e} /><span><strong>{e.name}</strong><small>{e.id} · {e.type}</small></span></button></td><td><strong className="regular">{e.title}</strong><small>{e.team}</small></td><td><div className="tags">{e.skills.slice(0, 2).map(s => <span key={s.name}>{s.name}</span>)}</div></td><td><Badge>{e.status}</Badge></td><td><button className="arrow-button" onClick={() => open(e)} aria-label={`View ${e.name}'s profile`}>↗</button></td></tr>)}</tbody></table>{visible.length === 0 && <Empty message="No employees match these filters. Try another name, skill or team." />}</div>;
