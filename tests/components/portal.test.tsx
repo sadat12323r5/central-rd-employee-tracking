@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 
 vi.mock("@/server/auth", () => ({
   signOut: () => {},
@@ -47,6 +48,11 @@ describe("Portal directory", () => {
     await user.click(screen.getByRole("button", { name: "Reset" }));
     expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("row")).toHaveLength(employees.length + 1);
+  });
+
+  it("has no detectable accessibility violations in the directory view", async () => {
+    const { container } = render(<Portal employees={employees} />);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 
@@ -99,6 +105,13 @@ describe("Portal employee profile", () => {
 
     await user.click(screen.getByRole("tab", { name: "Interviews" }));
     expect(screen.getByText("Nothing here yet")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations on an open profile", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Portal employees={employees} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("returns to the directory from a profile", async () => {

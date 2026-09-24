@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 
 const signInMock = vi.fn();
 
@@ -41,5 +42,10 @@ describe("Login", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/incorrect/i);
     expect(signInMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("has no detectable accessibility violations", async () => {
+    const { container } = render(<Login showDemoCredentials={true} />);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

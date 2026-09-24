@@ -51,12 +51,17 @@ tests/leave.test.ts             Domain: leave calculation, categories, overlap
 tests/session.test.ts           Domain: session token signing/verification
 tests/auth.test.ts              Server actions: signIn/signOut/isSignedIn (src/server/auth.ts)
 tests/csv.test.ts               Domain: CSV row building/escaping extracted from the directory export
-tests/components/login.test.tsx    Component: sign-in form validation and submission
-tests/components/portal.test.tsx   Component: directory search/filter/reset/export, profile tab rendering
+tests/components/login.test.tsx    Component: sign-in form validation/submission, axe scan
+tests/components/portal.test.tsx   Component: directory search/filter/reset/export, profile tab rendering, axe scans
 tests/e2e/portal.spec.ts        Browser: full login → directory → profile → export → sign-out flow, desktop and mobile
+tests/e2e/accessibility.spec.ts Browser: axe scan (WCAG 2.2 AA, colour-contrast excluded — see SRS.md 11.7) of the sign-in page, dashboard, and an open profile
 ```
 
-Vitest runs `tests/**/*.test.ts` and `tests/**/*.test.tsx` under Node by default; component test files under `tests/components/` run under `jsdom` (configured via `environmentMatchGlobs` in `vitest.config.ts`) so they can render React components without a browser.
+Vitest runs `tests/**/*.test.ts` and `tests/**/*.test.tsx` under Node by default; component test files opt into `jsdom` per-file via the `// @vitest-environment jsdom` pragma so they can render React components without a browser. `tests/setup.ts` registers Testing Library's DOM cleanup and the `jest-axe` matcher for every test file.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: one job runs `npm run check` (typecheck, the full Vitest suite, and the production build), a second installs Chromium and runs `npm run test:e2e` (overriding the default `msedge` Playwright channel, since GitHub's Ubuntu runners don't have Edge installed) including the accessibility specs.
 
 ## Production architecture (not yet implemented)
 

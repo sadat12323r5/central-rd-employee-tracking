@@ -26,7 +26,7 @@ On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`.
 - Employee profiles covering employment, training, assessed skills, current assignments, external interviews, attendance and leave.
 - Organisation-wide training, interview and attendance views.
 - Responsive layouts and synthetic records for eight fictional employees.
-- Existing leave calculation module and tests, plus session and browser workflow tests.
+- Unit, component, and end-to-end test coverage (leave calculation, session/auth, directory, profiles), plus automated accessibility scans and CI on every push/PR — see [Verification](#verification).
 
 ## Demo boundaries
 
@@ -45,7 +45,9 @@ npm run check
 npm run test:e2e
 ```
 
-The browser tests use installed Microsoft Edge by default and start an isolated development server on port 3100. Set `PLAYWRIGHT_CHANNEL=chromium` and install Chromium with `npx playwright install chromium` on systems without Edge.
+The browser tests use installed Microsoft Edge by default and start an isolated development server on port 3100. Set `PLAYWRIGHT_CHANNEL=chromium` and install Chromium with `npx playwright install chromium` on systems without Edge (this is what `.github/workflows/ci.yml` does, since GitHub's runners don't have Edge).
+
+`npm run test:e2e` includes an automated accessibility scan (`tests/e2e/accessibility.spec.ts`, via axe) of the sign-in page, dashboard, and an employee profile, covering every WCAG 2.2 AA rule except colour contrast — the current palette has known, pre-existing contrast gaps tracked in [SRS.md](docs/SRS.md) Section 11.7 pending a deliberate design pass.
 
 ## Requirements direction
 

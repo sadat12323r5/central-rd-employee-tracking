@@ -124,7 +124,7 @@ The `Employee` type (`src/data/employees.ts`) is the sole data structure. It hol
 - **NFR-UX-001:** Interactive controls (search, filters, tabs, buttons, export, sign-out) shall be reachable and operable by keyboard alone.
 - **NFR-UX-002:** Status (e.g., "On project", "Not selected") shall be conveyed with a text label in addition to colour.
 - **NFR-UX-003:** Dates shall render in an unambiguous `D MMM YYYY` format.
-- **NFR-UX-004:** The workspace targets WCAG 2.2 AA; this is not yet independently verified (see Section 8, gap).
+- **NFR-UX-004:** The workspace targets WCAG 2.2 AA. Structural/semantic conformance (labels, roles, keyboard operability, ARIA) is automatically verified; colour-contrast conformance is a known, tracked gap (see Section 8) requiring a deliberate palette pass, not yet scheduled.
 
 ## 8. Verification matrix
 
@@ -135,8 +135,8 @@ The `Employee` type (`src/data/employees.ts`) is the sole data structure. It hol
 | Employee profile (FR-PROF-*) | All seven tabs render their expected content for at least one fixture employee, including the interview empty state | Partially covered end-to-end (`tests/e2e/portal.spec.ts` visits all tabs); empty-state case added — see `tests/components/portal.test.tsx` |
 | Organisation-wide views (FR-ORG-*) | Each of the three views is reachable and lists all employees/records | Covered end-to-end (navigation only); row-content assertions not yet added — **gap** |
 | Leave domain (unused by UI, retained for reuse) | Inclusive dates, weekends, weekday/weekend holidays, month/year/leap boundaries, invalid/reversed/zero ranges, unsupported years, overlap, category boundaries | Covered: `tests/leave.test.ts` |
-| Accessibility (NFR-UX-004) | Automated a11y assertions (e.g., axe) on the sign-in page and at least one profile tab | **Gap** — not yet automated; deferred by explicit product decision (see Section 1 answer log), tracked here for the next QA pass |
-| CI enforcement | `npm run check` and `npm run test:e2e` run automatically on every push/PR | **Gap** — no CI workflow exists yet; deferred by explicit product decision, tracked here for the next QA pass |
+| Accessibility (NFR-UX-004) | Automated axe scans (WCAG 2.2 AA rule set) on the sign-in page, dashboard, and an open profile, plus component-level scans of the login form and directory | Covered for every rule except `color-contrast` — see `tests/e2e/accessibility.spec.ts`, `tests/components/login.test.tsx`, `tests/components/portal.test.tsx`. Colour contrast is excluded: the scan found genuine, pre-existing WCAG AA failures (muted grey text, footer text, login-page copy on the lavender panel, badges) across dozens of individually hard-coded colours in `src/app/styles.css`. Fixing this needs a deliberate palette pass, not a rule left to silently fail — **tracked gap, not yet scheduled** |
+| CI enforcement | `npm run check` and `npm run test:e2e` run automatically on every push/PR | Covered: `.github/workflows/ci.yml` runs both jobs on push to `main` and on every pull request |
 
 Coverage reports support the scenario evidence but do not replace it.
 
@@ -148,9 +148,9 @@ Coverage reports support the scenario evidence but do not replace it.
 - [x] All seven profile tabs render for every fixture employee, including employees with zero interviews.
 - [x] Layout remains usable and free of horizontal scroll at 390px width.
 - [x] Leave-calculation domain module passes its full boundary/overlap test suite (unused by the UI; retained for the production leave workflow).
-- [ ] Server-action-level tests exist for sign-in/sign-out (`src/server/auth.ts`) — added in this revision.
-- [ ] CSV formatting is unit-tested independently of the DOM export flow — added in this revision.
-- [ ] Automated accessibility checks and CI enforcement — explicitly deferred; see Section 8.
+- [x] Server-action-level tests exist for sign-in/sign-out (`src/server/auth.ts`).
+- [x] CSV formatting is unit-tested independently of the DOM export flow.
+- [x] Automated accessibility scans and CI enforcement run on every push/PR (colour-contrast excluded; see Section 8 for the tracked gap).
 
 ## 10. Traceable user stories (current prototype)
 
@@ -187,6 +187,10 @@ Release-blocking, not safe defaults: an organisation IANA timezone for future-da
 ### 11.6 Explicitly still out of scope in production
 
 Carried forward from v0.2 because they remain true statements of intent, not just leftover text: GitHub or other Git-provider integration, plain-text logbooks, payroll, leave balances/approvals, and any automated productivity or performance score derived from recorded activity.
+
+### 11.7 Colour-contrast remediation
+
+Automated accessibility scanning (Section 8) found genuine WCAG 2.2 AA colour-contrast failures throughout the current palette: muted secondary text, footer text, login-page copy on the lavender panel, and status badges, traced to dozens of individually hard-coded grey/tint values in `src/app/styles.css` rather than a small, shared palette. This is a deliberate design decision, not a code fix — it needs a palette review (ideally consolidating the scattered greys into a small number of contrast-checked tokens) before NFR-UX-004 can be marked fully met.
 
 ## 12. Disposition of v0.2 requirements
 
