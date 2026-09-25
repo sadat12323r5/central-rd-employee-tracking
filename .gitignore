@@ -10,3 +10,7 @@ test-results/
 .env.*.local
 *.log
 .DS_Store
+
+# Personal skill-manager cache (mattpocock/skills installer), not project config
+.agents/
+skills-lock.json
