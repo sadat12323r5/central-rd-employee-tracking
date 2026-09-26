@@ -19,6 +19,8 @@ Open http://localhost:3000 and sign in to the synthetic demonstration:
 On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`.
 
 ## What works now
+Staff attendance: demo employees sign in with their fixture email (e.g. nadia.rahman@example.com) and the password Staff23Demo! (override with DEMO_STAFF_PASSWORD). Staff clock in and out in Dhaka time, record breaks and work mode, write a daily log of tasks, hours and links, and see recent days. Staff sessions cannot open the manager portal. Records are held in server memory (src/server/attendance-store.ts), reset on restart, and are not persisted on Vercel.
+
 
 - Server-checked demo admin sign-in with signed, expiring, HTTP-only session cookies and sign-out.
 - Dashboard showing workforce, training, availability and interview summaries.
