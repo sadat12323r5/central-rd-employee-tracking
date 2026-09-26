@@ -22,7 +22,7 @@ export default function Login({ showDemoCredentials }: { showDemoCredentials: bo
         {state.error && <p role="alert" className="form-error">{state.error}</p>}
         <button className="primary" disabled={pending}>{pending ? "Signing in…" : "Sign in to workspace →"}</button>
       </form>
-      <div className="demo-note"><strong>Interactive demo · synthetic data</strong><p>This preview contains fictional employees. Production accounts and HR integrations are not connected.</p>{showDemoCredentials && <p>Email: <code>manager@example.com</code><br />Password: <code>Brain23Demo!</code></p>}</div>
+      <div className="demo-note"><strong>Interactive demo · synthetic data</strong><p>This preview contains fictional employees. Production accounts and HR integrations are not connected.</p>{showDemoCredentials && <><p>Manager: <code>manager@example.com</code><br />Password: <code>Brain23Demo!</code></p><p>Staff: <code>nadia.rahman@example.com</code> (or any demo employee)<br />Password: <code>Staff23Demo!</code></p></>}</div>
       <p className="login-footnote">Brain Station 23 · L&D manager portal</p>
     </div></section>
   </main>;
