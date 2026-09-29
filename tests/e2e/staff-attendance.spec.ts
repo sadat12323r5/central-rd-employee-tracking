@@ -2,7 +2,11 @@ import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 // color-contrast is excluded for the same reason as accessibility.spec.ts.
-function accessibilityScan(page: Page) {
+async function accessibilityScan(page: Page) {
+  // Server Actions here revalidate the page in place; React briefly detaches and
+  // reattaches the hoisted <title> node while patching in the fresh RSC payload.
+  // Wait past that gap rather than scanning mid-transition.
+  await page.waitForFunction(() => document.title.length > 0);
   return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).disableRules(["color-contrast"]).analyze();
 }
 
