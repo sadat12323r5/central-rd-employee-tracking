@@ -10,3 +10,10 @@ test-results/
 .env.*.local
 *.log
 .DS_Store
+
+# Personal skill-manager cache (mattpocock/skills installer); skills-lock.json is
+# committed so the installer stays reproducible across the team, this raw cache is not
+.agents/
+
+# BMAD-METHOD generated planning/implementation artifacts (drafts, run-scoped)
+_bmad-output/
