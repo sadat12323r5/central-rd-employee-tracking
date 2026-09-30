@@ -5,6 +5,7 @@
 **Status:** implementation baseline — supersedes v0.2
 **Version:** 0.3
 **Last updated:** 24 September 2026
+**Correction (30 September 2026):** Section 2's actor table and the "one application role" line below it are stale — a `staff` session role shipped for attendance after this revision was written (see Section 2). Product intent is now tracked in the PRD (`_bmad-output/planning-artifacts/prds/`), which this document's scope/requirements sections still describe faithfully; only the actor-count claim is corrected here.
 
 ## 1. Purpose and success criteria
 
@@ -20,10 +21,11 @@ The system records operational and developmental activity. It is not a payroll, 
 |---|---|---|---|
 | System owner | Brain Station 23's L&D manager; owns the workflow this tool supports | Approves scope and demo credentials | Approves scope, provisioning, and data retention |
 | Administrator | Reviews employees' profiles, development, and readiness | One fictional demo identity ("Ayesha Karim"), shared password, full read access to fixture data | Named, provisioned accounts with full workspace access and record-editing rights |
-| Employee (subject of records) | Has profile, training, skills, assignment, interview, and attendance data reviewed | No account; not a system actor | Not specified as a system actor in this document; see Section 11.6 |
+| Employee (subject of records) | Has profile, training, skills, assignment, interview, and attendance data reviewed; can also act as Staff (below) | **Stale as of 30 September 2026** — was "No account; not a system actor." A `staff` session role now exists (fixture email + shared demo password), scoped to attendance only. See the Staff row below and Section 11.6. | Not specified as a system actor in this document; see Section 11.6 |
+| Staff | The employee, signed in to their own attendance record: clock in/out, daily task log | Fictional per-employee demo credential (shared password), scoped to one `employeeId`, cannot see the Administrator portal | Named, provisioned accounts; production scope is tracked in the PRD, not this document |
 | Developer/operator | Builds, deploys, and diagnoses the service | Repository and Vercel/local access; no implied application role | Same, plus database migration and backup authority |
 
-There is one application role today: the demo Administrator. Section 11.1 specifies the production role model.
+There are two application roles today: the demo Administrator and the demo Staff (attendance-only) role. Section 11.1 specifies the production role model.
 
 ## 3. Scope
 
@@ -42,7 +44,7 @@ There is one application role today: the demo Administrator. Section 11.1 specif
 
 - Any data persistence: all employee records are compiled fixture data; nothing written by the application survives a restart
 - Creating, editing, or deleting any record through the interface
-- Real user accounts: there is exactly one shared demo credential, not tied to an individual
+- Real user accounts: Administrator access is exactly one shared demo credential, not tied to an individual; Staff access is scoped per employee (fixture email) but still shares one demo password across all employees, not individually provisioned
 - Any integration with GitHub, HR systems, or calendars; the "commits" figure shown per employee is fixture data with an on-screen disclaimer, not a live integration
 - Plain-text engineering logbooks, trainee/Senior-Researcher assignment records, and webhook ingestion (dropped from v0.2; see Section 12)
 - Payroll, leave balances, leave approvals, or leave reasons
