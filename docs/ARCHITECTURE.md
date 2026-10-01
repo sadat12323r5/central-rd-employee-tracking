@@ -2,6 +2,8 @@
 
 **Status:** describes the implemented prototype — supersedes the previous version, which described an unbuilt GitHub-webhook/logbook system. See [SRS.md](SRS.md) Section 12 for why that scope was dropped.
 
+> **For new work, follow the architecture spine, not this document's "Production architecture" section.** As of 30 September 2026 the binding decisions for everything not yet built (accounts and roles, departments and managers, assignments and evaluations, the LMS adapter, archiving) live in [`_bmad-output/planning-artifacts/architecture/architecture-AI-DLC-Employee-management-2026-09-29/ARCHITECTURE-SPINE.md`](../_bmad-output/planning-artifacts/architecture/architecture-AI-DLC-Employee-management-2026-09-29/ARCHITECTURE-SPINE.md). The target entity list below predates it and is incomplete. This document stays accurate for the prototype as it exists today.
+
 ## Current architecture
 
 The application is a single Next.js (App Router) deployable with no database and no external services in its runtime path.

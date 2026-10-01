@@ -1,0 +1,101 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-01-2026 12:00
+last_updated: 10-01-2026 12:00
+project: AI-DLC-Employee-management
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: backlog
+  1-1-employee-records-persist-with-role-scoped-access: backlog
+  1-2-administrator-signs-in-with-a-named-account: backlog
+  1-3-administrator-provisions-a-staff-account: backlog
+  1-4-administrator-archives-and-restores-an-account: backlog
+  1-5-staff-attendance-survives-restarts: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-staff-adds-an-external-interview: backlog
+  2-2-staff-updates-or-withdraws-an-interview: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-staff-views-their-completed-training-history: backlog
+  3-2-staff-and-administrator-see-current-lms-enrolments: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-administrator-manages-the-department-list: backlog
+  4-2-administrator-assigns-a-department-manager: backlog
+  4-3-managers-see-only-their-own-department: backlog
+  4-4-interview-privacy-holds-for-managers: backlog
+  4-5-managers-create-and-close-assignments: backlog
+  4-6-manager-evaluates-a-closed-assignment-employee-sees-it: backlog
+  4-7-staff-backfills-a-past-project: backlog
+  4-8-higher-manager-transfers-an-employee-between-departments: backlog
+  4-9-managers-archive-and-restore-accounts-in-their-own-departmen: backlog
+  4-10-managers-use-my-record-for-their-own-self-service: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-administrator-loads-the-approved-holiday-calendar: backlog
+  5-2-record-a-leave-period: backlog
+  5-3-edit-or-cancel-a-leave-period: backlog
+  5-4-attendance-views-use-real-data: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-sign-in-page-meets-contrast-and-the-shared-palette-exists: backlog
+  6-2-administrator-workspace-meets-contrast: backlog
+  6-3-staff-portal-meets-contrast: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-add-a-new-employee: backlog
+  7-2-edit-an-employee-s-basic-details: backlog
+  7-3-maintain-employment-history: backlog
+  7-4-record-skills-assessments-and-the-manager-evaluation: backlog
+  epic-7-retrospective: optional
+
+action_items:
+  - epic: 1
+    action: "Blocker: create the Supabase project and decide ownership, environments, migration tooling, RLS test strategy, and secrets cutover (architecture spine, Deployment & Environments)"
+    owner: "unassigned"
+    status: open
+  - epic: 1
+    action: "Blocker: System Owner approves the org timezone and data retention periods (PRD 4.7)"
+    owner: "Safay"
+    status: open
+  - epic: 5
+    action: "Blocker for Story 5.1: System Owner approves the holiday calendar (jurisdiction, timezone, supported years, holiday dates)"
+    owner: "Safay"
+    status: open
