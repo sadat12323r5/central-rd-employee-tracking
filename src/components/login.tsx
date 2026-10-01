@@ -11,7 +11,7 @@ export default function Login({ showDemoCredentials }: { showDemoCredentials: bo
     <section className="login-story">
       <div className="brand"><span className="brand-mark">23</span><span>brain station <b>23</b><small>PEOPLE & DEVELOPMENT</small></span></div>
       <div className="login-message"><span className="eyebrow">THE PEOPLE BEHIND THE POSSIBILITIES</span><h1>Potential,<br />put into<br /><em>perspective.</em></h1><p>One place to understand your people, nurture their skills and support their next opportunity.</p></div>
-      <div className="story-footer"><span>Learn. Grow. Move forward.</span><span>↗</span></div>
+      <div className="story-footer"><span>Learn. Grow. Move forward.</span><span aria-hidden="true">↗</span></div>
       <div className="orbit orbit-one" /><div className="orbit orbit-two" />
     </section>
     <section className="login-form-side"><div className="login-form-wrap">

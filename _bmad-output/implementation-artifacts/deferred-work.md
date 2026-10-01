@@ -1,0 +1,11 @@
+# Deferred Work
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1-sign-in-contrast-and-palette.md`
+  summary: Update docs/SRS.md so NFR-UX-004, the Section 8 verification table, and the Section 11.7 colour-contrast notes reflect that the sign-in page now enforces `color-contrast` (Story 6.1), with the rest tracked as Epic 6.
+  evidence: SRS.md lines ~129/140/195 still describe colour contrast as an unscheduled gap and say the sign-in scan excludes the rule. It's a spec document, so changing it goes through the planning flow, not a story review.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1-sign-in-contrast-and-palette.md`
+  summary: Input borders fail WCAG 1.4.11 non-text contrast app-wide (`--field-border` #dfe3ec on white is 1.29:1, needs 3:1 to identify a form control).
+  evidence: Already true before Story 6.1 and outside its text-contrast scope. It affects every form (sign-in, staff portal, future admin forms), and axe doesn't check it. Needs a decision on whether Epic 6 covers non-text contrast, probably a new story or a scope addition to 6.2/6.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1-sign-in-contrast-and-palette.md`
+  summary: Add an automated guard (stylelint `color-no-hex` outside `:root`, or a grep-based test) so no hard-coded colours return to `src/app/styles.css`.
+  evidence: The epic's end state is that no hard-coded colours remain, but nothing enforces it. The guard can't be added before Story 6.3, because the Administrator workspace and staff portal still use about 80 literal colours until then. Belongs in 6.3's acceptance.
