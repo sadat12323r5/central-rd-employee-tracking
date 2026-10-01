@@ -59,13 +59,13 @@ Today it ships as a read-only demonstration prototype: one shared admin credenti
 
 - **System Owner** — Brain Station 23's L&D manager in their governance capacity: approves scope, retention, and gating configuration decisions (§4.7). Same person as the Administrator today; kept distinct because production accountability differs (`docs/SRS.md` §2).
 - **Administrator** — The L&D manager's day-to-day account role: full, org-wide read access to every employee record, today held by one shared demo credential. Production adds named administrator accounts (SRS 11.1). Distinct in kind from Department Manager below, even though today's one Administrator also happens to be L&D's Department Manager.
-- **Department Manager** — The role that may evaluate closed Assignments (FR-7) belonging to a Department. Authority flows down the Department hierarchy: a Department's own manager, plus every ancestor Department's manager up to the Administrator, may all evaluate its Assignments — a manager's manager retains authority over what's below them, they aren't replaced by a more specific manager being assigned. Today there is exactly one Department Manager account (the Administrator, managing L&D); Central R&D is confirmed to get its own manager eventually, subordinate to L&D's — narrower, department-scoped rights, not full Administrator authority. The FR-7 permission check resolves by walking up a Department's manager chain, not by "is this user an Administrator," so adding Central R&D's manager later doesn't require reworking the check — only its exact scoped-rights shape, still undefined (§8).
+- **Department Manager** — The role that may evaluate closed Assignments (FR-7) belonging to a Department. Authority flows down the Department hierarchy: a Department's own manager, plus every ancestor Department's manager up to the Administrator, may all evaluate its Assignments — a manager's manager retains authority over what's below them, they aren't replaced by a more specific manager being assigned. Today there is exactly one Department Manager account (the Administrator, managing L&D); Central R&D is confirmed to get its own manager eventually, subordinate to L&D's. Confirmed scope: a Department Manager holds admin powers (evaluate Assignments, archive/restore accounts, transfer employees per FR-11) but only over employees in their own Department and its sub-departments — never org-wide; the Administrator is the only org-wide role. Managers (and the Administrator, if their account is linked to an employee record) also get a "My record" area with the same self-service as the staff portal, under the same own-record rules (confirmed 2026-10-01). Every such permission check resolves by walking up a Department's manager chain, not by "is this user an Administrator," so adding Central R&D's manager later doesn't require reworking the checks.
 - **Staff** — An employee's own account role. Shipped for attendance only (session role `staff`, scoped to one `employeeId`, cannot see the Administrator portal). This PRD extends it to interviews, training, and viewing (not authoring) their own assignment evaluations. See the Document Purpose correction above — this role already exists; the SRS's "no employee accounts" language is stale, not a future statement.
-- **Employee** — The person a record is about. Same person may hold a Staff account for that record.
+- **Employee** — The person a record is about. Same person may hold a Staff account for that record. Belongs to exactly one Department at a time; changes only through a transfer (FR-11). Accounts are archived, never deleted (§4.4).
 - **External Interview** — A job interview with a company other than Brain Station 23: company, role, date, stage, outcome, feedback. Currently Administrator-visible, fixture-sourced, no write path. This PRD makes it Staff-writable for their own record (self-reported).
-- **Training Enrolment** — A training programme an employee is taking or has taken: programme, provider, progress, target/completion date, result. Currently Administrator-visible, fixture-sourced. This PRD adds a live sync from BrainStation's LMS for current enrolments, plus full history.
-- **Department** — An organisational unit an Assignment or Backfilled Project Entry belongs to, drawn from an Administrator-managed list (FR-10). May have a parent Department. Today exactly two exist: L&D (top-level, managed by the Administrator) and Central R&D (its sub-department, confirmed to get its own manager eventually — not yet assigned). Until Central R&D has its own manager, its Assignments are evaluated by L&D's manager, per the Department Manager entry's authority-flows-down rule. All other departments are stubbed placeholders for the Administrator to add later — see §9.
-- **Assignment** — Work an employee is doing, or did, for a client: client, project name, Department, allocation, start date, and — once closed — a completion date. Administrator-authored and Administrator-owned. Today the data model holds exactly one *current* assignment per employee and discards it when replaced (`docs/SRS.md` FR-PROF-006); this PRD makes closing an assignment archive it instead, so every employee accumulates a full assignment history over time, not just their current one.
+- **Training Enrolment** — A training programme an employee is taking or has taken: programme, provider, progress, target/completion date, result. Currently Administrator-visible, fixture-sourced. This PRD adds a live sync from BrainStation's LMS for current enrolments, plus full history. Always provided by L&D, so no Department is recorded on an enrolment; history stays with the employee after they transfer out of L&D.
+- **Department** — An organisational unit every Employee belongs to (exactly one at a time). Project work (Assignments) comes from the employee's current Department. Training always comes from L&D: employees typically train while members of L&D, then transfer (FR-11) to another Department for project work. Drawn from an Administrator-managed list (FR-10). May have a parent Department. Today exactly two exist: L&D (top-level, managed by the Administrator) and Central R&D (its sub-department, confirmed to get its own manager eventually — not yet assigned). Until Central R&D has its own manager, its Assignments are evaluated by L&D's manager, per the Department Manager entry's authority-flows-down rule. All other departments are stubbed placeholders for the Administrator to add later — see §9.
+- **Assignment** — Work an employee is doing, or did, for a client: client, project name, the employee's role on it, Department, allocation, start date, a "latest update" note (editable while open), and — once closed — a completion date. Administrator-authored and Administrator-owned. Its Department is always the employee's Department at the moment the Assignment is created, recorded on it and frozen — a later transfer (FR-11) doesn't rewrite where past work was done. Today the data model holds exactly one *current* assignment per employee and discards it when replaced (`docs/SRS.md` FR-PROF-006); this PRD makes closing an assignment archive it instead, so every employee accumulates a full assignment history over time, not just their current one.
 - **Assignment Evaluation** — The Department Manager's written account of how a closed Assignment went, plus an optional client-feedback note about the service (not the employee), added once the Administrator has closed that Assignment (FR-7). Visible to, but never writable by, the employee it concerns. Not independently verified (§5) — the client-feedback note is the Department Manager's relay of what the client said, not the client's own words.
 - **Backfilled Project Entry** — A historical project record an employee adds themselves, for work never tracked by an Administrator Assignment (e.g., pre-dating this system). Same fields as an Assignment plus an outcome, but employee-authored from creation, with no Department Manager evaluation — there's no Administrator record to evaluate against. Carries no independent confirmation that the work happened, unlike an Administrator-authored Assignment.
 - **BrainStation LMS** — Brain Station 23's external learning-management system. New integration point: not mentioned in `docs/SRS.md` Section 11's production roadmap today. [ASSUMPTION: "BrainStation's LMS" refers to a system BS23 already operates and can grant this product API access to — not yet confirmed; FR-4 ships against a stub interface in the meantime, see §9.]
@@ -109,16 +109,18 @@ Staff can edit the stage and, once known, the outcome and feedback of their own 
 **Out of Scope:**
 - Administrator editing or deleting a Staff-authored interview entry — not specified; treat as read-only for Administrators unless confirmed otherwise.
 
+**Withdrawal (confirmed 2026-10-01):** the reporting employee can withdraw their own entry (e.g. a typo in a locked field, or added by mistake). A withdrawn entry leaves active views but stays in history, marked withdrawn and still visible to the L&D manager; the employee can re-add it correctly. Nothing is ever deleted.
+
 #### FR-3: Interview visibility is Administrator + the reporting employee only
 
-No other employee can see another employee's interview activity.
+No other employee can see another employee's interview activity. Confirmed 2026-10-01: this is a deliberate exception to Department Managers' scoped admin powers — job-hunting is sensitive, so a Department Manager never sees interviews, even for employees in their own department. Only the reporting employee and the Administrator (the L&D manager) can.
 
 **Consequences (testable):**
 - Org-wide "Interviews & placements" view (`docs/SRS.md` FR-ORG-002) remains Administrator-only; nothing in this PRD exposes it to other Staff sessions.
 
 #### FR-4: Staff can view their current LMS enrolments
 
-The staff portal shows what the employee is currently enrolled in, synced from BrainStation's LMS.
+The staff portal shows what the employee is currently enrolled in, synced from BrainStation's LMS. The Administrator sees the same current enrolments on the employee's profile Training tab (confirmed 2026-10-01). Until the real LMS is connected, the stub adapter returns the employee's in-progress training from the existing demo data.
 
 **Consequences (testable):**
 - Enrolment data (programme, provider, progress, target date) matches BrainStation LMS's own record for that employee within [ASSUMPTION: a sync-latency window, not yet defined].
@@ -137,12 +139,12 @@ Independent of the live LMS sync (FR-4), Staff can see every past training entry
 
 #### FR-6: Administrators create and close assignment records, building history automatically
 
-Administrators create an Assignment for an employee (client, project name, Department, allocation, start date) and close it when the work ends (completion date). Closing an Assignment archives it into that employee's history rather than overwriting it — replacing today's single-current-assignment-with-no-history behaviour (`docs/SRS.md` FR-PROF-006). Realizes UJ-4 (first half).
+The Administrator, or a Department Manager with authority over the employee's Department (confirmed 2026-10-01), creates an Assignment for an employee (client, project name, allocation, start date) and closes it when the work ends (completion date). The Assignment's Department is not chosen — it is the employee's current Department (FR-11), recorded at creation and frozen. Closing an Assignment archives it into that employee's history rather than overwriting it — replacing today's single-current-assignment-with-no-history behaviour (`docs/SRS.md` FR-PROF-006). Realizes UJ-4 (first half).
 
 **Consequences (testable):**
 - An employee can have any number of closed (historical) Assignments over time, plus at most one open (current) Assignment.
 - Closing an Assignment is the only way it leaves the "current" state; no Assignment is ever deleted once created.
-- Department is chosen from the fixed list an Administrator maintains (FR-10), not free text.
+- The Assignment's Department equals the employee's Department at the moment of creation, and does not change if the employee later transfers (FR-11).
 
 #### FR-7: Department Manager evaluates a closed Assignment, with optional client feedback on the service
 
@@ -155,7 +157,7 @@ Once an Assignment (FR-6) is closed, the Department Manager (§3 — the Adminis
 
 **Out of Scope:**
 - The client entering feedback directly — always relayed by the Department Manager (§2.2). [NOTE FOR PM] Worth flagging as a fidelity gap: this is the manager's summary of what the client said, not the client's own words.
-- Defining a future Department Manager's exact scoped rights (confirmed narrower than Administrator, shape undefined) — deferred; see §8 and §9.
+- Org-wide authority for any Department Manager — confirmed scoped to their own Department and its sub-departments only (§3).
 
 #### FR-8: Staff can backfill a standalone historical project entry
 
@@ -163,37 +165,48 @@ For project work that predates this system or was never tracked by an Administra
 
 **Consequences (testable):**
 - A Backfilled Project Entry is distinguishable from an Administrator-authored Assignment (e.g., a provenance flag) wherever the Administrator views it, since it carries no independent confirmation that the work happened.
-- A Staff member can only create/edit their own Backfilled Project Entries, matching the FR-1 ownership pattern.
+- A Staff member can only create/edit their own Backfilled Project Entries, matching the FR-1 ownership pattern. They can also withdraw one (kept in history, marked withdrawn, never deleted). The Administrator and Department Managers can view but never edit a Backfilled Project Entry.
 
 **Notes:** [NOTE FOR PM] Unlike FR-7, this entry's outcome is entirely self-reported — worth the same trust/verification-gap flag to the L&D manager as FR-7's client-feedback fidelity gap.
 
-#### FR-9: Assignment and project history is visible to the reporting employee and Administrators only
+#### FR-9: Assignment and project history is visible to the reporting employee, Department Managers over them, and the Administrator
 
-Same visibility rule as FR-3 — Assignments, their Evaluations (FR-6/7), and Backfilled Project Entries (FR-8) are never visible to other Staff. FR-7's evaluation is written directly with no separate review step before the employee sees it — there's no one else in this workflow to review it against.
+Assignments, their Evaluations (FR-6/7), and Backfilled Project Entries (FR-8) are never visible to other Staff. Unlike interviews (FR-3), they are visible to Department Managers with authority over the employee's Department, consistent with their scoped admin powers (§3) — they create and evaluate this work, so they must see it. FR-7's evaluation is written directly with no separate review step before the employee sees it — there's no one else in this workflow to review it against.
 
 #### FR-10: Administrators manage the department list
 
-Administrators can create and maintain the fixed list of Departments that FR-6 and FR-8 draw from, including parent/sub-department relationships (e.g., Central R&D under L&D). Employees select from this list; they cannot add a new Department themselves.
+Administrators can create and maintain the fixed list of Departments, including parent/sub-department relationships (e.g., Central R&D under L&D). Every Employee belongs to exactly one Department from this list. Employees pick from it only when backfilling pre-system work (FR-8); they cannot add a new Department themselves.
 
 **Consequences (testable):**
-- Every Assignment (FR-6) and Backfilled Project Entry (FR-8) references a Department that exists in the Administrator-managed list at the time of creation.
+- Every Employee, Assignment (FR-6), and Backfilled Project Entry (FR-8) references a Department that exists in the Administrator-managed list at the time it's set.
 - A Department may optionally reference a parent Department.
 
-**Notes:** Initial seed is L&D (top-level) and Central R&D (sub-department of L&D); all other departments are stubbed placeholders — see §9.
+**Notes:** Initial seed is L&D (top-level) and Central R&D (sub-department of L&D); all other departments are stubbed placeholders — see §9. The existing employees are fixture/dummy records, so which Department each starts in is a seeding detail.
+
+#### FR-11: A higher manager transfers an employee between Departments
+
+A manager with authority over both the employee's current Department and the destination Department (their common ancestor's manager, or the Administrator) moves the employee directly — one step, no separate request/approval queue.
+
+**Consequences (testable):**
+- A manager with authority over only one of the two Departments cannot perform the transfer.
+- Staff can never transfer anyone, including themselves.
+- Existing Assignments keep the Department recorded on them (FR-6); only new work comes from the new Department.
+- A transfer is rejected while the employee has an open Assignment; it must be closed first (confirmed 2026-10-01).
+- Each transfer writes a minimal audit record: who moved whom, from which Department to which, and when.
 
 ### 4.4 Production Identity & Persistence *(roadmap, gates real data — SRS 11.1 + 11.2)*
 
-**Description:** Named Supabase-authenticated accounts (Administrator + Staff roles) and Supabase Postgres persistence with Row-Level Security, replacing the single shared Administrator credential, the fixture-file Staff email/password pattern, and the in-memory attendance store. This is the release gate: `docs/SRS.md` NFR-SEC-004 states *"because there is a single shared credential and no per-record authorization, this build must not be exposed with real employee data under any configuration"* — neither auth nor persistence alone satisfies that; both are needed together. Confirmed: Administrators provision every account, both Administrator and Staff; there is no self-registration path, matching `docs/SRS.md` §11.1's "public self-registration stays disabled."
+**Description:** Named Supabase-authenticated accounts (Administrator + Staff roles) and Supabase Postgres persistence with Row-Level Security, replacing the single shared Administrator credential, the fixture-file Staff email/password pattern, and the in-memory attendance store. This is the release gate: `docs/SRS.md` NFR-SEC-004 states *"because there is a single shared credential and no per-record authorization, this build must not be exposed with real employee data under any configuration"* — neither auth nor persistence alone satisfies that; both are needed together. Confirmed: Administrators provision every account, both Administrator and Staff; there is no self-registration path, matching `docs/SRS.md` §11.1's "public self-registration stays disabled." Accounts are archived, never deactivated or deleted: archiving ends access on the next request, keeps all history, hides the employee from the default directory (an "archived" filter still shows them), and can be undone by restoring. Each archive/restore writes a minimal audit record (who, whom, which action, when).
 
 **Notes:** Now gates §4.3 too, not just today's Administrator-only data — interview/training/assignment data needs the same durable, per-employee-authorized storage attendance currently lacks.
 
 ### 4.5 Editable Records *(roadmap — SRS 11.3)*
 
-**Description:** Administrator create/update workflows for employment history, skills assessments, attendance/leave; audit-logged for security-relevant changes. §4.3 FR-6/FR-7 already specify the "current assignments" piece of this SRS item in full (Administrator-authored, history-preserving, with evaluation) — `bmad-architecture` should treat FR-6/FR-7 as that requirement's concrete design, not a separate overlapping one. The remaining overlap to reconcile is narrower: Staff-side interview/training editing (§4.3 FR-1/2/4/5) against SRS 11.3's employee edit rights over the same fields.
+**Description:** Administrator create/update workflows for employment history, skills assessments, attendance/leave; audit-logged for security-relevant changes. §4.3 FR-6/FR-7 already specify the "current assignments" piece of this SRS item in full (Administrator-authored, history-preserving, with evaluation) — `bmad-architecture` should treat FR-6/FR-7 as that requirement's concrete design, not a separate overlapping one. The remaining overlap to reconcile is narrower: Staff-side interview/training editing (§4.3 FR-1/2/4/5) against SRS 11.3's employee edit rights over the same fields. Confirmed 2026-10-01 (Epic 7): this item also covers adding new employees (department required from creation); the Administrator and Department Managers (own subtree) edit basic details, employment history, skills and the evaluation summary; employees may edit only their own employment history; department changes only through a transfer (FR-11).
 
 ### 4.6 Leave Workflow *(roadmap — SRS 11.4)*
 
-**Description:** Wires the already-built, already-tested `src/domain/leave.ts` into a real leave-record workflow. Depends on §4.4 (persistence) and a holiday-calendar decision (§4.7).
+**Description:** Wires the already-built, already-tested `src/domain/leave.ts` into a real leave-record workflow. Depends on §4.4 (persistence) and a holiday-calendar decision (§4.7). Confirmed 2026-10-01: employees record and edit their own leave, Department Managers for their own department, the Administrator for anyone; only the Administrator loads the holiday calendar. Leave that's called off is cancelled, not deleted — it stays in history but stops counting toward attendance totals. Still no approvals, reasons or balances (§5).
 
 ### 4.7 Gating Configuration Decisions *(roadmap — SRS 11.5)*
 
@@ -206,7 +219,7 @@ Administrators can create and maintain the fixed list of Departments that FR-6 a
 ## 5. Non-Goals (Explicit)
 
 - This is not a payroll, leave-entitlement, medical, surveillance, or automated performance-scoring system (`docs/SRS.md` §1). FR-7 adds Administrator-authored Assignment Evaluations, but this is a per-project sibling of the already-shipped "most recent manager evaluation" (`docs/SRS.md` FR-PROF-005), not a new category of surveillance or scoring — it evaluates one piece of work, not the person, and stays fully manual (§5 below).
-- Any Git-provider integration (GitHub or otherwise) — the "commits" figure remains fixture/disclaimer data.
+- Any Git-provider integration (GitHub or otherwise). The fixture's "recorded Git activity" sample is removed when assignments move to the database (confirmed 2026-10-01), rather than carried forward as fake data.
 - Individual rosters or per-person calendars.
 - Independent verification of self-reported or relayed data — interviews (Staff), training entries not sourced from the LMS sync (Staff), client feedback (relayed by the Department Manager, not the client), and Backfilled Project Entries (Staff). This product records what people report; it does not audit it.
 - Cross-employee visibility of interview, training, or assignment/project data among Staff accounts (§4.3 FR-3, FR-9).
@@ -247,13 +260,13 @@ Administrators can create and maintain the fixed list of Departments that FR-6 a
 1. **BrainStation LMS integration contract (FR-4)** — does a real API or export exist, and who owns granting access? Deliberately not blocking: FR-4 ships against a stub adapter interface in the meantime (`bmad-architecture` AD-4).
 2. **Editable-records overlap, narrowed (§4.5 vs §4.3)** — only the Staff-side interview/training editing (FR-1/2/4/5) still needs reconciling against SRS 11.3's Administrator-side edit rights over the same fields; FR-6/FR-7's assignment-history-and-evaluation design already resolves the "current assignments" piece.
 3. **SRS correction ownership** — confirm `bmad-architecture` (not this PRD) is the right place to formally correct `docs/SRS.md` §2/§3.1's stale actor model (see Document Purpose).
-4. **Future Department Manager's exact rights** — confirmed: Central R&D will get its own manager, subordinate to L&D's, with narrower department-scoped rights, not full Administrator authority; authority flows down so L&D's manager retains rights over Central R&D even once it has its own manager. The FR-7 write-check already resolves via this manager chain (see FR-7), but the actual scoped-rights model (what else a subordinate Department Manager can and can't do beyond FR-7) is undefined until Central R&D's manager account actually exists.
+4. **Department Manager rights — resolved 2026-10-01.** A Department Manager has admin powers (evaluate, archive/restore, transfer) scoped to their own Department and its sub-departments; the Administrator is the only org-wide role. Authority flows down, so L&D's manager keeps rights over Central R&D once it has its own manager.
 5. **Additional departments beyond L&D/Central R&D** — stubbed for now (§9); no blocker, just not yet defined.
 
 ## 9. Assumptions Index
 
 - §3 — "BrainStation LMS" is a system BS23 already operates and can grant API access to; FR-4 ships against a stub adapter interface until this is confirmed either way.
-- §3 / §4.3 FR-7 — "Department Manager" is filled by the single Administrator role for L&D today; confirmed as a hierarchy of conceptually distinct, narrower-rights roles as departments get their own managers (Central R&D's is the first confirmed case), not "Administrator" relabeled per department (see Open Question 4).
+- §3 / §4.3 FR-7 — "Department Manager" is filled by the single Administrator role for L&D today; future Department Managers (Central R&D's first) hold admin powers scoped to their own Department subtree, never org-wide (see Open Question 4, resolved).
 - §3 Department — authority flows down the Department hierarchy: a Department's own manager plus every ancestor's manager, up to the Administrator, may all evaluate its Assignments. Central R&D has no manager of its own yet, so only L&D's manager can evaluate its Assignments today.
 - §4.3 FR-8 — a Backfilled Project Entry needs a provenance flag distinguishing it from an Administrator-authored Assignment; exact treatment (visual marker vs. structural field) left to `bmad-architecture`.
 - §4.3 FR-10 / §3 Department — initial seed is just L&D (top-level) and Central R&D (its sub-department); every other department is a stub the Administrator fills in later through FR-10 itself, not a data migration.
