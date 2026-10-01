@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-01-2026 12:00
-last_updated: 10-01-2026 12:00
+last_updated: 10-01-2026 13:30
 project: AI-DLC-Employee-management
 project_key: NOKEY
 tracking_system: file-system
@@ -73,8 +73,8 @@ development_status:
   5-4-attendance-views-use-real-data: backlog
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-sign-in-page-meets-contrast-and-the-shared-palette-exists: backlog
+  epic-6: in-progress
+  6-1-sign-in-page-meets-contrast-and-the-shared-palette-exists: review
   6-2-administrator-workspace-meets-contrast: backlog
   6-3-staff-portal-meets-contrast: backlog
   epic-6-retrospective: optional
