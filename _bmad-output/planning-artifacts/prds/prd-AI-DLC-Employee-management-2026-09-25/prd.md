@@ -212,6 +212,8 @@ A manager with authority over both the employee's current Department and the des
 
 **Description:** Org timezone, approved holiday calendar, and data retention periods — approvals, not engineering, but block §4.4 and §4.6. Approved by the System Owner (§2.1), not the Administrator role.
 
+**Approved 2026-10-02:** org timezone `Asia/Dhaka`; retention indefinite for now (consistent with archive-never-delete), to be revisited before real employees' data is loaded at scale. **Still pending:** the holiday calendar (blocks Story 5.1 only).
+
 ### 4.8 Colour-Contrast Remediation *(roadmap — SRS 11.7)*
 
 **Description:** Fixes known WCAG 2.2 AA colour-contrast gaps via a palette/token pass. No dependency on §4.4–§4.7; can ship independently, any time.
