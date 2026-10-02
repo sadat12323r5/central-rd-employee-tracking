@@ -131,8 +131,8 @@ Rather than repeating these in each story, every story is done only when all of 
 Administrators and Staff sign in with real, individually-provisioned accounts instead of one shared demo credential, and everything they enter survives a restart. Covers SRS 11.1/11.2 and NFR-SEC-004; governed by Architecture AD-1, AD-6, AD-7. Employee records move first, because sign-in, provisioning, and archiving all need them.
 
 **Preconditions (not stories):**
-- A Supabase project exists. Its ownership, environments, migration tooling, and secrets cutover are still undecided (Architecture spine, Deployment & Environments).
-- The System Owner has approved the org timezone and data retention periods (PRD §4.7).
+- The two Supabase projects (dev, production) exist, and their keys are set in Vercel. The setup decisions (environments, CLI migrations, Vitest RLS tests, secrets, staged cutover) were made 2026-10-02; see the architecture spine, Deployment & Environments.
+- ~~The System Owner has approved the org timezone and data retention periods (PRD §4.7).~~ Approved 2026-10-02: `Asia/Dhaka`, indefinite retention.
 - The "all data is fictional" banner (NFR-SEC-003) stays until real employee data is loaded. Removing it is a System Owner decision, not part of any story.
 
 ### Story 1.1: Employee records persist with role-scoped access
