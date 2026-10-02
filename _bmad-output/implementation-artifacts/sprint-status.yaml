@@ -88,7 +88,11 @@ development_status:
 
 action_items:
   - epic: 1
-    action: "Blocker: create the two Supabase projects (dev, production) and add their keys to Vercel env vars. Setup decisions made 2026-10-02 (architecture spine, Deployment & Environments)"
+    action: "Before loading any real employee data: move production to its own Supabase project (paid plan or freed slot). Today dev, previews and the demo share one project."
+    owner: "Safay"
+    status: open
+  - epic: 1
+    action: "Blocker: create the one shared Supabase project and add its keys to .env.local and Vercel (Preview + Production). Setup decisions made 2026-10-02 (architecture spine, Deployment & Environments)"
     owner: "Safay"
     status: in-progress
   - epic: 1

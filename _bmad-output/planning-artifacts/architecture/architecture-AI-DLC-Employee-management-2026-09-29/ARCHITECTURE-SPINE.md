@@ -97,7 +97,7 @@ graph TD
 | zod | 4.6.5 (web-verified 2026-09-30, current-latest; still unused anywhere in `src/` today — AD-7 is where it starts being used) |
 | Vitest | 3.2.7 (web-verified 2026-09-30; Vitest 4.0 and 5.0 both shipped in 2026 with real breaking changes — staying on 3.x until evaluated, see Deferred) |
 | Playwright | 1.63.0 (web-verified 2026-09-30, current-latest) |
-| Hosting | Vercel + two Supabase projects (dev, production) — see Deployment & Environments |
+| Hosting | Vercel + one shared Supabase project (split before real data) — see Deployment & Environments |
 | Supabase CLI | latest at setup time, for `supabase/migrations/` (pin the version in `package.json` devDependencies when Story 1.1 adds it) |
 
 ## Structural Seed
@@ -166,10 +166,10 @@ erDiagram
 **Decided 2026-10-02** (System Owner and setup decisions that unblock Epic 1):
 - **Org timezone:** `Asia/Dhaka`, for date validation and display everywhere. It matches the shipped staff attendance, which already clocks in on Dhaka time.
 - **Retention:** records are kept indefinitely for now. This matches the archive-never-delete design (AD-6). Revisit before loading real employees' data at scale.
-- **Environments:** two hosted Supabase projects on the free tier, one for dev and one for production, owned by the System Owner's Supabase account. No local Docker. Vercel Preview deployments point at dev, and Production points at production.
-- **Migrations:** forward-only SQL files in `supabase/migrations/`, applied with the Supabase CLI. The developer applies them to dev; the repository owner applies them to production after the PR merges. CI automation for migrations is deferred.
-- **RLS testing:** Vitest integration tests sign in as each role (`admin`, `manager`, `staff`) against the dev project and assert what each can and can't read or write. They live beside the existing suite and run with `npm test` when dev project credentials are present.
-- **Secrets:** each environment's Supabase URL and anon key go into Vercel environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`). The service-role key (`SUPABASE_SERVICE_ROLE_KEY`) is server-only, never `NEXT_PUBLIC`, and is used only by the seed script and Administrator-only server actions. `DEMO_*` variables are retired as Stories 1.2 and 1.3 land.
+- **Environments (revised the same day):** **one** hosted Supabase project on the free tier, owned by the System Owner's account. The free plan allows two active projects and the owner's other application uses one. Local development, Vercel Preview deployments and the live demo all share it. This is acceptable only while every record is fictional. **Hard trigger:** before any real employee data is loaded (the NFR-SEC-004 release gate), production moves to its own project, via a paid plan or a freed-up slot. No local Docker.
+- **Migrations:** forward-only SQL files in `supabase/migrations/`, applied with the Supabase CLI. Because there is no separate dev database, a story's migration is applied to the shared project when its PR is approved, not while it's still being written, so half-finished schema never reaches the live demo. CI automation for migrations is deferred.
+- **RLS testing:** Vitest integration tests sign in as each role (`admin`, `manager`, `staff`) against the shared project and assert what each can and can't read or write. They use dedicated test accounts and rows created by the test and removed afterwards, never the seeded demo employees. They run with `npm test` when Supabase credentials are present.
+- **Secrets:** the project's Supabase URL and anon key go into Vercel environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`), set for both Preview and Production. The service-role key (`SUPABASE_SERVICE_ROLE_KEY`) is server-only, never `NEXT_PUBLIC`, and is used only by the seed script and Administrator-only server actions. `DEMO_*` variables are retired as Stories 1.2 and 1.3 land.
 - **Cutover:** staged, one Epic 1 story at a time in story order. Each merges on its own, and the demo credentials keep working until the story that replaces them.
 
 **Deferred, named explicitly:**
