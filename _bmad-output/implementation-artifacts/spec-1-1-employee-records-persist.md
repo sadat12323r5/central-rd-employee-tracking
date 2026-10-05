@@ -2,7 +2,8 @@
 title: 'Story 1.1 — Employee records persist with role-scoped access'
 type: 'feature'
 created: '2026-10-02'
-status: 'draft'
+status: 'in-progress'
+baseline_revision: '4418a094bc9399e98984d9f4e49157ddb7cbac56'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
