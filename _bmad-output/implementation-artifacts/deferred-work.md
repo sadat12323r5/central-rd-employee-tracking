@@ -9,3 +9,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-1-sign-in-contrast-and-palette.md`
   summary: Add an automated guard (stylelint `color-no-hex` outside `:root`, or a grep-based test) so no hard-coded colours return to `src/app/styles.css`.
   evidence: The epic's end state is that no hard-coded colours remain, but nothing enforces it. The guard can't be added before Story 6.3, because the Administrator workspace and staff portal still use about 80 literal colours until then. Belongs in 6.3's acceptance.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-employee-records-persist.md`
+  summary: Make email uniqueness case-insensitive (`check (email = lower(email))` or a unique index on `lower(email)`).
+  evidence: Only the seed lowercases emails today. Epic 7's write paths would allow case-variant duplicates and unfindable sign-ins. The fix is a constraint-changing migration, so it needs PR approval.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-employee-records-persist.md`
+  summary: Story 1.2 must link Supabase auth users to employee rows (`auth_user_id`) before switching the store to the per-request JWT client.
+  evidence: Every seeded row has `auth_user_id` NULL, so `employees_select_own` matches no one yet.
