@@ -22,13 +22,14 @@ describe("Login", () => {
     expect(screen.getByRole("heading", { name: "Welcome back." })).toBeInTheDocument();
     expect(screen.getByLabelText("Email address")).toBeRequired();
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "password");
-    expect(screen.queryByText("manager@example.com")).not.toBeInTheDocument();
+    expect(screen.queryByText("nadia.rahman@example.com")).not.toBeInTheDocument();
   });
 
-  it("shows demo credentials when requested", () => {
-    render(<Login showDemoCredentials={true} />);
-    expect(screen.getByText("manager@example.com")).toBeInTheDocument();
-    expect(screen.getByText("Brain23Demo!")).toBeInTheDocument();
+  it("shows only the staff demo credentials when requested, never the retired manager ones", () => {
+    const { container } = render(<Login showDemoCredentials={true} />);
+    expect(screen.getByText("nadia.rahman@example.com")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/manager@example\.com/);
+    expect(container).not.toHaveTextContent(/Brain23Demo/);
   });
 
   it("shows the server-returned error after a failed sign-in attempt", async () => {
@@ -36,7 +37,7 @@ describe("Login", () => {
     const user = userEvent.setup();
     render(<Login showDemoCredentials={false} />);
 
-    await user.type(screen.getByLabelText("Email address"), "manager@example.com");
+    await user.type(screen.getByLabelText("Email address"), "admin@example.test");
     await user.type(screen.getByLabelText("Password", { exact: true }), "wrong-password");
     await user.click(screen.getByRole("button", { name: /sign in to workspace/i }));
 

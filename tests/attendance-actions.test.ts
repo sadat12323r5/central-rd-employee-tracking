@@ -24,6 +24,16 @@ vi.mock("../src/server/employees-store", async importOriginal => {
   };
 });
 
+// No Supabase admin session in these tests, and no network: Supabase Auth rejects every credential.
+vi.mock("../src/server/supabase", async () => {
+  const { AuthApiError } = await import("@supabase/supabase-js");
+  const rejected = () => ({ data: { user: null, session: null }, error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials") });
+  return {
+    getUserClient: async () => ({ auth: { getUser: async () => rejected(), signInWithPassword: async () => rejected(), signOut: async () => ({ error: null }) } }),
+    getServiceClient: () => { throw new Error("not used"); },
+  };
+});
+
 const { signIn, getSession, isSignedIn } = await import("../src/server/auth");
 const { clockInAction, clockOutAction, saveLogAction } = await import("../src/server/attendance-actions");
 const { attendanceStore } = await import("../src/server/attendance-store");
@@ -45,7 +55,7 @@ describe("staff sign-in", () => {
     expect(await isSignedIn()).toBe(false);
   });
 
-  it("rejects a staff email with the manager password", async () => {
+  it("rejects a staff email with the retired manager password", async () => {
     const result = await signIn(blank, form({ email: "meera.das@example.com", password: "Brain23Demo!" }));
     expect(result?.error).toMatch(/incorrect/i);
     expect(await getSession()).toBeNull();
