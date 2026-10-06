@@ -27,3 +27,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
   summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
   evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-admin-provisions-staff-account.md`
+  summary: "BLOCKED: Story 1.3 needs two System Owner decisions: (1) how new Staff get credentials (an Administrator-set initial password, possibly with a forced change, or a Supabase invite email, which needs SMTP); (2) what replaces the public demo's shared staff password (published demo staff accounts, private ones, or another option)."
+  evidence: No planning artifact settles either point, and the auto loop must not invent stakeholder decisions.
