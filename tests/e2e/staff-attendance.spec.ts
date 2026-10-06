@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { e2eStaff, signIn } from "./staff";
 
 // color-contrast stays excluded until Story 6.3 fixes the staff portal's palette
 // (Epic 6). The sign-in page already enforces it, in accessibility.spec.ts.
@@ -11,12 +12,12 @@ async function accessibilityScan(page: Page) {
   return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).disableRules(["color-contrast"]).analyze();
 }
 
-// Records live in server memory, so this uses an employee no other spec signs in as.
+// Records live in server memory, so this uses a throwaway Staff account no other spec signs in as
+// (global-setup.ts provisions it through the service role and links it to a throwaway employee).
 test("a staff member clocks in, writes a daily log and clocks out", async ({ page }) => {
+  const staff = e2eStaff(1);
   await page.goto("/");
-  await page.getByLabel("Email address").fill("rafi.ahmed@example.com");
-  await page.getByLabel("Password", { exact: true }).fill("Staff23Demo!");
-  await page.getByRole("button", { name: "Sign in to workspace" }).click();
+  await signIn(page, staff.email, staff.password);
 
   await expect(page.getByRole("button", { name: "Clock in" })).toBeVisible();
   let results = await accessibilityScan(page);
@@ -40,11 +41,22 @@ test("a staff member clocks in, writes a daily log and clocks out", async ({ pag
   await expect(page.getByRole("cell", { name: "1 task" })).toBeVisible();
 });
 
+// A different account from the test above, which completes its account's entry for today.
 test("staff cannot see the manager portal", async ({ page }) => {
+  const staff = e2eStaff(2);
   await page.goto("/");
-  await page.getByLabel("Email address").fill("sara.islam@example.com");
-  await page.getByLabel("Password", { exact: true }).fill("Staff23Demo!");
-  await page.getByRole("button", { name: "Sign in to workspace" }).click();
+  await signIn(page, staff.email, staff.password);
   await expect(page.getByRole("button", { name: "Clock in" })).toBeVisible();
   await expect(page.getByText("A clearer view of your people.")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Main navigation" })).toHaveCount(0);
+});
+
+test("the retired shared staff demo password is rejected with the generic message", async ({ page }) => {
+  for (const email of ["rafi.ahmed@example.com", e2eStaff(2).email]) {
+    await page.goto("/");
+    await signIn(page, email, "Staff23Demo!");
+    await expect(page.locator(".form-error")).toHaveText("The email or password is incorrect. Please try again.");
+    await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
+  }
+  await expect(page.getByText("Staff23Demo!")).toHaveCount(0);
 });

@@ -2,16 +2,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor } = vi.hoisted(() => ({ getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn() }));
+const { getSession, listFor, getFor, loginProps } = vi.hoisted(() => ({ getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn() }));
 
 vi.mock("@/server/auth", () => ({ getSession }));
 vi.mock("@/server/attendance-store", () => ({ attendanceStore: { listForEmployee: vi.fn(async () => []) } }));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
-  employeesStore: { listFor, getFor, findByEmail: vi.fn() },
+  employeesStore: { listFor, getFor },
 }));
 vi.mock("@/components/login", () => ({
-  default: ({ showDemoCredentials }: { showDemoCredentials: boolean }) => <p>Sign-in form (demo credentials {showDemoCredentials ? "shown" : "hidden"})</p>,
+  default: (props: Record<string, unknown>) => {
+    loginProps(props);
+    return <p>Sign-in form</p>;
+  },
 }));
 vi.mock("@/components/portal", () => ({ default: () => <p>Employee directory</p> }));
 vi.mock("@/components/staff-attendance", () => ({ default: () => <p>Staff portal</p> }));
@@ -47,17 +50,43 @@ describe("Home when employee records are unavailable", () => {
 
 describe("Home when signed out", () => {
   beforeEach(() => getSession.mockResolvedValue(null));
-  afterEach(() => vi.unstubAllEnvs());
 
-  it("shows the staff demo credentials when DEMO_STAFF_PASSWORD is unset", async () => {
-    vi.stubEnv("DEMO_STAFF_PASSWORD", "");
+  it("renders the sign-in form without any demo-credential props or credentials", async () => {
     render(await Home());
-    expect(screen.getByText("Sign-in form (demo credentials shown)")).toBeInTheDocument();
+    expect(loginProps).toHaveBeenCalledWith({});
+    expect(document.body).not.toHaveTextContent(/Staff23Demo|demo credentials|password:/i);
+  });
+});
+
+describe("Home routing by role", () => {
+  beforeEach(() => {
+    listFor.mockReset();
+    getFor.mockReset();
   });
 
-  it("hides the demo credentials when a private DEMO_STAFF_PASSWORD is set", async () => {
-    vi.stubEnv("DEMO_STAFF_PASSWORD", "a-private-staff-password");
+  it("renders only the staff portal for a staff session, reading their own record", async () => {
+    const { employees } = await import("@/data/employees");
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
     render(await Home());
-    expect(screen.getByText("Sign-in form (demo credentials hidden)")).toBeInTheDocument();
+    expect(screen.getByText("Staff portal")).toBeInTheDocument();
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+    expect(getFor).toHaveBeenCalledWith({ role: "staff", employeeId: "BS-1003" }, "BS-1003");
+    expect(listFor).not.toHaveBeenCalled();
+  });
+
+  it("shows the sign-in form when a staff member's own record is not visible", async () => {
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(null);
+    render(await Home());
+    expect(screen.getByText(/Sign-in form/)).toBeInTheDocument();
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+  });
+
+  it("renders the directory for an admin", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    render(await Home());
+    expect(screen.getByText("Employee directory")).toBeInTheDocument();
   });
 });

@@ -4,9 +4,9 @@ import { cookies } from "next/headers";
 
 // Server-only. SUPABASE_SERVICE_ROLE_KEY bypasses RLS, so this module must never be imported
 // from a client component; the key has no NEXT_PUBLIC_ prefix and is never sent to the browser.
-// The service-role client is used at runtime only for the interim staff reads and the pre-session
-// staff sign-in lookup (see employees-store.ts) until Story 1.3 gives staff Supabase accounts.
-// Administrator reads use getUserClient(), which carries the signed-in user's JWT, so RLS applies.
+// At runtime the service-role client is used only by Administrator provisioning
+// (account-actions.ts -> accounts-store.create()), after the caller's admin session is checked.
+// Every employee read uses getUserClient(), which carries the signed-in user's JWT, so RLS applies.
 
 let client: SupabaseClient | undefined;
 

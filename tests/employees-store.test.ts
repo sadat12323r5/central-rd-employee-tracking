@@ -16,11 +16,11 @@ type Mode = "ok" | "error" | "throw";
 
 /** Minimal stand-in for the supabase-js query builder: applies eq filters to in-memory rows. */
 function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
-  const queries: { table: string; filters: [string, string][] }[] = [];
+  const queries: { table: string; filters: [string, string][]; columns?: string }[] = [];
   const client = {
     from(table: string) {
       if (mode === "throw") throw new TypeError("fetch failed");
-      const query = { table, filters: [] as [string, string][] };
+      const query = { table, filters: [] as [string, string][], columns: undefined as string | undefined };
       queries.push(query);
       const result = () => {
         if (mode === "error") return { data: null, error: { message: "connection refused" } };
@@ -28,7 +28,7 @@ function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
         return { data: [...matched].sort((a, b) => a.employee_id.localeCompare(b.employee_id)), error: null };
       };
       const builder = {
-        select: () => builder,
+        select: (columns: string) => { query.columns = columns; return builder; },
         eq: (col: string, val: string) => { query.filters.push([col, val]); return builder; },
         order: () => builder,
         returns: () => builder,
@@ -44,8 +44,7 @@ function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
   return { client: client as unknown as SupabaseClient, queries };
 }
 
-/** The same fake behind both clients, for tests about data rather than which client is used. */
-const both = (client: SupabaseClient) => ({ userClient: async () => client, serviceClient: () => client });
+const both = (client: SupabaseClient) => ({ userClient: async () => client });
 
 const seeded = ["BS-1001", "BS-1002", "BS-1003"].map(rowFor);
 const admin = { role: "admin" } as const;
@@ -84,7 +83,7 @@ describe("employees-store data", () => {
   it("merges each row with the fixture's nested profile data by id", async () => {
     const { client } = fakeClient(seeded);
     const employee = await createEmployeesStore(both(client)).getFor(admin, "BS-1001");
-    expect(employee).toEqual(fixture.find(e => e.id === "BS-1001"));
+    expect(employee).toEqual({ ...fixture.find(e => e.id === "BS-1001"), hasAccount: false });
   });
 
   it("uses the database's basic fields over the fixture's", async () => {
@@ -105,19 +104,18 @@ describe("employees-store data", () => {
     const { client } = fakeClient(seeded);
     const store = createEmployeesStore(both(client));
     expect(await store.getFor(admin, "BS-1999")).toBeNull();
-    expect(await store.findByEmail("nobody@example.com")).toBeNull();
-    expect(await store.findByEmail("   ")).toBeNull();
+    expect(await store.getFor(staff, "BS-1002")).not.toBeNull();
   });
 
-  it("finds by email case-insensitively", async () => {
+  it("has no email lookup any more (staff sign-in goes through Supabase Auth)", () => {
     const { client } = fakeClient(seeded);
-    expect((await createEmployeesStore(both(client)).findByEmail("  Meera.Das@Example.com "))?.id).toBe("BS-1003");
+    expect("findByEmail" in createEmployeesStore(both(client))).toBe(false);
   });
 });
 
 describe("employees-store unavailability", () => {
   const calls = (store: ReturnType<typeof createEmployeesStore>) => [
-    () => store.listFor(admin), () => store.listFor(staff), () => store.getFor(admin, "BS-1001"), () => store.findByEmail("nadia.rahman@example.com"),
+    () => store.listFor(admin), () => store.listFor(staff), () => store.getFor(admin, "BS-1001"), () => store.getFor(staff, "BS-1002"),
   ];
 
   it("throws EmployeesUnavailableError when the database returns an error", async () => {
@@ -132,40 +130,45 @@ describe("employees-store unavailability", () => {
 
   it("throws EmployeesUnavailableError when Supabase is not configured", async () => {
     const unconfigured = () => { throw new Error("Supabase is not configured"); };
-    const store = createEmployeesStore({ userClient: async () => unconfigured(), serviceClient: unconfigured });
+    const store = createEmployeesStore({ userClient: async () => unconfigured() });
     for (const call of calls(store)) await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });
 
-describe("employees-store client selection", () => {
-  function split() {
+describe("employees-store client and columns", () => {
+  it("reads with the user's JWT client (RLS) for both roles; it has no service-role client to use", async () => {
     const user = fakeClient(seeded);
-    const service = fakeClient(seeded);
-    const store = createEmployeesStore({ userClient: async () => user.client, serviceClient: () => service.client });
-    return { store, user: user.queries, service: service.queries };
-  }
-
-  it("reads with the user's JWT client (RLS) for an admin, never the service role", async () => {
-    const { store, user, service } = split();
+    const store = createEmployeesStore({ userClient: async () => user.client });
     await store.listFor(admin);
     await store.getFor(admin, "BS-1003");
-    expect(user).toHaveLength(2);
-    expect(service).toHaveLength(0);
-  });
-
-  it("keeps the interim service-role read for staff and the sign-in lookup", async () => {
-    const { store, user, service } = split();
     await store.listFor(staff);
     await store.getFor(staff, "BS-1002");
-    await store.findByEmail("meera.das@example.com");
-    expect(service).toHaveLength(3);
-    expect(user).toHaveLength(0);
+    expect(user.queries).toHaveLength(4);
+  });
+
+  it("maps auth_user_id to hasAccount on admin reads", async () => {
+    const linked = { ...rowFor("BS-1001"), auth_user_id: "6f1d2c1e-0000-4000-8000-000000000001" };
+    const unlinked = { ...rowFor("BS-1002"), auth_user_id: null };
+    const { client, queries } = fakeClient([linked, unlinked]);
+    const list = await createEmployeesStore(both(client)).listFor(admin);
+    expect(list.map(e => [e.id, e.hasAccount])).toEqual([["BS-1001", true], ["BS-1002", false]]);
+    expect(queries[0].columns).toContain("auth_user_id");
+    expect(list[0]).not.toHaveProperty("auth_user_id");
+  });
+
+  it("never selects auth_user_id or sets hasAccount on staff reads", async () => {
+    const { client, queries } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client));
+    const own = await store.getFor(staff, "BS-1002");
+    const list = await store.listFor(staff);
+    expect(own).not.toHaveProperty("hasAccount");
+    expect(list[0]).not.toHaveProperty("hasAccount");
+    for (const q of queries) expect(q.columns).not.toContain("auth_user_id");
   });
 
   it("reports the directory unavailable when the user client cannot be created", async () => {
-    const service = fakeClient(seeded);
-    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); }, serviceClient: () => service.client });
+    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); } });
     await expect(store.listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
-    expect(service.queries).toHaveLength(0);
+    await expect(store.getFor(staff, "BS-1002")).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });

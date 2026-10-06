@@ -2,9 +2,10 @@
 title: 'Story 1.3 — Administrator provisions a Staff account'
 type: 'feature'
 created: '2026-10-06'
-status: 'ready-for-dev'
+status: 'done'
+baseline_revision: '13509b49d9865a453afa58573b689fc16549a826'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-1-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md'
@@ -108,6 +109,36 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-06 — Review pass
+- verdicts: 26 findings — high 0, medium 6, low 10, false 10, maybe-false 0
+- findings:
+  - `[low]` `[patch]` (edge) If the link fails and the compensating `deleteUser` also fails, an orphan auth user keeps the email — a double failure; the store comment claiming "no auth user left behind" was reworded to say the cleanup is best effort and logged. A recovery flow would add guards for a rare path.
+  - `[low]` `[patch]` (edge) Supabase `weak_password` is reported as "too short" — the message now covers length and policy.
+  - `[medium]` `[patch]` (edge) Employee email already used by another auth user → seed script prints "already has an account" and exits 0 with nothing linked — the seed now exits non-zero in that case. The action's message for that case is fixed by the I/O matrix ("Email already registered"), so it is not changed here.
+  - `[false]` `[reject]` (edge) Seed lookup is case-sensitive — `scripts/seed-employees.ts` lowercases every stored email and it is the only writer of `employees`; `ilike` would treat `_` in emails as a wildcard.
+  - `[medium]` `[patch]` (edge) e2e setup sweep deletes another concurrent run's throwaway users and rows on the shared project — the sweep is limited to leftovers older than 2 hours.
+  - `[false]` `[reject]` (intent) AC3 tested only with a mocked session — the action's first statement is the `getSession()` admin check, and the real `getSession` (`identityFor`, `getUser`) is covered by `auth.test.ts`/`staff-session.test.ts`. The enforcement is server-side, as the AC requires.
+  - `[false]` `[reject]` (intent) AC2 raises `AccountExistsError`, not a "validation error" class — the user sees a validation message in the form, which is what the AC observes. The matrix fixed the mapping.
+  - `[false]` `[reject]` (intent) e2e Staff fixtures bypass `accounts-store.create()` — the System Owner decision says CI/e2e provision "through the service role", and the provisioning spec exercises `create()` end to end.
+  - `[low]` `[patch]` (blind) Orphan user on failed compensation — same root cause as the first edge row; comment reworded.
+  - `[medium]` `[patch]` (blind) `AccountExistsError` covers "email taken by another user" and the seed hides it — same root cause as the third edge row; seed fixed.
+  - `[low]` `[patch]` (blind) `weak_password` mis-message and no 72-character maximum (a longer password surfaces as "unavailable") — `.max(72)` added to the store and action schemas; message updated.
+  - `[medium]` `[patch]` (blind) No confirm field, so a typo locks the employee out with no documented reset — added a "Confirm initial password" field with a server-side match check, and a manual reset procedure in DEPLOYMENT.md.
+  - `[low]` `[reject]` (blind) No record of which Administrator provisioned which account — no AC asks for it. `audit_events` is created by Story 1.4 for archive/restore; adding it here needs a new table. Noted in residual risks.
+  - `[false]` `[reject]` (blind) Attendance actions trust the `employee_id` claim for 12 h after an unlink — no unlink path exists. `auth_user_id` is cleared only by `on delete set null`, and a deleted auth user fails `getUser()`, which ends the session. Story 1.4's archive must check status on every request (already an epic rule).
+  - `[medium]` `[patch]` (blind) e2e sweep deletes other runs' data — same root cause as the fifth edge row.
+  - `[low]` `[patch]` (blind) Sweep misses stale `e2e-admin-*` users (the Story 1.2 deferred item) — the age-scoped sweep now covers them. The unchecked staff link in setup and the ignored `deleteUser` errors are rejected: a failed link makes the staff e2e fail loudly.
+  - `[false]` `[reject]` (blind) Seed email lookup is case-sensitive — same refutation as the fourth edge row.
+  - `[low]` `[patch]` (blind) ARCHITECTURE.md/README.md passages still say there is no database or RLS — corrected.
+  - `[low]` `[patch]` (blind) Live test comment claims "no auth user left behind" without checking — fixed.
+  - `[low]` `[patch]` (blind) `signInAsStaff` unused — deleted.
+  - `[false]` `[reject]` (blind) `ActionState` imported from attendance-actions — a type-only import of the shared action shape the epic defines; no caller diverges.
+  - `[false]` `[reject]` (blind) `Boolean(employees.find(...)?.hasAccount ?? selected.hasAccount)` is hard to read — it prefers refreshed props as intended; no named harm.
+  - `[low]` `[patch]` (blind) page.test.tsx stubs the retired `DEMO_STAFF_PASSWORD` and asserts a mock prop count — replaced with a no-credentials assertion.
+  - `[false]` `[reject]` (blind) Success state lives only in client state — `revalidatePath("/")` in the action re-renders the page, and the portal reads `hasAccount` from the refreshed `employees` prop first. The e2e reload step confirms the persisted state.
+  - `[false]` `[reject]` (verification-gap) No verification gaps — informational, nothing to act on.
+  - `[medium]` `[patch]` (verification-gap) e2e sweep wipes other runs' data and has few `BS-98nn` slots — same root cause as the fifth edge row; the sweep is age-scoped. An id collision fails loudly on the unique key.
+
 ## Design Notes
 
 **Why the employee's own email.** Staff signed in with their employee email before this story, and `employees.email` is unique. Using it keeps one email per person. The form also cannot point an account at the wrong address.
@@ -121,4 +152,41 @@ deferred: []
 **Commands:**
 - `npm run check` -- expected: typecheck, all unit tests (live Supabase blocks included when env is present) and the build pass.
 - `npm run test:e2e` -- expected: all specs pass, including provisioning and shared-password rejection.
-- `grep -rn "Staff23Demo\|DEMO_STAFF\|DEMO_SESSION_SECRET\|createSession\|readSession" src scripts playwright.config.ts` -- expected: no matches.
+- `grep -rnw "Staff23Demo\|DEMO_STAFF_PASSWORD\|DEMO_SESSION_SECRET\|createSession\|readSession" src scripts playwright.config.ts` -- expected: no matches (`-w` so the required `SEED_DEMO_STAFF_*` names do not match).
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** An Administrator creates a Staff account from an employee's profile by typing an initial password twice. The account is created through `accounts-store.create()` with the employee's own email and `app_metadata { role: "staff", employee_id }`, and `employees.auth_user_id` is linked only if the row is still unlinked; a failed link removes the new user (best effort). Every sign-in, Administrator and Staff, goes through Supabase Auth, with an 8 h / 12 h session window. The shared `DEMO_STAFF_PASSWORD`, `DEMO_SESSION_SECRET`, the HMAC cookie and the demo-credentials hint are gone. All employee reads use the per-request JWT client (RLS). `npm run db:seed-demo-staff` creates one demo Staff account from env vars. e2e provisions throwaway Staff accounts and employees through the service role. There is no database migration: the Story 1.1 schema and policies already cover this.
+
+**Files changed:**
+- `src/server/accounts-store.ts`: staff `create()` with link and compensation; 12–72 character passwords.
+- `src/server/account-actions.ts` (new): Administrator-only `provisionStaffAccountAction`.
+- `src/server/auth.ts`, `src/server/session.ts`: one Supabase sign-in and session path for both roles; HMAC removed; legacy cookie deleted.
+- `src/server/employees-store.ts`, `src/server/supabase.ts`, `src/data/employees.ts`: JWT-only reads, `hasAccount`, `findByEmail` removed.
+- `src/components/staff-account-panel.tsx` (new), `src/components/portal.tsx`, `src/app/styles.css`: provisioning panel; the date formatter tolerates empty dates (profiles without fixture data).
+- `src/components/login.tsx`, `src/app/page.tsx`: demo hint removed.
+- `scripts/seed-demo-staff.ts` (new), `package.json`: demo Staff seed.
+- `playwright.config.ts`, `tests/e2e/*`: throwaway staff and employees, an age-scoped leftover sweep (staff and admin), a provisioning spec, and shared-password rejection.
+- Unit tests: new `account-actions`, `seed-demo-staff` (with a live block), `staff-account-panel` and `support/fake-auth`; updated auth, session, staff-session, employees-store, accounts-store, attendance-actions, login, page, portal and no-registration.
+- Docs: `.env.example`, `README.md`, `docs/DEPLOYMENT.md`, `docs/ARCHITECTURE.md`, and a memlog amendment.
+
+**Review:** 26 findings:
+- **Patched** (13 rows, 7 entries): 3 medium entries (seed false success when the email belongs to another user; no confirm field and no reset procedure; the e2e sweep deleting concurrent runs' data) and 4 low entries (password max and policy message; best-effort cleanup comment; stale docs and test leftovers; stale `e2e-admin-*` users swept, which closes Story 1.2's deferred item).
+- **Deferred:** 0.
+- **Rejected:** 13 rows, with reasons in the triage log. These include no provisioning audit record (Story 1.4 creates `audit_events`) and the case-insensitive seed lookup (stored emails are always lowercase).
+
+**Follow-up review recommended:** true. Three medium entries were patched. The unverified risk: the Staff session window and the middleware refresh haven't been exercised across a real access-token refresh, about an hour after sign-in. e2e runs finish within minutes.
+
+**Verification:**
+- `npm run check` passed: 21 files, 251 tests including live Supabase blocks, plus the build.
+- `npm run test:e2e` passed 14/14. It ran with Chromium 1194 aliased as build 1243 in a scratch `PLAYWRIGHT_BROWSERS_PATH`, because the installed Playwright 1.63 expects 1243.
+- The `-w` grep for retired demo identifiers finds no matches.
+
+**Residual risks / human actions:**
+- After merge, the shared project's staff sign-ins stop working until accounts are provisioned. To keep the demo, run `npm run db:seed-demo-staff` with `SEED_DEMO_STAFF_EMAIL` and `SEED_DEMO_STAFF_PASSWORD`.
+- Nothing records which Administrator provisioned an account. Story 1.4's `audit_events` could cover it.
+- Two overlapping e2e runs can pick the same `BS-98nn` slot (about a 1-in-33 chance). If so, the second run fails loudly at setup.
+- `docs/SRS.md` still describes the old demo credentials.
+

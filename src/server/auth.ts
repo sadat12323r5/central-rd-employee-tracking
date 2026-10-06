@@ -1,29 +1,35 @@
 "use server";
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { isAuthApiError, type SupabaseClient } from "@supabase/supabase-js";
+import { isAuthApiError, type SupabaseClient, type User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { employeesStore, EmployeesUnavailableError } from "./employees-store";
-import { createSession, readSession, sessionHours, type SessionIdentity, type StaffIdentity } from "./session";
+import { sessionHours, type SessionIdentity } from "./session";
 import { getUserClient } from "./supabase";
 
-// Administrators sign in with a named Supabase Auth account (email + password); the session is the
-// Supabase auth cookie and `admin` comes from the user's `app_metadata.role`, which only the
-// service role can set. Demo staff still use the HMAC cookie below until Story 1.3 (staged cutover).
-// Next.js can load this module more than once (page render vs. server actions), so the
-// fallback secret is kept on globalThis to make every copy sign and verify with the same key.
-const holder = globalThis as typeof globalThis & { __bs23DemoSecret?: string };
-const secret = process.env.DEMO_SESSION_SECRET || (holder.__bs23DemoSecret ??= randomBytes(32).toString("hex"));
-const cookieName = "bs23-demo-session";
+// Administrators and Staff sign in with named Supabase Auth accounts (email + password). The session
+// is the Supabase auth cookie; the identity comes from the user's `app_metadata`, which only the
+// service role can set: `role: "admin"`, or `role: "staff"` with the linked `employee_id`.
+// The HMAC demo cookie used before Story 1.3 is ignored and deleted on sign-in and sign-out.
+const LEGACY_COOKIE = "bs23-demo-session";
+const EMPLOYEE_ID = /^BS-\d{4}$/;
 
-const ADMIN_SESSION_MS = sessionHours({ role: "admin" }) * 60 * 60 * 1000;
 const INCORRECT = "The email or password is incorrect. Please try again.";
 const UNAVAILABLE = "Sign-in is temporarily unavailable. Please try again shortly.";
 
-/** True when a sign-in time (ms since epoch) is known and under 8 hours old. */
-function withinAdminWindow(signedInAt: number | undefined, now: number): boolean {
-  return signedInAt !== undefined && Number.isFinite(signedInAt) && now - signedInAt < ADMIN_SESSION_MS;
+/** The identity a Supabase user's `app_metadata` grants, or null for any other role or a malformed claim. */
+function identityFor(user: User | null | undefined): SessionIdentity | null {
+  const metadata = user?.app_metadata ?? {};
+  if (metadata.role === "admin") return { role: "admin" };
+  if (metadata.role === "staff" && typeof metadata.employee_id === "string" && EMPLOYEE_ID.test(metadata.employee_id)) {
+    return { role: "staff", employeeId: metadata.employee_id };
+  }
+  return null;
+}
+
+/** True when a sign-in time (ms since epoch) is known and within the identity's session length. */
+function withinWindow(identity: SessionIdentity, signedInAt: number | undefined, now: number): boolean {
+  return signedInAt !== undefined && Number.isFinite(signedInAt) && now - signedInAt < sessionHours(identity) * 60 * 60 * 1000;
 }
 
 /**
@@ -48,29 +54,29 @@ function isCredentialRejection(error: unknown): boolean {
   return isAuthApiError(error) && error.status >= 400 && error.status < 500 && error.status !== 429;
 }
 
-async function adminSession(): Promise<SessionIdentity | null> {
+async function supabaseSession(): Promise<SessionIdentity | null> {
   try {
     const client = await getUserClient();
     // getUser() asks Supabase Auth to validate the token; cookie contents alone are never trusted.
     const { data, error } = await client.auth.getUser();
-    if (error || !data.user || data.user.app_metadata?.role !== "admin") return null;
-    // 8-hour Administrator session (FR-SESS-002): both the account's last sign-in and this session's
-    // own password sign-in must be recent, so a sign-in on another device cannot extend this one.
+    if (error || !data.user) return null;
+    const identity = identityFor(data.user);
+    if (!identity) return null;
+    // Session length (FR-SESS-002: 8 h Administrator, 12 h Staff): both the account's last sign-in and
+    // this session's own password sign-in must be recent, so a sign-in on another device cannot extend it.
     const now = Date.now();
     const lastSignIn = data.user.last_sign_in_at ? Date.parse(data.user.last_sign_in_at) : undefined;
-    if (withinAdminWindow(lastSignIn, now) && withinAdminWindow(await passwordSignInAt(client), now)) return { role: "admin" };
+    if (withinWindow(identity, lastSignIn, now) && withinWindow(identity, await passwordSignInAt(client), now)) return identity;
     await signOutSupabase(client);
     return null;
   } catch (error) {
-    console.error("Administrator session check failed.", error instanceof Error ? error.name : "unknown error");
+    console.error("Session check failed.", error instanceof Error ? error.name : "unknown error");
     return null;
   }
 }
 
 export async function getSession(): Promise<SessionIdentity | null> {
-  const admin = await adminSession();
-  if (admin) return admin;
-  return readSession((await cookies()).get(cookieName)?.value, secret);
+  return supabaseSession();
 }
 
 export async function isSignedIn() {
@@ -87,80 +93,63 @@ async function signOutSupabase(client: SupabaseClient) {
 
 type SignInResult = { identity: SessionIdentity } | { error: string };
 
-async function staffSignIn(email: string, password: string): Promise<SignInResult | null> {
-  const staffPassword = process.env.DEMO_STAFF_PASSWORD || "Staff23Demo!";
-  // Constant-time comparison (NFR-SEC-001). Only the length can differ in timing, and the
-  // demo staff password is not a secret; no password is hashed or stored here.
-  const given = Buffer.from(password);
-  const expected = Buffer.from(staffPassword);
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
-  // Demo staff accounts: each fictional employee signs in with their employee email.
-  // The password is checked first so a wrong password never costs a database round trip.
-  try {
-    const employee = await employeesStore.findByEmail(email);
-    return employee ? { identity: { role: "staff", employeeId: employee.id } } : null;
-  } catch (error) {
-    if (error instanceof EmployeesUnavailableError) {
-      console.error("Staff sign-in failed: employee records unavailable.", error, { cause: error.cause });
-      return { error: UNAVAILABLE };
-    }
-    throw error;
-  }
-}
-
-async function adminSignIn(email: string, password: string): Promise<SignInResult> {
+async function supabaseSignIn(email: string, password: string): Promise<SignInResult> {
   if (!email || !password) return { error: INCORRECT };
   let client: SupabaseClient;
   try {
     client = await getUserClient();
   } catch (error) {
-    console.error("Administrator sign-in failed: Supabase is not configured.", error instanceof Error ? error.name : "unknown error");
+    console.error("Sign-in failed: Supabase is not configured.", error instanceof Error ? error.name : "unknown error");
     return { error: UNAVAILABLE };
   }
   let result: Awaited<ReturnType<SupabaseClient["auth"]["signInWithPassword"]>>;
   try {
     result = await client.auth.signInWithPassword({ email, password });
   } catch (error) {
-    console.error("Administrator sign-in failed: Supabase Auth unreachable.", error instanceof Error ? error.name : "unknown error");
+    console.error("Sign-in failed: Supabase Auth unreachable.", error instanceof Error ? error.name : "unknown error");
     return { error: UNAVAILABLE };
   }
   const { data, error } = result;
   if (error) {
     if (isCredentialRejection(error)) return { error: INCORRECT };
-    console.error("Administrator sign-in failed: Supabase Auth error.", { name: error.name, status: error.status, code: error.code });
+    console.error("Sign-in failed: Supabase Auth error.", { name: error.name, status: error.status, code: error.code });
     return { error: UNAVAILABLE };
   }
-  if (data.user?.app_metadata?.role !== "admin") {
-    // A valid Supabase user without the admin role gets no session and the same generic message.
+  const identity = identityFor(data.user);
+  if (!identity) {
+    // A valid Supabase user without a recognised role gets no session and the same generic message.
     await signOutSupabase(client);
     return { error: INCORRECT };
   }
-  return { identity: { role: "admin" } };
+  if (identity.role === "staff") {
+    // The staff account must reach its own employee row through RLS (employees_select_own).
+    try {
+      const employee = await employeesStore.getFor(identity, identity.employeeId);
+      if (!employee) {
+        await signOutSupabase(client);
+        return { error: INCORRECT };
+      }
+    } catch (error) {
+      await signOutSupabase(client);
+      if (error instanceof EmployeesUnavailableError) {
+        console.error("Sign-in failed: employee records unavailable.", error.name);
+        return { error: UNAVAILABLE };
+      }
+      throw error;
+    }
+  }
+  return { identity };
 }
 
 export async function signIn(_previous: { error: string }, form: FormData) {
   const email = String(form.get("email") || "").trim().toLowerCase();
   const password = String(form.get("password") || "");
 
-  const result = (await staffSignIn(email, password)) ?? (await adminSignIn(email, password));
+  const result = await supabaseSignIn(email, password);
   if ("error" in result) return { error: result.error };
 
-  const store = await cookies();
-  if (result.identity.role === "staff") {
-    // getSession() checks Supabase first, so end any Administrator session in this browser.
-    try {
-      await signOutSupabase(await getUserClient());
-    } catch {
-      // Supabase not configured: there is no Supabase session to end.
-    }
-    const identity: StaffIdentity = result.identity;
-    store.set(cookieName, createSession(secret, Date.now(), identity), {
-      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/", maxAge: sessionHours(identity) * 60 * 60,
-    });
-  } else {
-    // The Supabase auth cookies were set by signInWithPassword; drop any older staff session.
-    store.delete(cookieName);
-  }
+  // The Supabase auth cookies were set by signInWithPassword; drop any pre-Story-1.3 demo cookie.
+  (await cookies()).delete(LEGACY_COOKIE);
   redirect("/");
 }
 
@@ -170,6 +159,6 @@ export async function signOut() {
   } catch {
     // Supabase not configured: there is no Supabase session to end.
   }
-  (await cookies()).delete(cookieName);
+  (await cookies()).delete(LEGACY_COOKIE);
   redirect("/");
 }

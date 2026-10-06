@@ -38,7 +38,7 @@ development_status:
   epic-1: in-progress
   1-1-employee-records-persist-with-role-scoped-access: review
   1-2-administrator-signs-in-with-a-named-account: review
-  1-3-administrator-provisions-a-staff-account: in-progress
+  1-3-administrator-provisions-a-staff-account: review
   1-4-administrator-archives-and-restores-an-account: backlog
   1-5-staff-attendance-survives-restarts: backlog
   epic-1-retrospective: optional

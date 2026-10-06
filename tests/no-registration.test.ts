@@ -38,4 +38,16 @@ describe("no self-registration", () => {
     const callers = sourceFiles.filter(file => /admin\s*\.\s*createUser\s*\(|\.createUser\s*\(/.test(readFileSync(file, "utf8")));
     expect(callers.map(f => relative(root, f))).toEqual(["src/server/accounts-store.ts"]);
   });
+
+  it("uses the service-role client at runtime only for Administrator provisioning", () => {
+    const runtime = sourceFiles.filter(file => file.includes(`${join(root, "src")}`) && !file.endsWith(join("server", "supabase.ts")));
+    const callers = runtime.filter(file => /getServiceClient\b/.test(readFileSync(file, "utf8")));
+    expect(callers.map(f => relative(root, f))).toEqual(["src/server/account-actions.ts"]);
+  });
+
+  it("has no sign-up, invite or magic-link calls and no retired demo credentials", () => {
+    const pattern = /\.(inviteUserByEmail|signInWithOtp|generateLink)\s*\(|Staff23Demo|(?<!SEED_)DEMO_STAFF_PASSWORD|DEMO_SESSION_SECRET|createSession|readSession/;
+    const offenders = sourceFiles.filter(file => pattern.test(readFileSync(file, "utf8")));
+    expect(offenders.map(f => relative(root, f))).toEqual([]);
+  });
 });

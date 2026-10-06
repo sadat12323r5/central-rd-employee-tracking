@@ -17,25 +17,25 @@ describe("Login", () => {
     signInMock.mockReset();
   });
 
-  it("renders the sign-in form without demo credentials by default", () => {
-    render(<Login showDemoCredentials={false} />);
+  it("renders the sign-in form without any demo credentials", () => {
+    const { container } = render(<Login />);
     expect(screen.getByRole("heading", { name: "Welcome back." })).toBeInTheDocument();
     expect(screen.getByLabelText("Email address")).toBeRequired();
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "password");
     expect(screen.queryByText("nadia.rahman@example.com")).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/Staff23Demo|Brain23Demo|manager@example\.com/);
+    expect(container).not.toHaveTextContent(/password:/i);
   });
 
-  it("shows only the staff demo credentials when requested, never the retired manager ones", () => {
-    const { container } = render(<Login showDemoCredentials={true} />);
-    expect(screen.getByText("nadia.rahman@example.com")).toBeInTheDocument();
-    expect(container).not.toHaveTextContent(/manager@example\.com/);
-    expect(container).not.toHaveTextContent(/Brain23Demo/);
+  it("keeps the synthetic-data note", () => {
+    render(<Login />);
+    expect(screen.getByText("Interactive demo · synthetic data")).toBeInTheDocument();
   });
 
   it("shows the server-returned error after a failed sign-in attempt", async () => {
     signInMock.mockResolvedValue({ error: "The email or password is incorrect. Please try again." });
     const user = userEvent.setup();
-    render(<Login showDemoCredentials={false} />);
+    render(<Login />);
 
     await user.type(screen.getByLabelText("Email address"), "admin@example.test");
     await user.type(screen.getByLabelText("Password", { exact: true }), "wrong-password");
@@ -46,7 +46,7 @@ describe("Login", () => {
   });
 
   it("has no detectable accessibility violations", async () => {
-    const { container } = render(<Login showDemoCredentials={true} />);
+    const { container } = render(<Login />);
     expect(await axe(container)).toHaveNoViolations();
   });
 });

@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "db:push": "node scripts/db-push.mjs",
     "db:seed": "node --experimental-strip-types scripts/seed-employees.ts",
-    "db:seed-admin": "node --experimental-strip-types scripts/seed-admin.ts"
+    "db:seed-admin": "node --experimental-strip-types scripts/seed-admin.ts",
+    "db:seed-demo-staff": "node --experimental-strip-types scripts/seed-demo-staff.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

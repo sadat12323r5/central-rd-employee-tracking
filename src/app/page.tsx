@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const session = await getSession();
-  const login = <Login showDemoCredentials={!process.env.DEMO_STAFF_PASSWORD} />;
+  const login = <Login />;
   if (!session) return login;
   try {
     if (session.role === "staff") {
