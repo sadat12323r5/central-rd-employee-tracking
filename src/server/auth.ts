@@ -1,6 +1,6 @@
 "use server";
 
-import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { isAuthApiError, type SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -89,8 +89,11 @@ type SignInResult = { identity: SessionIdentity } | { error: string };
 
 async function staffSignIn(email: string, password: string): Promise<SignInResult | null> {
   const staffPassword = process.env.DEMO_STAFF_PASSWORD || "Staff23Demo!";
-  const hash = (value: string) => createHash("sha256").update(value).digest();
-  if (!timingSafeEqual(hash(password), hash(staffPassword))) return null;
+  // Constant-time comparison (NFR-SEC-001). Only the length can differ in timing, and the
+  // demo staff password is not a secret; no password is hashed or stored here.
+  const given = Buffer.from(password);
+  const expected = Buffer.from(staffPassword);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
   // Demo staff accounts: each fictional employee signs in with their employee email.
   // The password is checked first so a wrong password never costs a database round trip.
   try {
