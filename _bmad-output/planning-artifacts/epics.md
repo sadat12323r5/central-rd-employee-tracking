@@ -226,6 +226,19 @@ So that they get their own credentials instead of a shared staff password.
 **When** they use the app
 **Then** they see only their own portal and cannot open the Administrator portal (shipped behaviour kept)
 
+**System Owner decisions (2026-10-06):**
+- **Credential delivery:** the Administrator sets an initial password when creating the Staff account and passes it on outside the app.
+  - No invite or magic-link email: the shared project has no SMTP, and the free default mailer is rate-limited.
+  - A forced password change at first sign-in is not part of this story.
+- **Demo access:** the shared `DEMO_STAFF_PASSWORD` sign-in is retired.
+  - A seed step creates one real demo Staff account, linked to a fictional seeded employee, so the staff portal can still be demonstrated.
+  - Its email and password come from environment variables and are never published on the sign-in page or in the repo.
+  - CI and e2e provision their own throwaway Staff account through the service role.
+- **Carry-over from Stories 1.1 and 1.2:**
+  - Link `employees.auth_user_id` when an account is created.
+  - Switch staff reads and the sign-in lookup from the service-role client to the per-request JWT client.
+  - Retire the HMAC staff cookie.
+
 ### Story 1.4: Administrator archives and restores an account
 
 As the L&D manager,
