@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // Every colour in the stylesheet must come from a named variable in :root, so contrast is only
-// ever checked (and changed) in one place. The Staff portal's .staff-* rules are exempt until
-// Story 6.3 tokenises them; that story extends this guard to the whole file.
+// ever checked (and changed) in one place. The guard covers the whole file; only :root, which
+// defines the palette, may hold literal colours.
 
 type Rule = { selector: string; body: string };
 
@@ -59,18 +59,17 @@ function literalColours(body: string): string[] {
     .map(value => value.trim());
 }
 
-const isExempt = (selector: string) =>
-  selector === ":root" || selector.split(",").every(part => part.trim().startsWith(".staff-"));
+const isExempt = (selector: string) => selector === ":root";
 
 describe("stylesheet colour tokens", () => {
   it("the guard finds literal colours, including inside @media and in named colours", () => {
-    const rules = parseRules(".a{color:var(--ink)}@media(max-width:600px){.b{background:white;white-space:nowrap}}.c{border:1px solid #abc}.d{box-shadow:0 0 0 1px rgba(0,0,0,.1)}.staff-x{color:#fff}");
+    const rules = parseRules(":root{--x:#fff}.a{color:var(--ink)}@media(max-width:600px){.b{background:white;white-space:nowrap}}.c{border:1px solid #abc}.d{box-shadow:0 0 0 1px rgba(0,0,0,.1)}.staff-x{color:#fff}");
     const offenders = rules.filter(r => !isExempt(r.selector) && literalColours(r.body).length).map(r => r.selector);
-    expect(offenders).toEqual([".b", ".c", ".d"]);
+    expect(offenders).toEqual([".b", ".c", ".d", ".staff-x"]);
     expect(literalColours("white-space:nowrap;color:transparent;border-color:currentColor;color:inherit")).toEqual([]);
   });
 
-  it("uses only :root variables outside :root and the .staff-* rules", () => {
+  it("uses only :root variables outside :root", () => {
     const css = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
     const rules = parseRules(css);
     expect(rules.length).toBeGreaterThan(100);
