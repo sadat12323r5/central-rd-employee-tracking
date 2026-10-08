@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import { signIn } from "@/server/auth";
 
-export default function Login({ showDemoCredentials }: { showDemoCredentials: boolean }) {
+export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [state, action, pending] = useActionState(signIn, { error: "" });
@@ -22,7 +22,7 @@ export default function Login({ showDemoCredentials }: { showDemoCredentials: bo
         {state.error && <p role="alert" className="form-error">{state.error}</p>}
         <button className="primary" disabled={pending}>{pending ? "Signing in…" : "Sign in to workspace →"}</button>
       </form>
-      <div className="demo-note"><strong>Interactive demo · synthetic data</strong><p>This preview contains fictional employees. Production accounts and HR integrations are not connected.</p>{showDemoCredentials && <p>Staff: <code>nadia.rahman@example.com</code> (or any demo employee)<br />Password: <code>Staff23Demo!</code></p>}</div>
+      <div className="demo-note"><strong>Interactive demo · synthetic data</strong><p>This preview contains fictional employees. Production accounts and HR integrations are not connected.</p></div>
       <p className="login-footnote">Brain Station 23 · L&D manager portal</p>
     </div></section>
   </main>;

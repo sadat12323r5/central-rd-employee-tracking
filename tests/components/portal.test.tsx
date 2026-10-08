@@ -7,6 +7,9 @@ import { axe } from "jest-axe";
 vi.mock("@/server/auth", () => ({
   signOut: () => {},
 }));
+vi.mock("@/server/account-actions", () => ({
+  provisionStaffAccountAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 
 import Portal from "@/components/portal";
 import { employees } from "@/data/employees";
@@ -120,5 +123,37 @@ describe("Portal employee profile", () => {
     await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
     await user.click(screen.getByRole("button", { name: /back to/i }));
     expect(screen.queryByRole("heading", { name: "Nadia Rahman" })).not.toBeInTheDocument();
+  });
+
+  it("shows the Staff account form on the Overview tab for an employee without an account", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={employees.map(e => ({ ...e, hasAccount: false }))} />);
+    await user.click(screen.getByRole("button", { name: "View Meera Das's profile" }));
+    expect(screen.getByRole("heading", { name: "Sign-in account" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Initial password")).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: "Create Staff account" })).toBeInTheDocument();
+  });
+
+  it("shows that an employee already has an account, with no form", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={employees.map(e => ({ ...e, hasAccount: e.id === "BS-1003" }))} />);
+    await user.click(screen.getByRole("button", { name: "View Meera Das's profile" }));
+    expect(screen.getByText("Has a sign-in account")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Initial password")).not.toBeInTheDocument();
+  });
+
+  it("opens the profile of an employee with no fixture profile data (empty dates) without crashing", async () => {
+    const user = userEvent.setup();
+    const bare = {
+      ...employees[0], id: "BS-9801", name: "Bare Employee", skills: [], history: [], training: [], interviews: [],
+      work: { project: "", role: "", allocation: 0, update: "", commits: 0, period: "" },
+      attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
+      review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" }, hasAccount: false,
+    };
+    render(<Portal employees={[...employees, bare]} />);
+    await user.click(screen.getByRole("button", { name: "View Bare Employee's profile" }));
+    expect(screen.getByRole("heading", { name: "Bare Employee" })).toBeInTheDocument();
+    expect(screen.getByText(/Reviewed Not recorded/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Initial password")).toBeInTheDocument();
   });
 });

@@ -2,6 +2,8 @@
   id: string; name: string; title: string; team: string; type: string; email: string;
   joined: string; manager: string; location: string; status: "On project" | "In training" | "Available";
   initials: string; color: string; summary: string;
+  /** Administrator reads only: true when the employee has a linked sign-in account (`auth_user_id`). */
+  hasAccount?: boolean;
   skills: { name: string; level: number; evidence: string }[];
   history: { role: string; company: string; period: string; detail: string }[];
   training: { name: string; provider: string; progress: number; date: string; result: string }[];

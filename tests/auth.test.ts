@@ -1,127 +1,30 @@
 import { createHmac } from "node:crypto";
-import { AuthApiError, AuthRetryableFetchError } from "@supabase/supabase-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ADMIN, AUTH_COOKIE, cookieStore, formData, LEGACY_COOKIE, redirectMock, resetAuth, STAFF, supabase } from "./support/fake-auth";
 
-const { cookieStore, redirectMock } = vi.hoisted(() => {
-  // A known HMAC secret, so the test can sign a legacy admin token exactly as auth.ts would verify it.
-  process.env.DEMO_SESSION_SECRET = "auth-test-secret";
-  const store = new Map<string, string>();
-  return {
-    cookieStore: {
-      get: (name: string) => (store.has(name) ? { name, value: store.get(name)! } : undefined),
-      getAll: () => [...store].map(([name, value]) => ({ name, value })),
-      set: (name: string, value: string) => {
-        store.set(name, value);
-      },
-      delete: (name: string) => {
-        store.delete(name);
-      },
-      __store: store,
-    },
-    redirectMock: vi.fn(),
-  };
-});
+vi.mock("next/headers", async () => (await import("./support/fake-auth")).headersModule());
+vi.mock("next/navigation", async () => (await import("./support/fake-auth")).navigationModule());
+vi.mock("../src/server/supabase", async () => (await import("./support/fake-auth")).supabaseModule());
 
-vi.mock("next/headers", () => ({
-  cookies: () => Promise.resolve(cookieStore),
-}));
-
-vi.mock("next/navigation", () => ({
-  redirect: redirectMock,
-}));
-
-// Staff sign-in looks employees up through employees-store; keep these tests off the network.
-const { findByEmail } = vi.hoisted(() => ({ findByEmail: vi.fn() }));
+// Staff sign-in confirms the linked employee row through employees-store (the JWT client); keep it offline.
+const { getFor } = vi.hoisted(() => ({ getFor: vi.fn() }));
 vi.mock("../src/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/employees-store")>()),
-  employeesStore: { findByEmail, listFor: vi.fn(), getFor: vi.fn() },
-}));
-
-// A stand-in for Supabase Auth: accounts by email, and the auth cookie it would set on sign-in.
-type FakeUser = { id: string; password: string; app_metadata: Record<string, unknown>; last_sign_in_at?: string };
-const AUTH_COOKIE = "sb-test-auth-token";
-const supabase = {
-  users: new Map<string, FakeUser>(),
-  /** Per signed-in email: the `amr` password timestamp (seconds) in that session's access token. */
-  amr: new Map<string, number>(),
-  mode: "ok" as "ok" | "network" | "outage" | "rate-limited" | "unconfigured",
-  signOuts: 0,
-};
-const fakeJwt = (claims: object) => `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
-const fakeAuth = {
-  async signInWithPassword({ email, password }: { email: string; password: string }) {
-    if (supabase.mode === "network") return { data: { user: null, session: null }, error: new AuthRetryableFetchError("fetch failed", 0) };
-    if (supabase.mode === "outage") return { data: { user: null, session: null }, error: new AuthApiError("upstream error", 503, "unexpected_failure") };
-    if (supabase.mode === "rate-limited") {
-      return { data: { user: null, session: null }, error: new AuthApiError("Request rate limit reached", 429, "over_request_rate_limit") };
-    }
-    const user = supabase.users.get(email);
-    if (!user || user.password !== password) {
-      return { data: { user: null, session: null }, error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials") };
-    }
-    user.last_sign_in_at = new Date().toISOString();
-    supabase.amr.set(email, Math.floor(Date.now() / 1000));
-    cookieStore.set(AUTH_COOKIE, email);
-    return { data: { user: { ...user, email }, session: {} }, error: null };
-  },
-  async getUser() {
-    const email = cookieStore.get(AUTH_COOKIE)?.value;
-    const user = email ? supabase.users.get(email) : undefined;
-    if (!user) return { data: { user: null }, error: new AuthApiError("Auth session missing!", 400, "session_not_found") };
-    return { data: { user: { ...user, email } }, error: null };
-  },
-  async getSession() {
-    // Read only after getUser() has validated the same session; returns its access token.
-    const email = cookieStore.get(AUTH_COOKIE)?.value;
-    if (!email) return { data: { session: null }, error: null };
-    const timestamp = supabase.amr.get(email);
-    const amr = timestamp === undefined ? [] : [{ method: "password", timestamp }];
-    return { data: { session: { access_token: fakeJwt({ sub: email, amr }) } }, error: null };
-  },
-  async signOut() {
-    supabase.signOuts++;
-    cookieStore.delete(AUTH_COOKIE);
-    return { error: null };
-  },
-};
-vi.mock("../src/server/supabase", () => ({
-  getUserClient: async () => {
-    if (supabase.mode === "unconfigured") throw new Error("Supabase is not configured");
-    return { auth: fakeAuth };
-  },
-  getServiceClient: () => {
-    throw new Error("auth must not use the service-role client");
-  },
+  employeesStore: { listFor: vi.fn(), getFor },
 }));
 
 const { isSignedIn, signIn, signOut, getSession } = await import("../src/server/auth");
 const { EmployeesUnavailableError } = await import("../src/server/employees-store");
 const { employees } = await import("@/data/employees");
-const staffPassword = process.env.DEMO_STAFF_PASSWORD || "Staff23Demo!";
 
-const adminEmail = "lnd.manager@example.test";
-const adminPassword = "a-long-admin-passphrase";
 const INCORRECT = "The email or password is incorrect. Please try again.";
 const UNAVAILABLE = "Sign-in is temporarily unavailable. Please try again shortly.";
-
-function formData(fields: Record<string, string>): FormData {
-  const data = new FormData();
-  for (const [key, value] of Object.entries(fields)) data.set(key, value);
-  return data;
-}
+const meera = employees.find(e => e.id === STAFF.employeeId)!;
 
 function reset() {
-  cookieStore.__store.clear();
-  redirectMock.mockClear();
-  findByEmail.mockReset();
-  findByEmail.mockResolvedValue(null);
-  supabase.users.clear();
-  supabase.amr.clear();
-  supabase.mode = "ok";
-  supabase.signOuts = 0;
-  supabase.users.set(adminEmail, { id: "admin-1", password: adminPassword, app_metadata: { role: "admin" } });
-  supabase.users.set("staff.user@example.test", { id: "staff-1", password: "a-long-staff-passphrase", app_metadata: { role: "staff" } });
-  supabase.users.set("no.role@example.test", { id: "none-1", password: "a-long-other-passphrase", app_metadata: {} });
+  resetAuth();
+  getFor.mockReset();
+  getFor.mockImplementation(async (_session: unknown, id: string) => (id === STAFF.employeeId ? meera : null));
 }
 
 describe("Administrator sign-in with a Supabase account", () => {
@@ -141,15 +44,16 @@ describe("Administrator sign-in with a Supabase account", () => {
   });
 
   it("signs an admin in, matching email case-insensitively, and redirects home", async () => {
-    await signIn({ error: "" }, formData({ email: adminEmail.toUpperCase(), password: adminPassword }));
+    await signIn({ error: "" }, formData({ email: ADMIN.email.toUpperCase(), password: ADMIN.password }));
     expect(cookieStore.get(AUTH_COOKIE)).toBeDefined();
     expect(redirectMock).toHaveBeenCalledWith("/");
     expect(await getSession()).toEqual({ role: "admin" });
     expect(await isSignedIn()).toBe(true);
+    expect(getFor).not.toHaveBeenCalled();
   });
 
   it("rejects a wrong password with the generic message and no cookie", async () => {
-    const result = await signIn({ error: "" }, formData({ email: adminEmail, password: "wrong-password" }));
+    const result = await signIn({ error: "" }, formData({ email: ADMIN.email, password: "wrong-password" }));
     expect(result).toEqual({ error: INCORRECT });
     expect(cookieStore.__store.size).toBe(0);
     expect(redirectMock).not.toHaveBeenCalled();
@@ -157,19 +61,27 @@ describe("Administrator sign-in with a Supabase account", () => {
   });
 
   it("rejects an unknown email with the same generic message", async () => {
-    const result = await signIn({ error: "" }, formData({ email: "nobody@example.test", password: adminPassword }));
+    const result = await signIn({ error: "" }, formData({ email: "nobody@example.test", password: ADMIN.password }));
     expect(result).toEqual({ error: INCORRECT });
     expect(await getSession()).toBeNull();
   });
 
-  it.each([["staff.user@example.test", "a-long-staff-passphrase"], ["no.role@example.test", "a-long-other-passphrase"]])(
-    "rejects a valid Supabase user without the admin role (%s) and signs that session out",
-    async (email, password) => {
-      const result = await signIn({ error: "" }, formData({ email, password }));
+  it("rejects a valid Supabase user without a role and signs that session out", async () => {
+    const result = await signIn({ error: "" }, formData({ email: "no.role@example.test", password: "a-long-other-passphrase" }));
+    expect(result).toEqual({ error: INCORRECT });
+    expect(supabase.signOuts).toBe(1);
+    expect(cookieStore.get(AUTH_COOKIE)).toBeUndefined();
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(await getSession()).toBeNull();
+  });
+
+  it.each([{ role: "owner" }, { role: "manager" }, { role: "staff" }, { role: "staff", employee_id: "../admin" }, { role: "staff", employee_id: 1003 }])(
+    "rejects a user whose app_metadata is %j and signs that session out",
+    async app_metadata => {
+      supabase.users.set("odd@example.test", { id: "odd-1", password: "a-long-odd-passphrase", app_metadata });
+      const result = await signIn({ error: "" }, formData({ email: "odd@example.test", password: "a-long-odd-passphrase" }));
       expect(result).toEqual({ error: INCORRECT });
       expect(supabase.signOuts).toBe(1);
-      expect(cookieStore.get(AUTH_COOKIE)).toBeUndefined();
-      expect(redirectMock).not.toHaveBeenCalled();
       expect(await getSession()).toBeNull();
     },
   );
@@ -182,17 +94,17 @@ describe("Administrator sign-in with a Supabase account", () => {
 
   it.each(["network", "outage", "rate-limited", "unconfigured"] as const)("reports sign-in unavailable when Supabase is %s", async mode => {
     supabase.mode = mode;
-    const result = await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
+    const result = await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
     expect(result).toEqual({ error: UNAVAILABLE });
     expect(redirectMock).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalled();
     // Logged without values: never the email or password.
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(adminPassword);
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(adminEmail);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(ADMIN.password);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(ADMIN.email);
   });
 
   it("treats an admin session older than 8 hours as signed out", async () => {
-    await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 7 * 60 * 60 * 1000 + 59 * 60 * 1000);
     expect(await getSession()).toEqual({ role: "admin" });
@@ -203,30 +115,19 @@ describe("Administrator sign-in with a Supabase account", () => {
   });
 
   it("ends a session whose own password sign-in is over 8 hours old, even if the account signed in recently elsewhere", async () => {
-    await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
     // A fresh last_sign_in_at (another device), but this session's token says it signed in 9 hours ago.
-    supabase.amr.set(adminEmail, Math.floor(Date.now() / 1000) - 9 * 60 * 60);
+    supabase.amr.set(ADMIN.email, Math.floor(Date.now() / 1000) - 9 * 60 * 60);
     expect(await getSession()).toBeNull();
     expect(supabase.signOuts).toBe(1);
     expect(cookieStore.get(AUTH_COOKIE)).toBeUndefined();
   });
 
   it("ends a session whose token carries no password sign-in time", async () => {
-    await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
-    supabase.amr.delete(adminEmail);
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    supabase.amr.delete(ADMIN.email);
     expect(await getSession()).toBeNull();
     expect(supabase.signOuts).toBe(1);
-  });
-
-  it("drops an existing staff HMAC session when an admin signs in", async () => {
-    const employee = employees.find(e => e.id === "BS-1003")!;
-    findByEmail.mockResolvedValue(employee);
-    await signIn({ error: "" }, formData({ email: employee.email, password: staffPassword }));
-    expect(cookieStore.get("bs23-demo-session")).toBeDefined();
-
-    await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
-    expect(cookieStore.get("bs23-demo-session")).toBeUndefined();
-    expect(await getSession()).toEqual({ role: "admin" });
   });
 
   it("does not trust an auth cookie Supabase does not recognise", async () => {
@@ -234,72 +135,95 @@ describe("Administrator sign-in with a Supabase account", () => {
     expect(await getSession()).toBeNull();
   });
 
-  it("treats an old HMAC admin token as signed out", async () => {
-    const payload = Buffer.from(JSON.stringify({ role: "admin", expires: Date.now() + 60_000 })).toString("base64url");
-    const token = `${payload}.${createHmac("sha256", "auth-test-secret").update(payload).digest("base64url")}`;
-    cookieStore.set("bs23-demo-session", token);
-    expect(await getSession()).toBeNull();
-  });
-
-  it("signs out by ending the Supabase session and redirecting home", async () => {
-    await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
+  it("signs out by ending the Supabase session, deleting the legacy cookie and redirecting home", async () => {
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
     expect(await isSignedIn()).toBe(true);
     redirectMock.mockClear();
+    cookieStore.set(LEGACY_COOKIE, "old-token");
 
     await signOut();
     expect(supabase.signOuts).toBe(1);
+    expect(cookieStore.get(LEGACY_COOKIE)).toBeUndefined();
     expect(await isSignedIn()).toBe(false);
     expect(redirectMock).toHaveBeenCalledWith("/");
+  });
+
+  it("never uses the service-role client to sign in or read the session", async () => {
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    await getSession();
+    expect(supabase.serviceClientCalls).toBe(0);
   });
 });
 
-describe("demo staff auth through employees-store (unchanged until Story 1.3)", () => {
-  beforeEach(reset);
+describe("Staff sign-in with a provisioned Supabase account", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    reset();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => errorSpy.mockRestore());
 
-  it("signs a staff member in as the employee the store finds by email", async () => {
-    const employee = employees.find(e => e.id === "BS-1003")!;
-    findByEmail.mockResolvedValue(employee);
-    await signIn({ error: "" }, formData({ email: employee.email.toUpperCase(), password: staffPassword }));
-    expect(findByEmail).toHaveBeenCalledWith(employee.email.toLowerCase());
-    expect(await getSession()).toEqual({ role: "staff", employeeId: "BS-1003" });
-    expect(await isSignedIn()).toBe(false);
+  it("signs a staff member in as the employee in their app_metadata, after confirming the row through RLS", async () => {
+    await signIn({ error: "" }, formData({ email: STAFF.email.toUpperCase(), password: STAFF.password }));
+    expect(getFor).toHaveBeenCalledWith({ role: "staff", employeeId: STAFF.employeeId }, STAFF.employeeId);
     expect(redirectMock).toHaveBeenCalledWith("/");
-  });
-
-  it("ends an existing Administrator session when staff sign in in the same browser", async () => {
-    await signIn({ error: "" }, formData({ email: adminEmail, password: adminPassword }));
-    expect(await getSession()).toEqual({ role: "admin" });
-
-    const employee = employees.find(e => e.id === "BS-1003")!;
-    findByEmail.mockResolvedValue(employee);
-    await signIn({ error: "" }, formData({ email: employee.email, password: staffPassword }));
-    expect(cookieStore.get(AUTH_COOKIE)).toBeUndefined();
-    expect(await getSession()).toEqual({ role: "staff", employeeId: "BS-1003" });
+    expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
     expect(await isSignedIn()).toBe(false);
   });
 
-  it("rejects an email the store does not know with the generic message", async () => {
-    findByEmail.mockResolvedValue(null);
-    const result = await signIn({ error: "" }, formData({ email: "nobody@example.com", password: staffPassword }));
+  it("rejects a staff user whose linked employee row is not visible, signing them out", async () => {
+    getFor.mockResolvedValue(null);
+    const result = await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
     expect(result).toEqual({ error: INCORRECT });
+    expect(supabase.signOuts).toBe(1);
+    expect(cookieStore.get(AUTH_COOKIE)).toBeUndefined();
+    expect(redirectMock).not.toHaveBeenCalled();
     expect(await getSession()).toBeNull();
   });
 
-  it("rejects a wrong staff password without querying the store", async () => {
-    const result = await signIn({ error: "" }, formData({ email: "meera.das@example.com", password: "wrong-password" }));
-    expect(result).toEqual({ error: INCORRECT });
-    expect(findByEmail).not.toHaveBeenCalled();
-    expect(await getSession()).toBeNull();
-  });
-
-  it("reports sign-in as unavailable, without a session, when the store is unreachable", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    findByEmail.mockRejectedValue(new EmployeesUnavailableError());
-    const result = await signIn({ error: "" }, formData({ email: "nadia.rahman@example.com", password: staffPassword }));
+  it("reports sign-in unavailable, signed out, when employee records cannot be read", async () => {
+    getFor.mockRejectedValue(new EmployeesUnavailableError());
+    const result = await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
     expect(result).toEqual({ error: UNAVAILABLE });
+    expect(supabase.signOuts).toBe(1);
     expect(await getSession()).toBeNull();
     expect(redirectMock).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalled();
-    errorSpy.mockRestore();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(STAFF.password);
+  });
+
+  it.each(["meera.das@example.com", "nadia.rahman@example.com", "rafi.ahmed@example.com"])(
+    "rejects the retired shared demo password for %s with the generic message",
+    async email => {
+      const result = await signIn({ error: "" }, formData({ email, password: "Staff23Demo!" }));
+      expect(result).toEqual({ error: INCORRECT });
+      expect(cookieStore.__store.size).toBe(0);
+      expect(await getSession()).toBeNull();
+      expect(getFor).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a legacy HMAC demo cookie, even a validly signed one", async () => {
+    const payload = Buffer.from(JSON.stringify({ role: "staff", employeeId: "BS-1003", expires: Date.now() + 60_000 })).toString("base64url");
+    cookieStore.set(LEGACY_COOKIE, `${payload}.${createHmac("sha256", "any-secret").update(payload).digest("base64url")}`);
+    expect(await getSession()).toBeNull();
+    const admin = Buffer.from(JSON.stringify({ role: "admin", expires: Date.now() + 60_000 })).toString("base64url");
+    cookieStore.set(LEGACY_COOKIE, `${admin}.${createHmac("sha256", "any-secret").update(admin).digest("base64url")}`);
+    expect(await getSession()).toBeNull();
+  });
+
+  it("deletes the legacy demo cookie when anyone signs in", async () => {
+    cookieStore.set(LEGACY_COOKIE, "old-token");
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    expect(cookieStore.get(LEGACY_COOKIE)).toBeUndefined();
+  });
+
+  it("replaces an Administrator session when staff sign in in the same browser", async () => {
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    expect(await getSession()).toEqual({ role: "admin" });
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
+    expect(await isSignedIn()).toBe(false);
   });
 });

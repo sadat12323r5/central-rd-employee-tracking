@@ -5,8 +5,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
-  // Creates a throwaway Administrator in Supabase Auth for the run (E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD)
-  // and deletes it afterwards, so e2e never needs a real Administrator's password.
+  // Creates a throwaway Administrator (E2E_ADMIN_*), two linked throwaway Staff accounts (E2E_STAFF_1_*,
+  // E2E_STAFF_2_*) and an unlinked throwaway employee (E2E_STAFF_UNLINKED_*) in Supabase for the run,
+  // and deletes them afterwards, so e2e never needs a real account's password.
   globalSetup: "./tests/e2e/global-setup.ts",
   globalTeardown: "./tests/e2e/global-teardown.ts",
   use: {
@@ -20,8 +21,5 @@ export default defineConfig({
     url: "http://127.0.0.1:3100",
     reuseExistingServer: false,
     timeout: 120_000,
-    env: {
-      DEMO_SESSION_SECRET: "isolated-browser-test-secret-do-not-use-in-production",
-    },
   },
 });

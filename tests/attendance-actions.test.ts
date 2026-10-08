@@ -1,36 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formData as form, resetAuth, STAFF, supabase } from "./support/fake-auth";
 
-const { cookieStore } = vi.hoisted(() => {
-  const store = new Map<string, string>();
-  return {
-    cookieStore: {
-      get: (name: string) => (store.has(name) ? { name, value: store.get(name)! } : undefined),
-      set: (name: string, value: string) => { store.set(name, value); },
-      delete: (name: string) => { store.delete(name); },
-      __store: store,
-    },
-  };
-});
-
-vi.mock("next/headers", () => ({ cookies: () => Promise.resolve(cookieStore) }));
-vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+vi.mock("next/headers", async () => (await import("./support/fake-auth")).headersModule());
+vi.mock("next/navigation", async () => (await import("./support/fake-auth")).navigationModule());
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-// Staff sign-in resolves employees through employees-store; back it with the fixture so these tests stay offline.
+vi.mock("../src/server/supabase", async () => (await import("./support/fake-auth")).supabaseModule());
+// Staff sign-in confirms the linked employee row through employees-store; back it with the fixture so these tests stay offline.
 vi.mock("../src/server/employees-store", async importOriginal => {
   const { employees } = await import("@/data/employees");
   return {
     ...(await importOriginal<typeof import("../src/server/employees-store")>()),
-    employeesStore: { findByEmail: async (email: string) => employees.find(e => e.email === email.trim().toLowerCase()) ?? null },
-  };
-});
-
-// No Supabase admin session in these tests, and no network: Supabase Auth rejects every credential.
-vi.mock("../src/server/supabase", async () => {
-  const { AuthApiError } = await import("@supabase/supabase-js");
-  const rejected = () => ({ data: { user: null, session: null }, error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials") });
-  return {
-    getUserClient: async () => ({ auth: { getUser: async () => rejected(), signInWithPassword: async () => rejected(), signOut: async () => ({ error: null }) } }),
-    getServiceClient: () => { throw new Error("not used"); },
+    employeesStore: { getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn() },
   };
 });
 
@@ -38,25 +18,25 @@ const { signIn, getSession, isSignedIn } = await import("../src/server/auth");
 const { clockInAction, clockOutAction, saveLogAction } = await import("../src/server/attendance-actions");
 const { attendanceStore } = await import("../src/server/attendance-store");
 
-const staffPassword = process.env.DEMO_STAFF_PASSWORD || "Staff23Demo!";
 const blank = { error: "", message: "" };
-function form(fields: Record<string, string | string[]>) {
-  const data = new FormData();
-  for (const [key, value] of Object.entries(fields)) for (const v of [value].flat()) data.append(key, v);
-  return data;
+const NADIA = { email: "nadia.rahman@example.com", password: "nadia-long-passphrase" };
+
+function resetAccounts() {
+  resetAuth();
+  supabase.users.set(NADIA.email, { id: "staff-2", password: NADIA.password, app_metadata: { role: "staff", employee_id: "BS-1001" } });
 }
 
 describe("staff sign-in", () => {
-  beforeEach(() => cookieStore.__store.clear());
+  beforeEach(resetAccounts);
 
-  it("signs a fixture employee in as staff, not as manager", async () => {
-    await signIn(blank, form({ email: "Meera.Das@example.com", password: staffPassword }));
+  it("signs a provisioned employee in as staff, not as manager", async () => {
+    await signIn(blank, form({ email: "Meera.Das@example.com", password: STAFF.password }));
     expect(await getSession()).toEqual({ role: "staff", employeeId: "BS-1003" });
     expect(await isSignedIn()).toBe(false);
   });
 
-  it("rejects a staff email with the retired manager password", async () => {
-    const result = await signIn(blank, form({ email: "meera.das@example.com", password: "Brain23Demo!" }));
+  it.each(["Brain23Demo!", "Staff23Demo!"])("rejects a staff email with the retired demo password %s", async password => {
+    const result = await signIn(blank, form({ email: "meera.das@example.com", password }));
     expect(result?.error).toMatch(/incorrect/i);
     expect(await getSession()).toBeNull();
   });
@@ -64,7 +44,7 @@ describe("staff sign-in", () => {
 
 describe("attendance actions", () => {
   beforeEach(async () => {
-    cookieStore.__store.clear();
+    resetAccounts();
     await attendanceStore.clear();
     vi.useRealTimers();
   });
@@ -76,7 +56,7 @@ describe("attendance actions", () => {
   });
 
   it("ignores any employee id in the form and records against the signed-in employee", async () => {
-    await signIn(blank, form({ email: "nadia.rahman@example.com", password: staffPassword }));
+    await signIn(blank, form(NADIA));
     await clockInAction(blank, form({ workMode: "Remote", employeeId: "BS-1008" }));
     const all = await attendanceStore.listAll();
     expect(all).toHaveLength(1);
@@ -86,7 +66,7 @@ describe("attendance actions", () => {
   it("runs a full day: clock in, log, clock out", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-28T09:00:00+06:00"));
-    await signIn(blank, form({ email: "nadia.rahman@example.com", password: staffPassword }));
+    await signIn(blank, form(NADIA));
     expect(await clockInAction(blank, form({ workMode: "Office" }))).toEqual({ error: "", message: "Clocked in." });
 
     vi.setSystemTime(new Date("2026-09-28T17:30:00+06:00"));
