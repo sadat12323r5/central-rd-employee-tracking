@@ -39,8 +39,8 @@ development_status:
   1-1-employee-records-persist-with-role-scoped-access: review
   1-2-administrator-signs-in-with-a-named-account: review
   1-3-administrator-provisions-a-staff-account: review
-  1-4-administrator-archives-and-restores-an-account: backlog # blocked: migration not applied (automation container cannot reach Postgres); code on story/1-4-archive-restore-account, draft PR
-  1-5-staff-attendance-survives-restarts: backlog
+  1-4-administrator-archives-and-restores-an-account: backlog # blocked: migration not applied (automation container cannot reach Postgres); code on story/1-4-archive-restore-account, draft PR #13
+  1-5-staff-attendance-survives-restarts: backlog # blocked: needs a migration; automation container cannot reach Postgres (see PR #13)
   epic-1-retrospective: optional
 
   epic-2: backlog
