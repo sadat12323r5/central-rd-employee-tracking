@@ -14,7 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm test && npm run build",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "db:push": "node scripts/db-push.mjs",
+    "db:seed": "node --experimental-strip-types scripts/seed-employees.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
@@ -37,6 +39,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "jest-axe": "^9.0.0",
     "jsdom": "^25.0.1",
+    "supabase": "2.119.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

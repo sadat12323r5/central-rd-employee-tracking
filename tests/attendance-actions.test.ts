@@ -15,6 +15,14 @@ const { cookieStore } = vi.hoisted(() => {
 vi.mock("next/headers", () => ({ cookies: () => Promise.resolve(cookieStore) }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+// Staff sign-in resolves employees through employees-store; back it with the fixture so these tests stay offline.
+vi.mock("../src/server/employees-store", async importOriginal => {
+  const { employees } = await import("@/data/employees");
+  return {
+    ...(await importOriginal<typeof import("../src/server/employees-store")>()),
+    employeesStore: { findByEmail: async (email: string) => employees.find(e => e.email === email.trim().toLowerCase()) ?? null },
+  };
+});
 
 const { signIn, getSession, isSignedIn } = await import("../src/server/auth");
 const { clockInAction, clockOutAction, saveLogAction } = await import("../src/server/attendance-actions");

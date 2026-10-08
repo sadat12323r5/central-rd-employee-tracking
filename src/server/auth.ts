@@ -3,7 +3,7 @@
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { employees } from "@/data/employees";
+import { employeesStore, EmployeesUnavailableError } from "./employees-store";
 import { createSession, readSession, sessionHours, verifySession, type SessionIdentity } from "./session";
 
 // This sign-in protects synthetic demonstration data only. Production identity uses Supabase.
@@ -33,10 +33,20 @@ export async function signIn(_previous: { error: string }, form: FormData) {
   let identity: SessionIdentity | null = null;
   if (email === expectedEmail.toLowerCase() && matches(expectedPassword)) {
     identity = { role: "admin" };
-  } else {
-    // Demo staff accounts: each fictional employee signs in with their fixture email.
-    const employee = employees.find(e => e.email.toLowerCase() === email);
-    if (employee && matches(staffPassword)) identity = { role: "staff", employeeId: employee.id };
+  } else if (matches(staffPassword)) {
+    // Demo staff accounts: each fictional employee signs in with their employee email.
+    // The password is checked first so a wrong password never costs a database round trip.
+    let employee;
+    try {
+      employee = await employeesStore.findByEmail(email);
+    } catch (error) {
+      if (error instanceof EmployeesUnavailableError) {
+        console.error("Staff sign-in failed: employee records unavailable.", error, { cause: error.cause });
+        return { error: "Sign-in is temporarily unavailable. Please try again shortly." };
+      }
+      throw error;
+    }
+    if (employee) identity = { role: "staff", employeeId: employee.id };
   }
   if (!identity) return { error: "The email or password is incorrect. Please try again." };
 

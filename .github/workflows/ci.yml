@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Every run uses the one shared Supabase project; queue runs so their RLS tests never overlap.
+concurrency:
+  group: shared-supabase-${{ github.workflow }}
+  cancel-in-progress: false
+
+# The Supabase secrets (see docs/DEPLOYMENT.md) are passed only to the steps that need them:
+# unit tests run the RLS integration test, and the e2e dev server reads employees.
 jobs:
   check:
     name: Typecheck, unit tests, build
@@ -17,6 +24,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
   e2e:
     name: End-to-end and accessibility
@@ -33,6 +44,10 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
