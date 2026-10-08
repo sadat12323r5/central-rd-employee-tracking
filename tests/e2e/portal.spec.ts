@@ -1,16 +1,15 @@
 import { test, expect } from "@playwright/test";
+import { e2eAdmin, signInAsAdmin } from "./admin";
 
 test("admin login, directory filters, profiles, export and logout", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
   await expect(page.getByText("Nadia Rahman", { exact: true })).toHaveCount(0);
-  await page.getByLabel("Email address").fill("manager@example.com");
+  await page.getByLabel("Email address").fill(e2eAdmin().email);
   await page.getByLabel("Password", { exact: true }).fill("wrong-password");
   await page.getByRole("button", { name: "Sign in to workspace" }).click();
   await expect(page.locator(".form-error")).toContainText("incorrect");
-  await page.getByLabel("Password", { exact: true }).fill("Brain23Demo!");
-  await page.getByRole("button", { name: "Sign in to workspace" }).click();
-  await expect(page.getByRole("heading", { name: "A clearer view of your people." })).toBeVisible();
+  await signInAsAdmin(page);
   await page.screenshot({ path: "test-results/dashboard-desktop.png", fullPage: true });
   await page.getByRole("navigation").getByRole("button", { name: "Employees" }).click();
   await page.getByRole("textbox", { name: "Search employees" }).fill("TypeScript");
@@ -50,10 +49,7 @@ test("mobile layout and sign out remain usable", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await page.screenshot({ path: "test-results/login-mobile.png", fullPage: true });
-  await page.getByLabel("Email address").fill("manager@example.com");
-  await page.getByLabel("Password", { exact: true }).fill("Brain23Demo!");
-  await page.getByRole("button", { name: "Sign in to workspace" }).click();
-  await expect(page.getByRole("heading", { name: "A clearer view of your people." })).toBeVisible();
+  await signInAsAdmin(page);
   await page.screenshot({ path: "test-results/mobile-layout-check.png", fullPage: true });
   expect(await page.evaluate(() => ({ width: window.innerWidth, document: document.documentElement.scrollWidth }))).toEqual({ width: 390, document: 390 });
   await page.screenshot({ path: "test-results/dashboard-mobile.png", fullPage: true });

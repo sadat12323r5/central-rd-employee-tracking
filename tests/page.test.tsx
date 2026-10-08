@@ -10,7 +10,9 @@ vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
   employeesStore: { listFor, getFor, findByEmail: vi.fn() },
 }));
-vi.mock("@/components/login", () => ({ default: () => <p>Sign-in form</p> }));
+vi.mock("@/components/login", () => ({
+  default: ({ showDemoCredentials }: { showDemoCredentials: boolean }) => <p>Sign-in form (demo credentials {showDemoCredentials ? "shown" : "hidden"})</p>,
+}));
 vi.mock("@/components/portal", () => ({ default: () => <p>Employee directory</p> }));
 vi.mock("@/components/staff-attendance", () => ({ default: () => <p>Staff portal</p> }));
 
@@ -39,6 +41,23 @@ describe("Home when employee records are unavailable", () => {
     render(await Home());
     expect(screen.getByRole("alert")).toHaveTextContent(/employee records are unavailable/i);
     expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sign-in form")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sign-in form/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Home when signed out", () => {
+  beforeEach(() => getSession.mockResolvedValue(null));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("shows the staff demo credentials when DEMO_STAFF_PASSWORD is unset", async () => {
+    vi.stubEnv("DEMO_STAFF_PASSWORD", "");
+    render(await Home());
+    expect(screen.getByText("Sign-in form (demo credentials shown)")).toBeInTheDocument();
+  });
+
+  it("hides the demo credentials when a private DEMO_STAFF_PASSWORD is set", async () => {
+    vi.stubEnv("DEMO_STAFF_PASSWORD", "a-private-staff-password");
+    render(await Home());
+    expect(screen.getByText("Sign-in form (demo credentials hidden)")).toBeInTheDocument();
   });
 });

@@ -11,21 +11,23 @@ The application is a single Next.js (App Router) deployable with no database and
 | Layer | Choice | Responsibility |
 |---|---|---|
 | Web | Next.js 15 App Router + React 19 + TypeScript | The one route (`src/app/page.tsx`), layout, and client components |
-| Session | Hand-rolled HMAC-signed cookie (`src/server/session.ts`, `src/server/auth.ts`) | Demo administrator sign-in/out; not Supabase, despite `@supabase/*` being installed |
+| Session | Supabase Auth for Administrators (`src/server/auth.ts`, `src/server/supabase.ts`, `src/middleware.ts`); HMAC-signed cookie for demo staff (`src/server/session.ts`) | Administrators sign in with named Supabase accounts (Story 1.2); demo staff keep the HMAC cookie until Story 1.3 |
+| Accounts | `src/server/accounts-store.ts` | The single account-creation path (`create()`), used only by the one-time `npm run db:seed-admin` until Story 1.3 |
 | Data | Compiled TypeScript fixture (`src/data/employees.ts`) | The entire dataset; regenerated from source on every build, not persisted or mutated at runtime |
 | Domain | Framework-independent TypeScript (`src/domain/leave.ts`) | Pure leave-calculation logic; implemented and tested but not yet called from any route or component |
 | Verification | Vitest (domain + server-action unit tests) and Playwright (browser scenarios) | See `tests/` |
 | Hosting | Vercel | Static/serverless deployment of the demo (`vercel.json`) |
 
-`@supabase/ssr` and `@supabase/supabase-js` are dependencies but are not imported anywhere in `src/`. They were added ahead of the production identity/persistence work described in [SRS.md](SRS.md) Section 11 and are currently dead weight in `package.json`.
+Employee basic details live in the Supabase `employees` table behind `src/server/employees-store.ts` (Story 1.1). Administrator reads use a per-request client carrying the user's Supabase JWT, so the RLS policies are enforced; staff reads and the pre-session staff sign-in lookup still use the server-only service-role client until Story 1.3.
 
 ## Trust boundaries (as implemented)
 
-1. Every request to `src/app/page.tsx` calls `isSignedIn()`; a missing, malformed, tampered, or expired session cookie renders the sign-in page instead of the workspace.
-2. The session secret (`DEMO_SESSION_SECRET`) is read from the environment and never sent to the browser; without it, a random secret is generated per process start, so every restart invalidates existing sessions.
-3. Password comparison in `signIn` hashes both sides and uses `timingSafeEqual` to avoid a timing side channel.
-4. There is exactly one identity and no per-record authorization: once signed in, that identity can read every fixture employee. This is acceptable only because the data is fictional (see [SRS.md](SRS.md) NFR-SEC-004) — it is not a model to extend with real data.
-5. There is no write path anywhere in the application. Nothing a user does in the browser is persisted past the in-memory React state for that page load.
+1. Every request to `src/app/page.tsx` calls `getSession()`. It returns `admin` only for a Supabase user validated server-side with `auth.getUser()` whose `app_metadata.role` is `admin` and who signed in under 8 hours ago; otherwise it falls back to the HMAC staff cookie. Anything else renders the sign-in page.
+2. `src/middleware.ts` refreshes the Supabase auth cookies on each request, since Server Components cannot write cookies.
+3. Administrator accounts are created only through `accounts-store.create()` (one-time seed script now; an Administrator-only action in Story 1.3). There is no sign-up route, form or `auth.signUp` call, and sign-ups are disabled in Supabase Auth.
+4. A wrong password, an unknown email and a valid Supabase user without the `admin` role all get the same generic message. The old HMAC `admin` tokens and the retired `DEMO_ADMIN_*` credentials are rejected.
+5. The staff HMAC secret (`DEMO_SESSION_SECRET`) is read from the environment and never sent to the browser; the staff password comparison hashes both sides and uses `timingSafeEqual`.
+6. There is no write path anywhere in the application. Nothing a user does in the browser is persisted past the in-memory React state for that page load.
 
 ## Current data model
 
@@ -37,7 +39,8 @@ One TypeScript type, `Employee` (`src/data/employees.ts`), holds everything: ide
 
 ```text
 src/domain       Pure rules; no database or framework imports (leave.ts only, currently unused by the UI)
-src/server       Session signing/verification and the demo sign-in/out server actions
+src/server       Sign-in/out server actions, Supabase clients, stores (employees, accounts, attendance), staff HMAC sessions
+src/middleware.ts  Supabase auth cookie refresh
 src/data         The entire dataset, as compiled TypeScript literals
 src/components   Client components: login form, and the portal (directory + profile + org-wide views)
 src/app          The single route, root layout, and global styles
@@ -50,12 +53,15 @@ There is no `supabase/` directory, no migrations, and no RLS policies in this re
 
 ```text
 tests/leave.test.ts             Domain: leave calculation, categories, overlap
-tests/session.test.ts           Domain: session token signing/verification
-tests/auth.test.ts              Server actions: signIn/signOut/isSignedIn (src/server/auth.ts)
+tests/session.test.ts           Staff HMAC token signing/verification; legacy admin tokens rejected
+tests/auth.test.ts              Server actions: Supabase Administrator and demo staff signIn/signOut/getSession (mocked Supabase)
+tests/accounts-store.test.ts    accounts-store.create()/hasAdministrator() (fake client, plus a live block when Supabase env is set)
+tests/no-registration.test.ts   No sign-up/registration route or call; only accounts-store creates auth users
 tests/csv.test.ts               Domain: CSV row building/escaping extracted from the directory export
 tests/components/login.test.tsx    Component: sign-in form validation/submission, axe scan
 tests/components/portal.test.tsx   Component: directory search/filter/reset/export, profile tab rendering, axe scans
-tests/e2e/portal.spec.ts        Browser: full login → directory → profile → export → sign-out flow, desktop and mobile
+tests/e2e/admin-auth.spec.ts    Browser: retired demo credentials rejected; /signup and /register return 404
+tests/e2e/portal.spec.ts        Browser (throwaway Supabase Administrator from tests/e2e/global-setup.ts): full login → directory → profile → export → sign-out flow, desktop and mobile
 tests/e2e/accessibility.spec.ts Browser: axe scan (WCAG 2.2 AA, colour-contrast excluded — see SRS.md 11.7) of the sign-in page, dashboard, and an open profile
 ```
 

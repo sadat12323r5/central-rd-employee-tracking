@@ -16,7 +16,8 @@
     "check": "npm run typecheck && npm test && npm run build",
     "test:e2e": "playwright test",
     "db:push": "node scripts/db-push.mjs",
-    "db:seed": "node --experimental-strip-types scripts/seed-employees.ts"
+    "db:seed": "node --experimental-strip-types scripts/seed-employees.ts",
+    "db:seed-admin": "node --experimental-strip-types scripts/seed-admin.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

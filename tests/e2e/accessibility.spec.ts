@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { e2eAdmin, signInAsAdmin } from "./admin";
 
 function fullScan(page: Page) {
   return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).analyze();
@@ -19,7 +20,7 @@ test("sign-in page has no automatically detectable accessibility violations", as
 
 test("sign-in error message meets contrast", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Email address").fill("manager@example.com");
+  await page.getByLabel("Email address").fill(e2eAdmin().email);
   await page.getByLabel("Password", { exact: true }).fill("wrong-password");
   await page.getByRole("button", { name: "Sign in to workspace" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "incorrect" })).toBeVisible();
@@ -29,10 +30,7 @@ test("sign-in error message meets contrast", async ({ page }) => {
 
 test("dashboard and an employee profile have no automatically detectable accessibility violations", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Email address").fill("manager@example.com");
-  await page.getByLabel("Password", { exact: true }).fill("Brain23Demo!");
-  await page.getByRole("button", { name: "Sign in to workspace" }).click();
-  await expect(page.getByRole("heading", { name: "A clearer view of your people." })).toBeVisible();
+  await signInAsAdmin(page);
 
   const dashboardResults = await scanWithoutContrast(page);
   expect(dashboardResults.violations, JSON.stringify(dashboardResults.violations, null, 2)).toEqual([]);

@@ -15,3 +15,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-employee-records-persist.md`
   summary: Story 1.2 must link Supabase auth users to employee rows (`auth_user_id`) before switching the store to the per-request JWT client.
   evidence: Every seeded row has `auth_user_id` NULL, so `employees_select_own` matches no one yet.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
+  summary: Turn off sign-ups in the hosted Supabase project (Authentication → Providers → Email / "Allow new users to sign up"), then add a live test asserting `anon.auth.signUp` fails.
+  evidence: `supabase/config.toml` only covers a local stack. Until the setting is off, anyone with the public anon key can create an Auth user. That user gets no admin session and no RLS rows, but it breaks AD-6. This is a human dashboard step.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
+  summary: In e2e global setup, sweep stale `e2e-admin-*@example.test` / `accounts-test-*@example.test` users left behind by interrupted runs.
+  evidence: Leftover admin-role test users make `db:seed-admin` refuse to run, and they pile up in the shared project.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
+  summary: Test the seed script's "Administrator already exists" exit at the process level.
+  evidence: Only `seedFirstAdministrator` is unit-tested. A spawned test would need a stubbed Auth endpoint.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
+  summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
+  evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.

@@ -37,7 +37,7 @@ story_location: _bmad-output/implementation-artifacts
 development_status:
   epic-1: in-progress
   1-1-employee-records-persist-with-role-scoped-access: review
-  1-2-administrator-signs-in-with-a-named-account: backlog
+  1-2-administrator-signs-in-with-a-named-account: review
   1-3-administrator-provisions-a-staff-account: backlog
   1-4-administrator-archives-and-restores-an-account: backlog
   1-5-staff-attendance-survives-restarts: backlog

@@ -1,20 +1,30 @@
-﻿import { describe, expect, it } from "vitest";
-import { createSession, verifySession } from "../src/server/session";
+import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { createSession, readSession } from "../src/server/session";
 
-describe("demo admin session", () => {
-  const secret = "test-secret";
-  const now = 1_000_000;
-  it("accepts a signed unexpired session", () => {
-    expect(verifySession(createSession(secret, now), secret, now + 1)).toBe(true);
+const secret = "test-secret";
+const now = 1_000_000;
+const staff = { role: "staff", employeeId: "BS-1003" } as const;
+
+/** Signs an arbitrary payload the way pre-Story-1.2 code did, to forge legacy tokens. */
+function legacyToken(payload: object) {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${body}.${createHmac("sha256", secret).update(body).digest("base64url")}`;
+}
+
+describe("HMAC demo session", () => {
+  it("accepts a signed unexpired staff session", () => {
+    expect(readSession(createSession(secret, now, staff), secret, now + 1)).toEqual(staff);
   });
   it("rejects missing, malformed and tampered sessions", () => {
-    expect(verifySession(undefined, secret, now)).toBe(false);
-    expect(verifySession("not-a-session", secret, now)).toBe(false);
-    const token = createSession(secret, now);
-    expect(verifySession(`x${token}`, secret, now)).toBe(false);
-    expect(verifySession(token, "different-secret", now)).toBe(false);
+    expect(readSession(undefined, secret, now)).toBeNull();
+    expect(readSession("not-a-session", secret, now)).toBeNull();
+    const token = createSession(secret, now, staff);
+    expect(readSession(`x${token}`, secret, now)).toBeNull();
+    expect(readSession(token, "different-secret", now)).toBeNull();
   });
-  it("rejects an expired session", () => {
-    expect(verifySession(createSession(secret, now), secret, now + 8 * 60 * 60 * 1000)).toBe(false);
+  it("treats an old, validly signed admin token as signed out", () => {
+    const token = legacyToken({ role: "admin", expires: now + 60_000 });
+    expect(readSession(token, secret, now)).toBeNull();
   });
 });
