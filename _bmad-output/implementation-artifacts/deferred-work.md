@@ -27,3 +27,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
   summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
   evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2-admin-workspace-contrast.md`
+  summary: The directory search box's only focus indicator (`--accent-focus-soft` #8891df) is 2.93:1 on white, below the 3:1 non-text minimum.
+  evidence: The colour was carried over unchanged in Story 6.2 because the spec keeps focus rings as they are. It belongs with the existing non-text contrast item (input borders).
+- source_spec: `_bmad-output/implementation-artifacts/sprint-status.yaml`
+  summary: Stories 2.1–2.2, 3.1–3.2, 4.1–4.10, 5.1–5.4 and 7.1–7.4 are recorded as blocked (2026-10-08 unattended run) until migrations can be applied from the build environment.
+  evidence: Each needs a new table and RLS policy (or depends on a story that does), and the automation container still cannot reach Supabase Postgres (TCP 5432 and 6543 time out; only HTTPS egress). 3.2 additionally has only a stub LMS; 5.1 also needs the approved holiday calendar (open action item). Fix: allow Postgres egress in the routine's environment network policy, or have a human run `npm run db:push` before each run. Clear the `# blocked` comments once that is done.

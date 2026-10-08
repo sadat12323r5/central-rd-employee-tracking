@@ -49,6 +49,61 @@ const pairings: [fg: string, bg: string, minimum: number, where: string][] = [
   ["--on-accent", "--accent-hover", TEXT, "primary button on hover"],
   ["--focus-ring", "--surface", LARGE_OR_NON_TEXT, "focus ring on white"],
   ["--focus-ring", "--surface-tint", LARGE_OR_NON_TEXT, "focus ring on the sign-in panel"],
+
+  // Administrator workspace (Story 6.2): hover and selected states, every badge and avatar
+  // colour (including ones the demo data may not render), and text on tinted surfaces.
+  ["--text-nav", "--surface", TEXT, "sidebar navigation item"],
+  ["--text-nav", "--surface-hover", TEXT, "sidebar navigation item on hover"],
+  ["--text-nav", "--accent-chip", TEXT, "employee count chip in an unselected navigation item"],
+  ["--accent-active", "--accent-selected", TEXT, "selected navigation item"],
+  ["--accent-active", "--accent-chip", TEXT, "employee count chip in the selected navigation item"],
+  ["--text-label", "--surface", TEXT, "sidebar section label"],
+  ["--accent-strong", "--accent-tint", TEXT, "workspace icon initials"],
+  ["--muted", "--surface-subtle", TEXT, "demo card copy"],
+  ["--text-pill", "--background", TEXT, "SYNTHETIC DATA pill on the translucent top bar (worst case)"],
+  ["--ink-soft", "--background", TEXT, "breadcrumb current page"],
+  ["--text-period", "--background", TEXT, "dashboard period label"],
+  ["--text-stat", "--surface", TEXT, "stat card label"],
+  ["--accent-panel-text", "--accent-panel", TEXT, "focus panel copy"],
+  ["--accent-panel-foot", "--accent-panel", TEXT, "focus panel footer"],
+  ["--ink", "--accent-wash", TEXT, "secondary button on hover"],
+  ["--accent", "--surface", TEXT, "text buttons and radar row titles on hover"],
+  ["--accent", "--background", TEXT, "back button and selected profile tab on the page background"],
+  ["--accent", "--accent-selected", LARGE_OR_NON_TEXT, "profile arrow button glyph on hover"],
+  ["--success-text", "--success-bg", TEXT, "green badge and avatar"],
+  ["--warning-text", "--warning-bg", TEXT, "amber badge and avatar"],
+  ["--critical-text", "--critical-bg", TEXT, "rose badge and avatar"],
+  ["--lavender-text", "--lavender-bg", TEXT, "lavender avatar"],
+  ["--mint-text", "--mint-bg", TEXT, "mint avatar"],
+  ["--peach-text", "--peach-bg", TEXT, "peach avatar"],
+  ["--yellow-text", "--yellow-bg", TEXT, "yellow avatar"],
+  ["--text-count", "--surface-count", TEXT, "directory count"],
+  ["--text-placeholder", "--surface", TEXT, "directory search placeholder"],
+  ["--text-select", "--surface", TEXT, "directory filter select"],
+  ["--text-table-header", "--surface-header", TEXT, "table header"],
+  ["--ink", "--surface-row-hover", TEXT, "table row on hover"],
+  ["--muted", "--surface-row-hover", TEXT, "secondary table text on row hover"],
+  ["--text-tag", "--surface-chip", TEXT, "skill tag"],
+  ["--text-table-footer", "--surface", TEXT, "table footer"],
+  ["--text-footer", "--background", TEXT, "page footer"],
+  ["--text-secondary", "--background", TEXT, "profile subtitle and unselected tabs"],
+  ["--text-meta", "--background", TEXT, "profile location and join date"],
+  ["--text-body", "--surface", TEXT, "profile body copy"],
+  ["--callout-text", "--callout-bg", TEXT, "callout"],
+  ["--text-fine-print", "--surface", TEXT, "fine print"],
+  ["--text-empty-heading", "--surface", TEXT, "empty state heading"],
+  ["--success-ink", "--success-surface", TEXT, "success notice"],
+  ["--rating-fill", "--rating-track", LARGE_OR_NON_TEXT, "filled against empty skill-rating segment"],
+
+  // Staff portal (Story 6.3): the status message renders on white panels and could sit on the
+  // page background, so it is checked on both.
+  ["--success-status", "--surface", TEXT, "staff status message on white"],
+  ["--success-status", "--background", TEXT, "staff status message on the page background"],
+  // The selected work-mode label (a mode is checked by default), pinned here as well as scanned.
+  ["--accent-selected-text", "--accent-selected", TEXT, "selected work-mode label"],
+  // --text-fine-print is shared with the Administrator workspace (white panels); it was darkened
+  // because the Staff portal renders its fine print directly on the page background.
+  ["--text-fine-print", "--background", TEXT, "staff portal fine print on the page background"],
 ];
 
 describe("palette contrast (WCAG 2.2 AA)", () => {

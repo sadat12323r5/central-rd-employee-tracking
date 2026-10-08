@@ -6,11 +6,6 @@ function fullScan(page: Page) {
   return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).analyze();
 }
 
-// Remove once Story 6.2 fixes the Administrator workspace palette.
-function scanWithoutContrast(page: Page) {
-  return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).disableRules(["color-contrast"]).analyze();
-}
-
 test("sign-in page has no automatically detectable accessibility violations", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
@@ -28,16 +23,33 @@ test("sign-in error message meets contrast", async ({ page }) => {
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
 });
 
-test("dashboard and an employee profile have no automatically detectable accessibility violations", async ({ page }) => {
+async function expectNoViolations(page: Page, label: string) {
+  const results = await fullScan(page);
+  expect(results.violations, `${label}: ${JSON.stringify(results.violations, null, 2)}`).toEqual([]);
+}
+
+const profileTabs = ["Overview", "Employment", "Training", "Skills & evaluation", "Current work", "Interviews", "Attendance"];
+
+test("dashboard, directory and every employee profile tab have no automatically detectable accessibility violations", async ({ page }) => {
   await page.goto("/");
   await signInAsAdmin(page);
+  await expectNoViolations(page, "dashboard");
 
-  const dashboardResults = await scanWithoutContrast(page);
-  expect(dashboardResults.violations, JSON.stringify(dashboardResults.violations, null, 2)).toEqual([]);
+  await page.getByRole("navigation").getByRole("button", { name: "Employees" }).click();
+  await expect(page.getByRole("heading", { name: "Employees", exact: true })).toBeVisible();
+  await expectNoViolations(page, "directory");
 
+  await page.getByRole("textbox", { name: "Search employees" }).fill("No matching employee");
+  await expect(page.getByText("Nothing here yet")).toBeVisible();
+  await expectNoViolations(page, "directory empty state");
+
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
   await page.getByRole("button", { name: "View Nadia Rahman's profile" }).click();
   await expect(page.getByRole("heading", { name: "Nadia Rahman", exact: true })).toBeVisible();
-
-  const profileResults = await scanWithoutContrast(page);
-  expect(profileResults.violations, JSON.stringify(profileResults.violations, null, 2)).toEqual([]);
+  for (const name of profileTabs) {
+    const tab = page.getByRole("tab", { name, exact: true });
+    await tab.click();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expectNoViolations(page, `profile tab "${name}"`);
+  }
 });
