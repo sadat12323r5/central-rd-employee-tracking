@@ -75,7 +75,7 @@ development_status:
 
   epic-6: in-progress
   6-1-sign-in-page-meets-contrast-and-the-shared-palette-exists: done
-  6-2-administrator-workspace-meets-contrast: in-progress
+  6-2-administrator-workspace-meets-contrast: review
   6-3-staff-portal-meets-contrast: backlog
   epic-6-retrospective: optional
 

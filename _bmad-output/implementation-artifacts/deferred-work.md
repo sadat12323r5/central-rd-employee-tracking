@@ -27,3 +27,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
   summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
   evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2-admin-workspace-contrast.md`
+  summary: The directory search box's only focus indicator (`--accent-focus-soft` #8891df) is 2.93:1 on white, below the 3:1 non-text minimum.
+  evidence: The colour was carried over unchanged in Story 6.2 because the spec keeps focus rings as they are. It belongs with the existing non-text contrast item (input borders).
