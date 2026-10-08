@@ -2,7 +2,8 @@
 title: 'Story 1.4 — Administrator archives and restores an account'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'blocked'
+baseline_revision: '9e7b8162b33ad0289f514e94b63554fb08b333f6'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -121,3 +122,16 @@ deferred: []
 - `npm run db:push` -- expected: the additive migration applies to the shared project.
 - `npm run check` -- expected: typecheck, all unit tests (live Supabase blocks included when env is present) and the build pass.
 - `npm run test:e2e` -- expected: all specs pass, including `archive-account.spec.ts`.
+
+## Auto Run Result
+
+Status: blocked
+Blocking condition: implementation verification failed. The additive migration `supabase/migrations/20261008000000_archive_and_audit.sql` could not be applied: `npm run db:push` timed out three times, because the automation container cannot open a TCP connection to the Supabase Postgres pooler on port 5432 (outbound access is HTTPS-only). Without the migration, `npm run check` fails 4 live tests (313 pass, 4 fail: the archive/restore and audit tests in `tests/accounts-store.test.ts` and the RLS tests for `set_employee_archived` / `archived_at` in `tests/employees-rls.test.ts`), and `npm run test:e2e` cannot pass, because the shared project returns `column employees.archived_at does not exist`. The step-04 review did not run.
+
+**Implemented (not yet verified against the live project):** the migration (`employees.archived_at`, the append-only `audit_events` table with revokes and triggers, and the service-role-only `set_employee_archived` function); `accounts-store.archive()` / `restore()` with the typed errors `AccountStateError` and `ArchiveSelfError`; `employeesStore.isActive()` and `archived` on Administrator reads; `getActor()`, plus the per-request and sign-in archive checks in `auth.ts`; the Administrator-only `archiveEmployeeAction` / `restoreEmployeeAction`; the "Account access" panel; the "Show employees" directory filter, with counts that exclude archived employees; unit, live and e2e tests (`tests/e2e/archive-account.spec.ts`); and the docs and memlog amendment. The implementer checked the migration against a throwaway local Postgres 16: the function's four errors, one audit row per change, rollback when the audit insert fails, and audit update/delete/truncate refused for the service role and the table owner.
+
+**Deviation:** the `already_archived` / `not_archived` errors carry the employee's name from the database, so the "<name> is already archived." message does not depend on form input.
+
+**To unblock:** apply the migration (`npm run db:push` from a machine that can reach the database, or run the SQL in the Supabase SQL editor). Then run `npm run check` and `npm run test:e2e`, and run the step-04 review (re-dispatch this spec after setting its status to `in-review`).
+
+**Deploy-order risk:** this code reads `employees.archived_at` on every Administrator directory load and every Staff request. Deployed before the migration, the directory shows "unavailable" and Staff sessions end. Apply the migration first.

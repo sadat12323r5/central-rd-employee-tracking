@@ -10,7 +10,7 @@ vi.mock("../src/server/employees-store", async importOriginal => {
   const { employees } = await import("@/data/employees");
   return {
     ...(await importOriginal<typeof import("../src/server/employees-store")>()),
-    employeesStore: { getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn() },
+    employeesStore: { getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn(), isActive: async (session: { employeeId: string }) => employees.some(e => e.id === session.employeeId) },
   };
 });
 

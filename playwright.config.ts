@@ -6,7 +6,8 @@ export default defineConfig({
   workers: 1,
   timeout: 60_000,
   // Creates a throwaway Administrator (E2E_ADMIN_*), two linked throwaway Staff accounts (E2E_STAFF_1_*,
-  // E2E_STAFF_2_*) and an unlinked throwaway employee (E2E_STAFF_UNLINKED_*) in Supabase for the run,
+  // E2E_STAFF_2_*), an unlinked throwaway employee
+  // (E2E_STAFF_UNLINKED_*) and a linked Staff account for the archive spec (E2E_STAFF_ARCHIVE_*) in Supabase for the run,
   // and deletes them afterwards, so e2e never needs a real account's password.
   globalSetup: "./tests/e2e/global-setup.ts",
   globalTeardown: "./tests/e2e/global-teardown.ts",

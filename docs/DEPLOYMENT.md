@@ -51,7 +51,7 @@ There is no invite or magic-link email (the shared project has no SMTP): the Adm
 
 **Demo Staff account.** Put `SEED_DEMO_STAFF_EMAIL` (a seeded employee's email, e.g. one from `npm run db:seed`) and `SEED_DEMO_STAFF_PASSWORD` (at least 12 characters) in `.env.local` and run `npm run db:seed-demo-staff`. It creates and links the account through `accounts-store.create()` and prints only the email. If that employee already has an account it exits 0 and creates nothing; missing or short variables exit non-zero naming the variable.
 
-e2e global setup inserts throwaway employees (`BS-98nn`, team/title `E2E Throwaway`, emails `e2e-staff-<run>-<n>@example.test`), links two of them to throwaway Staff users through the service role, and leaves one unlinked for the provisioning spec. Teardown deletes them; setup first sweeps leftovers of an aborted run.
+e2e global setup inserts throwaway employees (`BS-98nn`, team/title `E2E Throwaway`, emails `e2e-staff-<run>-<n>@example.test`), links three of them to throwaway Staff users through the service role (one is archived and restored by the archive spec), and leaves one unlinked for the provisioning spec. Teardown deletes them; setup first sweeps leftovers of an aborted run.
 
 ## Database migrations and seed
 
@@ -65,6 +65,7 @@ npm run db:seed-demo-staff   # optional: creates the demo Staff account (see abo
 ```
 
 - `db:push` reads `SUPABASE_DB_URL` from the environment or `.env.local` and never prints it.
+- `20261008000000_archive_and_audit.sql` (Story 1.4) is additive: it adds `employees.archived_at`, the append-only `audit_events` table and the `set_employee_archived` function. The Story 1.4 code reads `archived_at` on every Administrator directory load and every Staff request, so apply this migration before deploying that code; otherwise the directory reports "Employee records are unavailable" and Staff sessions end. `audit_events` rows cannot be updated or deleted by any API role, the service role included; live tests and e2e leave audit rows for their throwaway `BS-98nn`/`BS-99nn` ids behind by design.
 - `db:seed` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the same way and upserts by Employee ID, so it is safe to rerun. Migrations never seed data. Nested profile data (skills, history, training, interviews, attendance summary, review) still comes from `src/data/employees.ts` through `employees-store`.
 - The `db:seed` script runs TypeScript directly and needs Node 24 (or Node 22 with `--experimental-strip-types`, which the script passes).
 
@@ -79,6 +80,6 @@ If the database is unreachable, the app shows an "Employee records are unavailab
 5. Confirm unauthenticated visits show sign-in, an incorrect password, the retired `manager@example.com` credentials and the old shared staff password are rejected, the Administrator's named account opens the employee directory, and a provisioned Staff account opens only its own portal.
 6. Refresh after sign-in to check session persistence, open an employee profile, verify filtering and sign out.
 
-This is a demonstration with fictional records. Administrators and Staff have named accounts; archiving (Story 1.4), persisted attendance (Story 1.5) and external integrations remain separate implementation work.
+This is a demonstration with fictional records. Administrators and Staff have named accounts, and an Administrator can archive and restore an employee's access from their profile (Story 1.4); persisted attendance (Story 1.5) and external integrations remain separate implementation work.
 
 References: [Vercel CLI](https://vercel.com/docs/cli), [environment variables](https://vercel.com/docs/environment-variables) and [Supabase CLI](https://supabase.com/docs/reference/cli).

@@ -13,8 +13,9 @@ const configured = Boolean(url && anonKey && serviceKey);
 const noSession = { auth: { persistSession: false, autoRefreshToken: false } };
 const run = randomBytes(4).toString("hex");
 const password = `Rls-${randomBytes(12).toString("hex")}!`;
-// One per-run slot of three consecutive ids (BS-9900..BS-9998), so concurrent runs rarely collide.
-const base = randomInt(0, 33) * 3;
+// One per-run slot of three consecutive ids (BS-9900..BS-9995), so concurrent runs rarely collide.
+// BS-9998 and BS-9999 belong to tests/accounts-store.test.ts.
+const base = randomInt(0, 32) * 3;
 const idAt = (offset: number) => `BS-99${String(base + offset).padStart(2, "0")}`;
 const ownId = idAt(0);
 const otherId = idAt(1);
@@ -110,5 +111,34 @@ describe.skipIf(!configured)("employees RLS (shared Supabase project)", () => {
     const { error } = await service.from("employees").insert(row(spareId, `rls-own-${run}@example.com`));
     expect(error?.code).toBe("23505");
     expect(error?.message).toMatch(/email/);
+  });
+
+  it("does not let a staff JWT, an admin JWT or the anon client archive or restore through set_employee_archived", async () => {
+    const clients = [await signedIn(staffEmail), await signedIn(adminEmail), createClient(url!, anonKey!, noSession)];
+    for (const client of clients) {
+      for (const [employee, archived] of [[ownId, true], [otherId, true], [ownId, false]] as const) {
+        const { error } = await client.rpc("set_employee_archived", { p_employee_id: employee, p_archived: archived, p_actor: userIds[1] });
+        expect(error).not.toBeNull();
+      }
+    }
+    const { data } = await service.from("employees").select("employee_id,archived_at").in("employee_id", [ownId, otherId]).order("employee_id");
+    expect(data).toEqual([{ employee_id: ownId, archived_at: null }, { employee_id: otherId, archived_at: null }]);
+  });
+
+  it("does not let a signed-in user change archived_at directly", async () => {
+    for (const client of [await signedIn(staffEmail), await signedIn(adminEmail)]) {
+      await client.from("employees").update({ archived_at: new Date().toISOString() }).eq("employee_id", ownId);
+    }
+    const { data } = await service.from("employees").select("archived_at").eq("employee_id", ownId).single();
+    expect(data?.archived_at).toBeNull();
+  });
+
+  it("does not let a signed-in user read or write audit_events", async () => {
+    for (const client of [await signedIn(staffEmail), await signedIn(adminEmail), createClient(url!, anonKey!, noSession)]) {
+      const { data } = await client.from("audit_events").select("id").limit(1);
+      expect(data ?? []).toEqual([]);
+      const { error } = await client.from("audit_events").insert({ actor: userIds[0], target: ownId, action: "archive" });
+      expect(error).not.toBeNull();
+    }
   });
 });

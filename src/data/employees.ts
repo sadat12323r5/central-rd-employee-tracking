@@ -4,6 +4,8 @@
   initials: string; color: string; summary: string;
   /** Administrator reads only: true when the employee has a linked sign-in account (`auth_user_id`). */
   hasAccount?: boolean;
+  /** Administrator reads only: true when the employee is archived (`archived_at` set, Story 1.4). */
+  archived?: boolean;
   skills: { name: string; level: number; evidence: string }[];
   history: { role: string; company: string; period: string; detail: string }[];
   training: { name: string; provider: string; progress: number; date: string; result: string }[];

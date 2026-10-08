@@ -27,3 +27,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
   summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
   evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-admin-archives-restores-account.md`
+  summary: "Story 1.4 is blocked: apply the additive migration `20261008000000_archive_and_audit.sql`, then verify (`npm run check`, `npm run test:e2e`) and run the review pass."
+  evidence: The unattended build container cannot reach Supabase Postgres (TCP 5432 times out; only HTTPS egress is allowed), so `npm run db:push` fails. 4 live tests fail and e2e cannot run until the migration is on the shared project. The same limit blocks every story that needs a migration (1.5, Epics 2–5 and 7) until migrations can be applied from the routine's environment or by a human before each run.
