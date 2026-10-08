@@ -18,6 +18,16 @@ export function e2eUnlinkedEmployee() {
   return { id, name, email };
 }
 
+/** The linked throwaway Staff account the archive spec archives and restores. */
+export function e2eArchiveStaff() {
+  const id = process.env.E2E_STAFF_ARCHIVE_ID;
+  const name = process.env.E2E_STAFF_ARCHIVE_NAME;
+  const email = process.env.E2E_STAFF_ARCHIVE_EMAIL;
+  const password = process.env.E2E_STAFF_ARCHIVE_PASSWORD;
+  if (!id || !name || !email || !password) throw new Error("E2E_STAFF_ARCHIVE_* are not set; global-setup.ts did not run.");
+  return { id, name, email, password };
+}
+
 export async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel("Email address").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);

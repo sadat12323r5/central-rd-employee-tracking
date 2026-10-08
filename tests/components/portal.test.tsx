@@ -9,6 +9,8 @@ vi.mock("@/server/auth", () => ({
 }));
 vi.mock("@/server/account-actions", () => ({
   provisionStaffAccountAction: vi.fn(async () => ({ error: "", message: "" })),
+  archiveEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
+  restoreEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 
 import Portal from "@/components/portal";
@@ -155,5 +157,56 @@ describe("Portal employee profile", () => {
     expect(screen.getByRole("heading", { name: "Bare Employee" })).toBeInTheDocument();
     expect(screen.getByText(/Reviewed Not recorded/)).toBeInTheDocument();
     expect(screen.getByLabelText("Initial password")).toBeInTheDocument();
+  });
+});
+
+describe("Portal archived employees (Story 1.4)", () => {
+  // Meera Das (In training) and Tanvir Alam (In training) are archived.
+  const withArchived = employees.map(e => ({ ...e, hasAccount: false, archived: e.id === "BS-1003" || e.id === "BS-1006" }));
+  const active = withArchived.filter(e => !e.archived);
+
+  it("hides archived employees from the default directory, the counts and the Overview stats", () => {
+    render(<Portal employees={withArchived} />);
+    expect(screen.getAllByRole("row")).toHaveLength(active.length + 1);
+    expect(screen.queryByText("Meera Das")).not.toBeInTheDocument();
+    expect(screen.getByText(`Showing ${active.length} of ${active.length} employees`, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: `Employee directory ${active.length}` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Employees ${active.length}` })).toBeInTheDocument();
+    const total = screen.getByText("Total employees").closest("article")!;
+    expect(total).toHaveTextContent(String(active.length).padStart(2, "0"));
+  });
+
+  it("lists only archived employees under \"Archived employees\", and Reset returns to active ones", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={withArchived} />);
+    await user.selectOptions(screen.getByLabelText("Show employees"), "Archived employees");
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    expect(screen.getByText("Meera Das")).toBeInTheDocument();
+    expect(screen.getByText("Tanvir Alam")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 of 2 archived employees", { exact: false })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Filter by status"), "In training");
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.getByLabelText("Show employees")).toHaveValue("Active employees");
+    expect(screen.getAllByRole("row")).toHaveLength(active.length + 1);
+  });
+
+  it("labels an archived employee's profile \"Archived\" in text and offers Restore", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={withArchived} />);
+    await user.selectOptions(screen.getByLabelText("Show employees"), "Archived employees");
+    await user.click(screen.getByRole("button", { name: "View Meera Das's profile" }));
+    expect(screen.getByRole("heading", { name: "Meera Das" })).toBeInTheDocument();
+    expect(screen.getAllByText("Archived").length).toBeGreaterThanOrEqual(2); // header and Account access panel
+    expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore employee" })).toBeInTheDocument();
+  });
+
+  it("offers Archive on an active employee's profile, with no Archived label", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={withArchived} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    expect(screen.getByRole("button", { name: "Archive employee" })).toBeInTheDocument();
+    expect(screen.queryByText("Archived")).not.toBeInTheDocument();
   });
 });

@@ -39,7 +39,7 @@ describe("no self-registration", () => {
     expect(callers.map(f => relative(root, f))).toEqual(["src/server/accounts-store.ts"]);
   });
 
-  it("uses the service-role client at runtime only for Administrator provisioning", () => {
+  it("uses the service-role client at runtime only for the Administrator-only account actions", () => {
     const runtime = sourceFiles.filter(file => file.includes(`${join(root, "src")}`) && !file.endsWith(join("server", "supabase.ts")));
     const callers = runtime.filter(file => /getServiceClient\b/.test(readFileSync(file, "utf8")));
     expect(callers.map(f => relative(root, f))).toEqual(["src/server/account-actions.ts"]);
@@ -49,5 +49,13 @@ describe("no self-registration", () => {
     const pattern = /\.(inviteUserByEmail|signInWithOtp|generateLink)\s*\(|Staff23Demo|(?<!SEED_)DEMO_STAFF_PASSWORD|DEMO_SESSION_SECRET|createSession|readSession/;
     const offenders = sourceFiles.filter(file => pattern.test(readFileSync(file, "utf8")));
     expect(offenders.map(f => relative(root, f))).toEqual([]);
+  });
+
+  it("archives and restores only through accounts-store (the one rpc caller of set_employee_archived)", () => {
+    const callers = sourceFiles.filter(file => /set_employee_archived/.test(readFileSync(file, "utf8")));
+    expect(callers.map(f => relative(root, f))).toEqual(["src/server/accounts-store.ts"]);
+    // Nothing in the app updates archived_at directly.
+    const writers = sourceFiles.filter(file => /\.update\([^)]*archived_at/.test(readFileSync(file, "utf8")));
+    expect(writers.map(f => relative(root, f))).toEqual([]);
   });
 });

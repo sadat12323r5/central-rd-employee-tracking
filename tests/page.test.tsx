@@ -8,7 +8,7 @@ vi.mock("@/server/auth", () => ({ getSession }));
 vi.mock("@/server/attendance-store", () => ({ attendanceStore: { listForEmployee: vi.fn(async () => []) } }));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
-  employeesStore: { listFor, getFor },
+  employeesStore: { listFor, getFor, isActive: vi.fn(async () => true) },
 }));
 vi.mock("@/components/login", () => ({
   default: (props: Record<string, unknown>) => {

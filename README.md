@@ -33,11 +33,11 @@ Staff attendance: Staff sign in with their own provisioned account. Staff clock 
 
 ## Demo boundaries
 
-This is a prototype for reviewing the L&D workflow. Employee basic details live in a Supabase `employees` table protected by Row-Level Security (seeded with fictional employees); nested profile data (skills, history, training, interviews, attendance summary, review) still comes from the fixture in `src/data/employees.ts`. The only write path is Administrator provisioning of Staff accounts. Git activity and attendance are sample records; external systems are not connected. Job titles are separate from application permissions, and external job interviews are distinct from internal assignments.
+This is a prototype for reviewing the L&D workflow. Employee basic details live in a Supabase `employees` table protected by Row-Level Security (seeded with fictional employees); nested profile data (skills, history, training, interviews, attendance summary, review) still comes from the fixture in `src/data/employees.ts`. The only write paths are Administrator provisioning of Staff accounts and Administrator archive/restore of an employee's access (each archive or restore writes an append-only audit record). Git activity and attendance are sample records; external systems are not connected. Job titles are separate from application permissions, and external job interviews are distinct from internal assignments.
 
 The displayed manager identity is fictional. Every account is named and provisioned by an Administrator; no demo credentials are shown on the sign-in page or kept in the repository.
 
-Supabase Auth (named Administrator and Staff accounts), Administrator-only Staff provisioning, the `employees` table with forward-only migrations and RLS are in place. Production delivery still requires account archiving, persisted attendance, the remaining profile data in the database, scoped manager permissions, persistent record editing, integration configuration, a separate production Supabase project and operational controls. Do not load real employee records into this prototype.
+Supabase Auth (named Administrator and Staff accounts), Administrator-only Staff provisioning, account archive/restore with an audit record, the `employees` table with forward-only migrations and RLS are in place. Production delivery still requires persisted attendance, the remaining profile data in the database, scoped manager permissions, persistent record editing, integration configuration, a separate production Supabase project and operational controls. Do not load real employee records into this prototype.
 
 ## Verification
 

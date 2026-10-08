@@ -83,7 +83,7 @@ describe("employees-store data", () => {
   it("merges each row with the fixture's nested profile data by id", async () => {
     const { client } = fakeClient(seeded);
     const employee = await createEmployeesStore(both(client)).getFor(admin, "BS-1001");
-    expect(employee).toEqual({ ...fixture.find(e => e.id === "BS-1001"), hasAccount: false });
+    expect(employee).toEqual({ ...fixture.find(e => e.id === "BS-1001"), hasAccount: false, archived: false });
   });
 
   it("uses the database's basic fields over the fixture's", async () => {
@@ -156,19 +156,57 @@ describe("employees-store client and columns", () => {
     expect(list[0]).not.toHaveProperty("auth_user_id");
   });
 
-  it("never selects auth_user_id or sets hasAccount on staff reads", async () => {
+  it("never selects auth_user_id or archived_at, or sets hasAccount or archived, on staff reads", async () => {
     const { client, queries } = fakeClient(seeded);
     const store = createEmployeesStore(both(client));
     const own = await store.getFor(staff, "BS-1002");
     const list = await store.listFor(staff);
-    expect(own).not.toHaveProperty("hasAccount");
-    expect(list[0]).not.toHaveProperty("hasAccount");
-    for (const q of queries) expect(q.columns).not.toContain("auth_user_id");
+    for (const employee of [own, list[0]]) {
+      expect(employee).not.toHaveProperty("hasAccount");
+      expect(employee).not.toHaveProperty("archived");
+    }
+    for (const q of queries) {
+      expect(q.columns).not.toContain("auth_user_id");
+      expect(q.columns).not.toContain("archived_at");
+    }
+  });
+
+  it("maps archived_at to archived on admin reads, keeping archived employees listed", async () => {
+    const archivedRow = { ...rowFor("BS-1001"), archived_at: "2026-10-08T09:00:00+00:00" };
+    const activeRow = { ...rowFor("BS-1002"), archived_at: null };
+    const { client, queries } = fakeClient([archivedRow, activeRow]);
+    const list = await createEmployeesStore(both(client)).listFor(admin);
+    expect(list.map(e => [e.id, e.archived])).toEqual([["BS-1001", true], ["BS-1002", false]]);
+    expect(queries[0].columns).toContain("archived_at");
+    expect(list[0]).not.toHaveProperty("archived_at");
   });
 
   it("reports the directory unavailable when the user client cannot be created", async () => {
     const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); } });
     await expect(store.listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
     await expect(store.getFor(staff, "BS-1002")).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+});
+
+describe("employees-store.isActive", () => {
+  it("is true for the staff member's own unarchived row, reading only archived_at through the JWT client", async () => {
+    const { client, queries } = fakeClient([{ ...rowFor("BS-1002"), archived_at: null }]);
+    expect(await createEmployeesStore(both(client)).isActive(staff)).toBe(true);
+    expect(queries).toEqual([{ table: "employees", filters: [["employee_id", "BS-1002"]], columns: "archived_at" }]);
+  });
+
+  it("is false when the row is archived", async () => {
+    const { client } = fakeClient([{ ...rowFor("BS-1002"), archived_at: "2026-10-08T09:00:00+00:00" }]);
+    expect(await createEmployeesStore(both(client)).isActive(staff)).toBe(false);
+  });
+
+  it("is false when the row is not visible (missing, or not linked to this user under RLS)", async () => {
+    const { client } = fakeClient([rowFor("BS-1001")]);
+    expect(await createEmployeesStore(both(client)).isActive(staff)).toBe(false);
+  });
+
+  it.each(["error", "throw"] as const)("throws EmployeesUnavailableError when the read fails (%s)", async mode => {
+    const { client } = fakeClient(seeded, mode);
+    await expect(createEmployeesStore(both(client)).isActive(staff)).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });

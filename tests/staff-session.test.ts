@@ -5,14 +5,14 @@ vi.mock("next/headers", async () => (await import("./support/fake-auth")).header
 vi.mock("next/navigation", async () => (await import("./support/fake-auth")).navigationModule());
 vi.mock("../src/server/supabase", async () => (await import("./support/fake-auth")).supabaseModule());
 
-const { getFor } = vi.hoisted(() => ({ getFor: vi.fn() }));
+const { getFor, isActive } = vi.hoisted(() => ({ getFor: vi.fn(), isActive: vi.fn() }));
 vi.mock("../src/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/employees-store")>()),
-  employeesStore: { listFor: vi.fn(), getFor },
+  employeesStore: { listFor: vi.fn(), getFor, isActive },
 }));
 
 const { getSession, signIn } = await import("../src/server/auth");
-const { employees } = await import("@/data/employees");
+const { EmployeesUnavailableError } = await import("../src/server/employees-store");
 
 const HOUR = 60 * 60 * 1000;
 
@@ -20,15 +20,34 @@ describe("staff sessions on Supabase Auth", () => {
   beforeEach(async () => {
     resetAuth();
     getFor.mockReset();
-    getFor.mockResolvedValue(employees.find(e => e.id === STAFF.employeeId));
+    isActive.mockReset();
+    isActive.mockResolvedValue(true);
     await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
-    getFor.mockClear();
+    isActive.mockClear();
   });
   afterEach(() => vi.useRealTimers());
 
-  it("reads the staff identity from app_metadata without a database round trip", async () => {
+  it("reads the staff identity from app_metadata, checking only the own row's archive state (Story 1.4)", async () => {
     expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
     expect(getFor).not.toHaveBeenCalled();
+    expect(isActive).toHaveBeenCalledTimes(1);
+    expect(isActive).toHaveBeenCalledWith({ role: "staff", employeeId: STAFF.employeeId });
+  });
+
+  it("ends the session, signed out, when the employee is archived or no longer visible", async () => {
+    isActive.mockResolvedValue(false);
+    expect(await getSession()).toBeNull();
+    expect(supabase.signOuts).toBe(1);
+    expect(cookieStore.get(AUTH_COOKIE)).toBeUndefined();
+  });
+
+  it("returns null without signing out when the archive check fails to read", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    isActive.mockRejectedValue(new EmployeesUnavailableError());
+    expect(await getSession()).toBeNull();
+    expect(supabase.signOuts).toBe(0);
+    expect(cookieStore.get(AUTH_COOKIE)).toBeDefined();
+    errorSpy.mockRestore();
   });
 
   it("lasts 12 hours, beyond the 8-hour Administrator window", async () => {
