@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-01-2026 12:00
-last_updated: 10-02-2026 10:00
+last_updated: 10-08-2026 12:00
 project: AI-DLC-Employee-management
 project_key: NOKEY
 tracking_system: file-system
@@ -44,46 +44,46 @@ development_status:
   epic-1-retrospective: optional
 
   epic-2: backlog
-  2-1-staff-adds-an-external-interview: backlog
-  2-2-staff-updates-or-withdraws-an-interview: backlog
+  2-1-staff-adds-an-external-interview: backlog # blocked: needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  2-2-staff-updates-or-withdraws-an-interview: backlog # blocked: depends on 2-1 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
   epic-2-retrospective: optional
 
   epic-3: backlog
-  3-1-staff-views-their-completed-training-history: backlog
-  3-2-staff-and-administrator-see-current-lms-enrolments: backlog
+  3-1-staff-views-their-completed-training-history: backlog # blocked: needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  3-2-staff-and-administrator-see-current-lms-enrolments: backlog # blocked: needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08); also no real LMS API access (stub only)
   epic-3-retrospective: optional
 
   epic-4: backlog
-  4-1-administrator-manages-the-department-list: backlog
-  4-2-administrator-assigns-a-department-manager: backlog
-  4-3-managers-see-only-their-own-department: backlog
-  4-4-interview-privacy-holds-for-managers: backlog
-  4-5-managers-create-and-close-assignments: backlog
-  4-6-manager-evaluates-a-closed-assignment-employee-sees-it: backlog
-  4-7-staff-backfills-a-past-project: backlog
-  4-8-higher-manager-transfers-an-employee-between-departments: backlog
-  4-9-managers-archive-and-restore-accounts-in-their-own-departmen: backlog
-  4-10-managers-use-my-record-for-their-own-self-service: backlog
+  4-1-administrator-manages-the-department-list: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-2-administrator-assigns-a-department-manager: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-3-managers-see-only-their-own-department: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-4-interview-privacy-holds-for-managers: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-5-managers-create-and-close-assignments: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-6-manager-evaluates-a-closed-assignment-employee-sees-it: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-7-staff-backfills-a-past-project: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-8-higher-manager-transfers-an-employee-between-departments: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-9-managers-archive-and-restore-accounts-in-their-own-departmen: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  4-10-managers-use-my-record-for-their-own-self-service: backlog # blocked: Epic 4 needs department/manager tables; needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
   epic-4-retrospective: optional
 
   epic-5: backlog
-  5-1-administrator-loads-the-approved-holiday-calendar: backlog
-  5-2-record-a-leave-period: backlog
-  5-3-edit-or-cancel-a-leave-period: backlog
-  5-4-attendance-views-use-real-data: backlog
+  5-1-administrator-loads-the-approved-holiday-calendar: backlog # blocked: needs the System Owner-approved holiday calendar (action item open) and a migration
+  5-2-record-a-leave-period: backlog # blocked: depends on Epic 4 and 5.1 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  5-3-edit-or-cancel-a-leave-period: backlog # blocked: depends on Epic 4 and 5.1 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  5-4-attendance-views-use-real-data: backlog # blocked: depends on Epic 4 and 5.1 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
   epic-5-retrospective: optional
 
   epic-6: in-progress
   6-1-sign-in-page-meets-contrast-and-the-shared-palette-exists: done
   6-2-administrator-workspace-meets-contrast: review
-  6-3-staff-portal-meets-contrast: backlog
+  6-3-staff-portal-meets-contrast: in-progress
   epic-6-retrospective: optional
 
   epic-7: backlog
-  7-1-add-a-new-employee: backlog
-  7-2-edit-an-employee-s-basic-details: backlog
-  7-3-maintain-employment-history: backlog
-  7-4-record-skills-assessments-and-the-manager-evaluation: backlog
+  7-1-add-a-new-employee: backlog # blocked: depends on Epic 4 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  7-2-edit-an-employee-s-basic-details: backlog # blocked: depends on Epic 4 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  7-3-maintain-employment-history: backlog # blocked: depends on Epic 4 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
+  7-4-record-skills-assessments-and-the-manager-evaluation: backlog # blocked: depends on Epic 4 (blocked); needs a new table/RLS migration; automation container cannot reach Postgres (TCP 5432/6543 time out, re-checked 2026-10-08)
   epic-7-retrospective: optional
 
 action_items:
