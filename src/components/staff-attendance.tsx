@@ -87,6 +87,8 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
   const week = summariseEntries(entries.slice(0, 7), now);
   const activeInterviews = employee.interviews.filter(i => !i.withdrawn);
   const withdrawnInterviews = employee.interviews.filter(i => i.withdrawn);
+  // Story 3.1: completed entries only (newest completion first, as training-store returns them).
+  const completedTraining = employee.training.filter(t => t.progress === 100);
 
   const [tasks, setTasks] = useState<TaskRow[]>(() =>
     today?.log?.tasks.length
@@ -213,6 +215,17 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
               <td><span className={`badge ${status === "Completed" ? "green" : status === "Clocked in" ? "blue" : "rose"}`}><span className="dot" />{status}</span></td>
             </tr>;
           })}</tbody>
+        </table></div>}
+      </section>
+
+      <section className="panel staff-training" aria-labelledby="completed-training-heading">
+        <h2 id="completed-training-heading">Completed training</h2>
+        <p className="muted">Programmes you have completed. Only you and the L&D Administrator can see them.</p>
+        {completedTraining.length === 0 ? <p className="muted">You have no completed training on record yet.</p> : <div className="table-scroll"><table aria-label="Your completed training">
+          <thead><tr><th>Programme</th><th>Provider</th><th>Completed</th><th>Result</th></tr></thead>
+          <tbody>{completedTraining.map(t => <tr key={t.id}>
+            <td>{t.name}</td><td>{t.provider}</td><td>{formatDisplayDate(t.date)}</td><td>{t.result}</td>
+          </tr>)}</tbody>
         </table></div>}
       </section>
 

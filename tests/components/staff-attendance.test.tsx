@@ -213,3 +213,38 @@ describe("StaffAttendance interview updates and withdrawal (Story 2.2)", () => {
     expect(screen.getByRole("list", { name: "Withdrawn (history)" })).toBeInTheDocument();
   });
 });
+
+describe("StaffAttendance completed training (Story 3.1)", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now)); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const older = { id: "t-old", name: "Secure coding basics", provider: "External Academy (fictional)", progress: 100, date: "2025-11-03", result: "Completed · certificate issued" };
+  const inProgress = { id: "t-prog", name: "Cloud fundamentals", provider: "BS23 Learning & Development", progress: 60, date: "2026-12-01", result: "In progress" };
+  // As training-store returns them: completed (newest completion first), then in progress.
+  const trained = { ...employee, training: [employee.training[0], older, inProgress] };
+
+  it("lists every completed entry with programme, provider, completion date (D MMM YYYY) and result", async () => {
+    const { container } = render(<StaffAttendance employee={trained} entries={[]} serverNow={now} />);
+    expect(screen.getByRole("heading", { name: "Completed training" })).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Your completed training" });
+    expect(within(table).getAllByRole("columnheader").map(h => h.textContent)).toEqual(["Programme", "Provider", "Completed", "Result"]);
+    const rows = within(table).getAllByRole("row").slice(1).map(r => within(r).getAllByRole("cell").map(c => c.textContent));
+    expect(rows).toEqual([
+      [employee.training[0].name, "BS23 Learning & Development", "20 Aug 2026", "Completed · assessment passed"],
+      ["Secure coding basics", "External Academy (fictional)", "3 Nov 2025", "Completed · certificate issued"],
+    ]);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("leaves in-progress entries out of the completed history", () => {
+    render(<StaffAttendance employee={trained} entries={[]} serverNow={now} />);
+    expect(within(screen.getByRole("table", { name: "Your completed training" })).queryByText("Cloud fundamentals")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty state when there is no completed training", async () => {
+    const { container } = render(<StaffAttendance employee={{ ...employee, training: [inProgress] }} entries={[]} serverNow={now} />);
+    expect(screen.getByText("You have no completed training on record yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Your completed training" })).not.toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});

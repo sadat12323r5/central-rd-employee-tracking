@@ -1,12 +1,16 @@
 // Idempotent seed: upserts the fixture's basic employee fields into the Supabase `employees` table,
-// then the fixture's external interviews into `external_interviews` (Story 2.1), with the
-// service-role client. Interview ids are the fixture's deterministic ids (interviewSeedId), so
-// re-running updates the same rows instead of adding copies. Other nested profile data stays in the
-// fixture (read by employees-store); the fixture's interviews are never read at runtime.
+// then the fixture's external interviews into `external_interviews` (Story 2.1) and its completed
+// training into `training_history` (Story 3.1), with the service-role client. Interview and training
+// ids are the fixture's deterministic ids (interviewSeedId, trainingSeedId), so re-running never adds
+// copies. In-progress training is never copied into the table (training-store serves it from the
+// fixture until Story 3.2). Other nested profile data stays in the fixture (read by employees-store);
+// the fixture's interviews and completed training are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
-import type { Employee, interviewSeedRows as InterviewSeedRows } from "../src/data/employees";
+import type {
+  Employee, interviewSeedRows as InterviewSeedRows, trainingSeedRows as TrainingSeedRows,
+} from "../src/data/employees";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -18,7 +22,9 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees, interviewSeedRows } = (await import(fixtureUrl)) as { employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows };
+const { employees, interviewSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+  employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; trainingSeedRows: typeof TrainingSeedRows;
+};
 
 const rows = employees.map(e => ({
   employee_id: e.id, name: e.name, title: e.title, team: e.team, employment_type: e.type,
@@ -45,3 +51,13 @@ if (interviews.error) {
   process.exit(1);
 }
 console.log(`Inserted ${interviews.data?.length ?? 0} new external interviews (existing ones left unchanged).`);
+
+// After the employees: training_history.employee_id references employees (ON DELETE RESTRICT).
+// Completed entries only; insert-only, so existing rows are left unchanged.
+const training = await supabase.from("training_history")
+  .upsert(trainingSeedRows(employees), { onConflict: "id", ignoreDuplicates: true }).select("id");
+if (training.error) {
+  console.error(`Seeding training failed: ${training.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${training.data?.length ?? 0} new completed-training entries (existing ones left unchanged).`);

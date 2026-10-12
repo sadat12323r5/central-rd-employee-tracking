@@ -42,3 +42,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
   summary: Add-interview form (like the attendance forms) resets after a failed save in React 19; admin interviews list has no paging (max-rows 1000); no test asserts the empty-feedback callout is hidden.
   evidence: Low-severity items recorded in the spec's deferred list.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
+  summary: The `db:seed` writes (completed training, interviews) are never executed by a test.
+  evidence: Only the pure `trainingSeedRows` / `interviewSeedRows` helpers are tested. Covering the writes needs a testable seed function or a CI seed run.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
+  summary: A failed training read (like the interviews read) makes the whole employee record unavailable. Story 3.2's per-section states should decouple this.
+  evidence: employees-store maps TrainingUnavailableError to EmployeesUnavailableError (the "never a profile with missing data" rule from 2.1).
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
+  summary: Story 4.3 must update the staff copy "Only you and the L&D Administrator can see them" in the Completed training section when it adds manager-scoped training RLS.
+  evidence: Epic 3 context lists manager-scoped training RLS under 4.3.

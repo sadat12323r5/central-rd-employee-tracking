@@ -255,3 +255,55 @@ describe("Portal withdrawn interviews (Story 2.2)", () => {
     expect(screen.getByRole("region", { name: "Withdrawn (history)" })).toBeInTheDocument();
   });
 });
+
+describe("Portal training views (Story 3.1: same rendering, training from training-store)", () => {
+  const nadia = employees[0];
+
+  it("shows the Training tab exactly as before: completed then in progress, with dates, progress and result", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={employees} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Training" }));
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByRole("heading", { name: "Training & development" })).toBeInTheDocument();
+    expect(within(panel).getAllByRole("heading", { level: 3 }).map(h => h.textContent)).toEqual(nadia.training.map(t => t.name));
+    expect(within(panel).getByText("Completed: 20 Aug 2026")).toBeInTheDocument();
+    expect(within(panel).getByText("Target completion: 28 Sep 2026")).toBeInTheDocument();
+    expect(within(panel).getByText("Completed · assessment passed")).toBeInTheDocument();
+    expect(within(panel).getByText("In progress")).toBeInTheDocument();
+    expect(within(panel).getByRole("progressbar", { name: `${nadia.training[0].name} completion` })).toHaveAttribute("value", "100");
+    expect(within(panel).getByRole("progressbar", { name: `${nadia.training[1].name} completion` })).toHaveAttribute("value", String(nadia.training[1].progress));
+  });
+
+  it("lists every enrolment in Learning & development, with the same counts on the Overview", async () => {
+    const user = userEvent.setup();
+    const all = employees.flatMap(e => e.training);
+    render(<Portal employees={employees} />);
+    const stat = (label: string) => screen.getByText(label).closest("article")!.querySelector("strong")!.textContent;
+    expect(stat("Learning in progress")).toBe(String(all.filter(t => t.progress < 100).length).padStart(2, "0"));
+    expect(screen.getByText(`${all.filter(t => t.progress === 100).length} completed training records`)).toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Learning & development" }));
+    expect(screen.getByText(`${all.length} enrolments`)).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(all.length);
+    const first = rows.filter(r => within(r).queryByText("Nadia Rahman"));
+    expect(first.map(r => within(r).getAllByRole("cell")[3].textContent)).toEqual(["20 Aug 2026", "28 Sep 2026"]);
+  });
+
+  it("keys training by id, so two entries with the same programme name render without a key clash", async () => {
+    const errorSpy = vi.spyOn(console, "error");
+    try {
+      const user = userEvent.setup();
+      const repeat = { ...nadia.training[0], id: "7a1a0000-0000-4000-8000-0000ffff0001", date: "2025-02-10" };
+      render(<Portal employees={employees.map(e => (e.id === nadia.id ? { ...e, training: [...e.training, repeat] } : e))} />);
+      await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+      await user.click(screen.getByRole("tab", { name: "Training" }));
+      expect(within(screen.getByRole("tabpanel")).getAllByRole("heading", { name: nadia.training[0].name })).toHaveLength(2);
+      await user.click(screen.getByRole("button", { name: /back to/i }));
+      await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Learning & development" }));
+      expect(errorSpy.mock.calls.map(args => args.map(String).join(" ")).filter(m => m.includes("same key"))).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});

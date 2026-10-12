@@ -3,12 +3,13 @@ import { employees as fixture, type Employee } from "@/data/employees";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import type { SessionIdentity } from "./session";
 import { getUserClient } from "./supabase";
+import { trainingStore, TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "./training-store";
 
 // The only way the app reads employees (AD-2). Basic details come from the Supabase `employees`
-// table and external interviews from the `external_interviews` table (through interviews-store,
-// Story 2.1); the other nested profile data (skills, history, training, work, attendance summary,
-// review) still comes from the fixture, merged by Employee ID, so callers see the same shape.
-// The fixture's interviews are seed data only (scripts/seed-employees.ts) and never read here.
+// table, external interviews from the `external_interviews` table (through interviews-store,
+// Story 2.1) and training through training-store (Story 3.1); the other nested profile data (skills,
+// history, work, attendance summary, review) still comes from the fixture, merged by Employee ID, so
+// callers see the same shape. The fixture's interviews and training are never read here.
 //
 // Every read (Administrator and Staff, Story 1.3) goes through a per-request client carrying the
 // signed-in user's Supabase JWT, so the employees RLS policies are the enforced rule: an admin
@@ -41,10 +42,10 @@ const COLUMNS = "employee_id,name,title,team,employment_type,email,joined_on,man
 /** Administrators also see whether each employee has a linked sign-in account. */
 const ADMIN_COLUMNS = `${COLUMNS},auth_user_id`;
 
-type NestedProfile = Pick<Employee, "skills" | "history" | "training" | "work" | "attendance" | "review">;
+type NestedProfile = Pick<Employee, "skills" | "history" | "work" | "attendance" | "review">;
 
 const emptyProfile = (): NestedProfile => ({
-  skills: [], history: [], training: [],
+  skills: [], history: [],
   work: { project: "", role: "", allocation: 0, update: "", commits: 0, period: "" },
   attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
   review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" },
@@ -53,21 +54,24 @@ const emptyProfile = (): NestedProfile => ({
 function nestedFor(id: string): NestedProfile {
   const source = fixture.find(e => e.id === id);
   if (!source) return emptyProfile();
-  const { skills, history, training, work, attendance, review } = structuredClone(source);
-  return { skills, history, training, work, attendance, review };
+  const { skills, history, work, attendance, review } = structuredClone(source);
+  return { skills, history, work, attendance, review };
 }
 
 /**
- * Maps a row to an Employee with the given interviews (from interviews-store); `withAccount`
- * (Administrator reads only) adds `hasAccount` from `auth_user_id`.
+ * Maps a row to an Employee with the given interviews (from interviews-store) and training (from
+ * training-store); `withAccount` (Administrator reads only) adds `hasAccount` from `auth_user_id`.
  */
-export function toEmployee(row: EmployeeRow, withAccount = false, interviews: Employee["interviews"] = []): Employee {
+export function toEmployee(
+  row: EmployeeRow, withAccount = false, interviews: Employee["interviews"] = [], training: Employee["training"] = [],
+): Employee {
   return {
     id: row.employee_id, name: row.name, title: row.title, team: row.team, type: row.employment_type, email: row.email,
     joined: row.joined_on, manager: row.manager, location: row.office, status: row.status, initials: row.initials,
     color: row.avatar_color, summary: row.summary,
     ...(withAccount ? { hasAccount: Boolean(row.auth_user_id) } : {}),
     ...nestedFor(row.employee_id),
+    training,
     interviews,
   };
 }
@@ -76,6 +80,10 @@ export function toEmployee(row: EmployeeRow, withAccount = false, interviews: Em
 const interviewsOf = (all: ExternalInterview[], employeeId: string): Employee["interviews"] =>
   all.filter(i => i.employeeId === employeeId).map(({ employeeId: _, ...interview }) => interview);
 
+/** The training of one employee, in the store's order, without the store's `employeeId`. */
+const trainingOf = (all: TrainingEntry[], employeeId: string): Employee["training"] =>
+  all.filter(t => t.employeeId === employeeId).map(({ employeeId: _, ...entry }) => entry);
+
 type Result<T> = { data: T | null; error: unknown };
 
 export type EmployeesStoreClients = {
@@ -83,9 +91,11 @@ export type EmployeesStoreClients = {
   userClient: () => Promise<SupabaseClient>;
   /** Where profile interviews come from (RLS-scoped through the same per-request JWT). */
   interviews: Pick<InterviewsStore, "listFor">;
+  /** Where profile training comes from (RLS-scoped through the same per-request JWT). */
+  training: Pick<TrainingStore, "listFor">;
 };
 
-export function createEmployeesStore({ userClient, interviews }: EmployeesStoreClients): EmployeesStore {
+export function createEmployeesStore({ userClient, interviews, training }: EmployeesStoreClients): EmployeesStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T | null> {
     let result: Result<T>;
     try {
@@ -107,28 +117,44 @@ export function createEmployeesStore({ userClient, interviews }: EmployeesStoreC
     }
   }
 
+  /** A failed training read makes the whole record unavailable: never a profile with missing training. */
+  async function trainingFor(session: SessionIdentity, employeeId?: string): Promise<TrainingEntry[]> {
+    try {
+      return await training.listFor(session, employeeId);
+    } catch (cause) {
+      if (cause instanceof TrainingUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   const columnsFor = (session: SessionIdentity) => (session.role === "admin" ? ADMIN_COLUMNS : COLUMNS);
 
   return {
     async listFor(session) {
-      // One interviews query for the whole list: every interview for an admin, the caller's own for staff.
-      const [rows, all] = await Promise.all([
+      // One interviews and one training read for the whole list: everyone's for an admin, the caller's own for staff.
+      const [rows, all, allTraining] = await Promise.all([
         run<EmployeeRow[]>(t => {
           const query = t.select(columnsFor(session));
           return (session.role === "admin" ? query : query.eq("employee_id", session.employeeId)).order("employee_id").returns<EmployeeRow[]>();
         }),
         interviewsFor(session),
+        trainingFor(session),
       ]);
       if (!rows) throw new EmployeesUnavailableError({ cause: "no data returned" });
-      return rows.map(row => toEmployee(row, session.role === "admin", interviewsOf(all, row.employee_id)));
+      return rows.map(row => toEmployee(
+        row, session.role === "admin", interviewsOf(all, row.employee_id), trainingOf(allTraining, row.employee_id),
+      ));
     },
     async getFor(session, id) {
       if (session.role !== "admin" && id !== session.employeeId) return null;
       const row = await run<EmployeeRow>(t => t.select(columnsFor(session)).eq("employee_id", id).maybeSingle<EmployeeRow>());
       if (!row) return null;
-      return toEmployee(row, session.role === "admin", interviewsOf(await interviewsFor(session, id), id));
+      const [own, ownTraining] = await Promise.all([interviewsFor(session, id), trainingFor(session, id)]);
+      return toEmployee(row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id));
     },
   };
 }
 
-export const employeesStore: EmployeesStore = createEmployeesStore({ userClient: getUserClient, interviews: interviewsStore });
+export const employeesStore: EmployeesStore = createEmployeesStore({
+  userClient: getUserClient, interviews: interviewsStore, training: trainingStore,
+});

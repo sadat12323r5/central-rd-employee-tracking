@@ -59,15 +59,26 @@ Migrations are forward-only SQL files in `supabase/migrations/`, applied with th
 
 ```sh
 npm run db:push   # applies pending migrations to the database in SUPABASE_DB_URL
-npm run db:seed   # idempotently upserts the 8 fictional employees' basic details and inserts their missing external interviews
+npm run db:seed   # idempotently upserts the 8 fictional employees' basic details and inserts their missing external interviews and completed training
 npm run db:seed-admin   # one-time: creates the first Administrator (see above)
 npm run db:seed-demo-staff   # optional: creates the demo Staff account (see above)
 ```
 
 - `db:push` reads `SUPABASE_DB_URL` from the environment or `.env.local` and never prints it.
-- `db:seed` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the same way and upserts by Employee ID, so it is safe to rerun. Migrations never seed data. **Deploy order:** apply the `external_interviews` migration (and the earlier `attendance_entries` one) with `npm run db:push` BEFORE deploying this code, then run `npm run db:seed`. Employee reads (the Administrator directory, staff sign-in and the staff page) now also read interviews, so until the table exists they show "employee records unavailable". `db:seed` also inserts the fixture's external interviews into `external_interviews` by their deterministic ids (insert-only: existing rows are left unchanged) (run it after the `external_interviews` migration). Other nested profile data (skills, history, training, attendance summary, review) still comes from `src/data/employees.ts` through `employees-store`; interviews are read only from the table.
-- **Migration apply order** (`npm run db:push` applies pending files in filename order): `20261006000000_employees.sql`, `20261012000000_attendance.sql`, then `20261012010000_external_interviews.sql` (Story 2.1), then `20261012020000_external_interview_updates.sql` (Story 2.2: adds `external_interviews.withdrawn_at`, the own-row UPDATE policy and the `external_interviews_guard` trigger that locks company, role, date and employee and makes withdrawn rows immutable, for every role including the service role). Story 2.2 code selects `withdrawn_at`, so apply this migration BEFORE deploying it; until then interview reads fail (Postgres 42703) and show "employee records unavailable". The migration is additive (new column with a null default, new trigger and policy); `db:seed` inserts missing fixture interviews only and never updates existing interview rows, so re-running it keeps staff edits and withdrawals of seeded demo interviews.
+- `db:seed` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the same way and upserts employees by Employee ID, so it is safe to rerun. Migrations never seed data. For interviews and training it is insert-only by deterministic ids (`interviewSeedId`, `trainingSeedId`): existing rows are never updated, so staff edits and withdrawals of seeded demo interviews survive a re-run. It seeds completed training (`progress` 100) only; in-progress entries are never copied into the table.
+- Data sources: interviews are read only from `external_interviews` (through `interviews-store`); training only through `training-store` (completed entries from `training_history`, in-progress entries from the fixture until Story 3.2). Other nested profile data (skills, history, attendance summary, review) still comes from `src/data/employees.ts` through `employees-store`.
 - The `db:seed` script runs TypeScript directly and needs Node 24 (or Node 22 with `--experimental-strip-types`, which the script passes).
+
+**Deploy checklist** (in this order):
+
+1. Apply every pending migration with `npm run db:push`, which applies them in filename order. Every employee read (the Administrator directory, staff sign-in and the staff page) reads interviews and training, so until a migration below is applied those reads show "employee records unavailable".
+   1. `20261006000000_employees.sql` (Story 1.1): the `employees` table and its RLS. ADDITIVE (new table).
+   2. `20261012000000_attendance.sql` (Story 1.5): `attendance_entries`. ADDITIVE.
+   3. `20261012010000_external_interviews.sql` (Story 2.1): `external_interviews`. ADDITIVE. Missing: PGRST205 / 42P01.
+   4. `20261012020000_external_interview_updates.sql` (Story 2.2): `external_interviews.withdrawn_at` (null default), the own-row UPDATE policy and the `external_interviews_guard` trigger that locks company, role, date and employee and makes withdrawn rows immutable for every role, including the service role. ADDITIVE. Missing: Postgres 42703.
+   5. `20261012030000_training_history.sql` (Story 3.1): `training_history` (completed training, no department column), its `employee_id` index and two select-only RLS policies (employee-own and Administrator; no insert, update or delete policy). ADDITIVE. Missing: PGRST205 / 42P01.
+2. Run `npm run db:seed`. Until it runs after migration 5, the demo employees show only their in-progress training.
+3. Deploy the code.
 
 If the database is unreachable, the app shows an "Employee records are unavailable" alert instead of an empty or partial directory, and Staff sign-in reports that it is temporarily unavailable.
 
