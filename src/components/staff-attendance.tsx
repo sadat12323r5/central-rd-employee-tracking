@@ -5,7 +5,9 @@ import type { Employee } from "@/data/employees";
 import {
   WORK_MODES, entryStatus, formatDuration, todaysEntry, workedMinutes, summariseEntries, type TimesheetEntry,
 } from "@/domain/timesheet";
+import { formatDisplayDate } from "@/domain/dates";
 import { clockInAction, clockOutAction, saveLogAction, type ActionState } from "@/server/attendance-actions";
+import { addInterviewAction } from "@/server/interviews-actions";
 import { signOut } from "@/server/auth";
 
 const initial: ActionState = { error: "", message: "" };
@@ -33,6 +35,7 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
   const [inState, inAction, inPending] = useActionState(clockInAction, initial);
   const [outState, outAction, outPending] = useActionState(clockOutAction, initial);
   const [logState, logAction, logPending] = useActionState(saveLogAction, initial);
+  const [interviewState, interviewAction, interviewPending] = useActionState(addInterviewAction, initial);
 
   const today = todaysEntry(entries, employee.id, now);
   const open = today && !today.clockOut;
@@ -165,6 +168,45 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
             </tr>;
           })}</tbody>
         </table></div>}
+      </section>
+
+      <section className="panel staff-interviews" aria-labelledby="interviews-heading">
+        <h2 id="interviews-heading">External interviews</h2>
+        <p className="muted">Interviews with other companies. Only you and the L&D Administrator can see them.</p>
+        {employee.interviews.length === 0 ? <p className="muted">You have not added any external interviews yet.</p> : <div className="table-scroll"><table aria-label="Your external interviews">
+          <thead><tr><th>Company</th><th>Role</th><th>Date</th><th>Stage</th><th>Outcome</th></tr></thead>
+          <tbody>{employee.interviews.map(i => <tr key={i.id}>
+            <td>{i.company}</td><td>{i.role}</td><td>{formatDisplayDate(i.date)}</td><td>{i.stage}</td><td>{i.outcome || "No outcome yet"}</td>
+          </tr>)}</tbody>
+        </table></div>}
+
+        <form action={interviewAction} className="staff-log staff-interview-form">
+          <h3>Add an interview</h3>
+          <div className="staff-field">
+            <label htmlFor="interview-company">Company</label>
+            <input id="interview-company" name="company" maxLength={200} required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-role">Role</label>
+            <input id="interview-role" name="role" maxLength={200} required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-date">Interview date</label>
+            <input id="interview-date" name="date" type="date" required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-stage">Stage</label>
+            <input id="interview-stage" name="stage" maxLength={200} placeholder="For example: Technical interview" required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-outcome">Outcome (optional)</label>
+            <input id="interview-outcome" name="outcome" maxLength={200} />
+          </div>
+          <div className="staff-actions">
+            <button className="primary" disabled={interviewPending}>{interviewPending ? "Adding…" : "Add interview"}</button>
+          </div>
+          <Feedback state={interviewState} />
+        </form>
       </section>
     </div>
   </main>;

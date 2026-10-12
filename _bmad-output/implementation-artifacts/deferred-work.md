@@ -30,3 +30,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-staff-attendance-survives-restarts.md`
   summary: Attendance lists (`listForEmployee`, `listAll`) have no limit or paging; PostgREST max-rows (default 1000) would silently truncate them.
   evidence: Needs ~4 years of one employee's entries, and `listAll` has no app caller yet. Story 5.4 (attendance views use real data) should add a date window or paging.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Staff sign-in, the staff page and the Administrator directory fail as a whole when the interviews read fails (employees-store merges interviews).
+  evidence: Both tables share one database, so in practice only an unapplied migration splits them; DEPLOYMENT.md documents the deploy order. Decoupling the sign-in check from the interviews read needs a new store method.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Overview "Upcoming interviews" stat (outcome === "Scheduled") and the hard-coded "On your radar" interview row ignore staff-added interviews.
+  evidence: Staff outcome is optional free text; the radar row is pre-existing demo content. Neither view is in Story 2.1's acceptance criteria.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Story 2.2 should decide whether `db:seed` keeps overwriting seeded interview rows once edits are possible (upsert on id rewrites all columns).
+  evidence: Seed ids derive from fixture list position; stale rows are never removed.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Add-interview form (like the attendance forms) resets after a failed save in React 19; admin interviews list has no paging (max-rows 1000); no test asserts the empty-feedback callout is hidden.
+  evidence: Low-severity items recorded in the spec's deferred list.

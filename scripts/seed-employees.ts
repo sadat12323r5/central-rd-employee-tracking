@@ -1,9 +1,12 @@
-// Idempotent seed: upserts the fixture's basic employee fields into the Supabase `employees` table
-// with the service-role client. Nested profile data stays in the fixture (read by employees-store).
+// Idempotent seed: upserts the fixture's basic employee fields into the Supabase `employees` table,
+// then the fixture's external interviews into `external_interviews` (Story 2.1), with the
+// service-role client. Interview ids are the fixture's deterministic ids (interviewSeedId), so
+// re-running updates the same rows instead of adding copies. Other nested profile data stays in the
+// fixture (read by employees-store); the fixture's interviews are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
-import type { Employee } from "../src/data/employees";
+import type { Employee, interviewSeedRows as InterviewSeedRows } from "../src/data/employees";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -15,7 +18,7 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees } = (await import(fixtureUrl)) as { employees: Employee[] };
+const { employees, interviewSeedRows } = (await import(fixtureUrl)) as { employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows };
 
 const rows = employees.map(e => ({
   employee_id: e.id, name: e.name, title: e.title, team: e.team, employment_type: e.type,
@@ -30,3 +33,12 @@ if (error) {
   process.exit(1);
 }
 console.log(`Upserted ${data?.length ?? 0} employees.`);
+
+// After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
+const interviewRows = interviewSeedRows(employees);
+const interviews = await supabase.from("external_interviews").upsert(interviewRows, { onConflict: "id" }).select("id");
+if (interviews.error) {
+  console.error(`Seeding interviews failed: ${interviews.error.message}`);
+  process.exit(1);
+}
+console.log(`Upserted ${interviews.data?.length ?? 0} external interviews.`);

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 
@@ -157,3 +157,45 @@ describe("Portal employee profile", () => {
     expect(screen.getByLabelText("Initial password")).toBeInTheDocument();
   });
 });
+
+describe("Portal external interviews", () => {
+  const added = { id: "7d2f3c1a-0000-4000-8000-000000000001", company: "Orbit Analytics", role: "AI Engineer", date: "2026-10-20", stage: "Recruiter screen", outcome: "", feedback: "" };
+  // Two interviews at the same company would have collided on the old company-based keys.
+  const withNew = employees.map(e => (e.id === "BS-1003" ? { ...e, interviews: [added, { ...added, id: "7d2f3c1a-0000-4000-8000-000000000002", date: "2026-10-01" }] } : e));
+
+  it("shows a staff-added interview in the profile Interviews tab, with a text label for an empty outcome", async () => {
+    const errorSpy = vi.spyOn(console, "error");
+    const user = userEvent.setup();
+    render(<Portal employees={withNew} />);
+    await user.click(screen.getByRole("button", { name: "View Meera Das's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Interviews" }));
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getAllByRole("heading", { name: "Orbit Analytics" })).toHaveLength(2);
+    expect(within(panel).getAllByText("No outcome yet")).toHaveLength(2);
+    expect(within(panel).getByText("20 Oct 2026 · Recruiter screen")).toBeInTheDocument();
+    expect(errorSpy.mock.calls.map(args => args.map(String).join(" ")).filter(m => m.includes("same key"))).toEqual([]);
+    errorSpy.mockRestore();
+  });
+
+  it("lists it in Interviews & placements next to the existing interviews", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={withNew} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Interviews & placements" }));
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(employees.flatMap(e => e.interviews).length + 2);
+    const meera = rows.filter(r => within(r).queryByText("Meera Das"));
+    expect(meera).toHaveLength(2);
+    expect(within(meera[0]).getByText("Orbit Analytics")).toBeInTheDocument();
+    expect(within(meera[0]).getByText("20 Oct 2026")).toBeInTheDocument();
+    expect(within(meera[0]).getByText("No outcome yet")).toBeInTheDocument();
+  });
+
+  it("shows interview dates as D MMM YYYY", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={employees} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Interviews" }));
+    expect(screen.getByText("23 Sep 2026 · Technical interview")).toBeInTheDocument();
+  });
+});
+

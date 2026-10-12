@@ -8,10 +8,29 @@
   history: { role: string; company: string; period: string; detail: string }[];
   training: { name: string; provider: string; progress: number; date: string; result: string }[];
   work: { project: string; role: string; allocation: number; update: string; commits: number; period: string };
-  interviews: { company: string; role: string; date: string; stage: string; outcome: string; feedback: string }[];
+  /** External interviews (Story 2.1): read from the `external_interviews` table, newest first. */
+  interviews: { id: string; company: string; role: string; date: string; stage: string; outcome: string; feedback: string }[];
   attendance: { scheduled: number; worked: number; leave: number; unrecorded: number; records: { date: string; type: string; days: number; status: string }[] };
   review: { date: string; reviewer: string; readiness: string; strengths: string; next: string };
 };
+
+/**
+ * The deterministic `external_interviews.id` of a fixture interview, stable per employee and index,
+ * so `npm run db:seed` upserts the same rows on every run (e.g. BS-1001 #0 -> 5eed0000-0000-4000-8000-000010010000).
+ */
+export function interviewSeedId(employeeId: string, index: number): string {
+  const digits = /^BS-(\d{4})$/.exec(employeeId)?.[1];
+  if (!digits || !Number.isInteger(index) || index < 0 || index > 0xffff) throw new Error(`No seed id for ${employeeId} #${index}.`);
+  return `5eed0000-0000-4000-8000-0000${digits}${index.toString(16).padStart(4, "0")}`;
+}
+
+/** The `external_interviews` rows `npm run db:seed` upserts for the given employees' fixture interviews. */
+export function interviewSeedRows(list: Employee[]) {
+  return list.flatMap(e => e.interviews.map(i => ({
+    id: i.id, employee_id: e.id, company: i.company, role: i.role, stage: i.stage,
+    interview_date: i.date, outcome: i.outcome, feedback: i.feedback,
+  })));
+}
 
 const people = [
   ["BS-1001", "Nadia Rahman", "Software Engineer I", "Engineering", "Permanent", "On project", "NR", "lavender", "2024-03-04", "React", "TypeScript", "Customer experience platform"],
@@ -35,7 +54,7 @@ export const employees: Employee[] = people.map((p, index) => {
     history: [{ role: title, company: "Brain Station 23", period: `${joined} – Present`, detail: `Working with the ${team} team.` }, ...(!junior ? [{ role: index === 1 ? "Junior Data Engineer" : `Associate ${title.replace(/ I+$/, "")}`, company: "Example Digital Ltd. (fictional)", period: "2021 – 2022", detail: "Delivered team projects and developed foundational professional skills." }] : [])],
     training: [{ name: `${skillOne} · practical foundations`, provider: "BS23 Learning & Development", progress: 100, date: "2026-08-20", result: junior ? "Completed · mentor reviewed" : "Completed · assessment passed" }, { name: junior ? "Professional communication" : "Technical leadership & collaboration", provider: "BS23 Learning & Development", progress: 60 + (index % 3) * 10, date: "2026-09-28", result: "In progress" }],
     work: { project, role: junior ? "Supervised contributor" : title, allocation: status === "Available" ? 0 : junior ? 50 : 80, update: junior ? "Completed the first milestone; preparing a walkthrough with the mentor." : "Reviewed this week's deliverables and documented the next implementation steps.", commits: [12, 8, 6, 4, 0, 5, 9, 16][index], period: "14–20 Sep 2026" },
-    interviews: index === 2 || index === 5 ? [] : [{ company: ["Northstar Labs", "Orbit Analytics", "", "Cedar Software", "Canvas Digital", "", "Summit Cloud", "Harbour Systems"][index] + " (fictional)", role: title, date: index === 0 ? "2026-09-23" : "2026-09-16", stage: index === 0 ? "Technical interview" : "Technical round completed", outcome: index === 0 ? "Scheduled" : index === 3 ? "Not selected" : "Awaiting feedback", feedback: index === 3 ? "Needs more practice explaining test strategy. Mentor follow-up planned." : "Preparation focus: project examples, technical reasoning and communication. No offer recorded." }],
+    interviews: index === 2 || index === 5 ? [] : [{ id: interviewSeedId(id, 0), company: ["Northstar Labs", "Orbit Analytics", "", "Cedar Software", "Canvas Digital", "", "Summit Cloud", "Harbour Systems"][index] + " (fictional)", role: title, date: index === 0 ? "2026-09-23" : "2026-09-16", stage: index === 0 ? "Technical interview" : "Technical round completed", outcome: index === 0 ? "Scheduled" : index === 3 ? "Not selected" : "Awaiting feedback", feedback: index === 3 ? "Needs more practice explaining test strategy. Mentor follow-up planned." : "Preparation focus: project examples, technical reasoning and communication. No offer recorded." }],
     attendance: { scheduled: 14, worked: index === 2 ? 11 : 12, leave: index === 2 ? 2 : 1, unrecorded: 1, records: [{ date: "2026-09-10", type: "Leave", days: index === 2 ? 2 : 1, status: "Recorded" }, { date: "2026-09-17", type: "Attendance", days: 1, status: "Missing record" }] },
     review: { date: "2026-09-14", reviewer: "Ayesha Karim · L&D Manager", readiness: junior ? "Developing · mentor support" : "Ready for role-matched interviews", strengths: junior ? "Consistent learning progress, asks thoughtful questions and responds well to feedback." : "Clear technical reasoning, collaborative delivery and well-documented project contributions.", next: junior ? "Complete the capstone and practise a short technical presentation." : `Strengthen advanced ${skillTwo} skills and prepare two project case studies.` },
   };

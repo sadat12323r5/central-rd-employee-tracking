@@ -59,13 +59,13 @@ Migrations are forward-only SQL files in `supabase/migrations/`, applied with th
 
 ```sh
 npm run db:push   # applies pending migrations to the database in SUPABASE_DB_URL
-npm run db:seed   # idempotently upserts the 8 fictional employees' basic details
+npm run db:seed   # idempotently upserts the 8 fictional employees' basic details and their external interviews
 npm run db:seed-admin   # one-time: creates the first Administrator (see above)
 npm run db:seed-demo-staff   # optional: creates the demo Staff account (see above)
 ```
 
 - `db:push` reads `SUPABASE_DB_URL` from the environment or `.env.local` and never prints it.
-- `db:seed` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the same way and upserts by Employee ID, so it is safe to rerun. Migrations never seed data. Nested profile data (skills, history, training, interviews, attendance summary, review) still comes from `src/data/employees.ts` through `employees-store`.
+- `db:seed` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the same way and upserts by Employee ID, so it is safe to rerun. Migrations never seed data. **Deploy order:** apply the `external_interviews` migration (and the earlier `attendance_entries` one) with `npm run db:push` BEFORE deploying this code, then run `npm run db:seed`. Employee reads (the Administrator directory, staff sign-in and the staff page) now also read interviews, so until the table exists they show "employee records unavailable". `db:seed` also upserts the fixture's external interviews into `external_interviews` by their deterministic ids (run it after the `external_interviews` migration). Other nested profile data (skills, history, training, attendance summary, review) still comes from `src/data/employees.ts` through `employees-store`; interviews are read only from the table.
 - The `db:seed` script runs TypeScript directly and needs Node 24 (or Node 22 with `--experimental-strip-types`, which the script passes).
 
 If the database is unreachable, the app shows an "Employee records are unavailable" alert instead of an empty or partial directory, and Staff sign-in reports that it is temporarily unavailable.
