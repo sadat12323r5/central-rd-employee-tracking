@@ -21,3 +21,18 @@ export function formatDisplayDate(value: string): string {
   const [year, month, day] = value.split("-");
   return `${Number(day)} ${MONTHS[Number(month) - 1]} ${year}`;
 }
+
+const DHAKA_PARTS = new Intl.DateTimeFormat("en-GB", {
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Dhaka",
+});
+
+/**
+ * An instant (ISO 8601 timestamp) as `D MMM YYYY, HH:mm` in the Asia/Dhaka org timezone, e.g.
+ * `2026-10-12T03:30:00Z` → `12 Oct 2026, 09:30`; anything unparseable → `Not recorded`.
+ */
+export function formatDisplayDateTime(value: string): string {
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) return "Not recorded";
+  const parts = Object.fromEntries(DHAKA_PARTS.formatToParts(new Date(time)).map(p => [p.type, p.value]));
+  return `${formatDisplayDate(`${parts.year}-${parts.month}-${parts.day}`)}, ${parts.hour}:${parts.minute}`;
+}

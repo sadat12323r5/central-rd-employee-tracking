@@ -1,33 +1,57 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { employees as fixture, type Employee } from "@/data/employees";
+import { lmsClient, LmsUnavailableError, type Enrolment, type LmsClient } from "./lms-client";
 import type { SessionIdentity } from "./session";
 import { getUserClient } from "./supabase";
 
-// The single source of training for every view (Story 3.1): the staff portal, the Administrator's
-// Training tab and the org-wide Learning & development view all read training through here.
+// The single source of training for every view (Stories 3.1 and 3.2): the staff portal, the
+// Administrator's Training tab and the org-wide Learning & development view all read training through
+// here. It is also the only caller of the LMS adapter (`lms-client`).
 //
-// Completed entries live in the Supabase `training_history` table (no department column: training
-// stays with the employee). In-progress entries are still served from the fixture
-// (`src/data/employees.ts`, `progress < 100`) until Story 3.2 replaces that source with the LMS
-// adapter; they are never copied into the table. RLS applies only to `training_history` reads; the
-// in-progress fixture entries are scoped by this store alone, from the session (role and employeeId).
+// - History (`listFor`): completed entries stored in the Supabase `training_history` table (no
+//   department column: training stays with the employee).
+// - Current (`currentFor`): LMS enrolments from `lms-client`, split into in-progress entries (the
+//   "Current" section) and courses the LMS reports as completed (appended to history, minus those
+//   already stored in `training_history`, so no course shows twice and none shows in both sections).
 //
-// Privacy rule: an entry is visible only to the employee and to Administrators. Every table query goes
-// through a per-request client carrying the signed-in user's JWT, so the RLS policies ("is this the
-// employee, or an Administrator" — never a department or manager lookup) are enforced on stored rows.
-// The scoping here is the store-level layer: staff reads are filtered to the session's own employee
-// (for fixture in-progress entries it is the only layer). There
-// is no write path (creating or editing training outside the LMS is deferred). This module never uses
-// the service role.
-export type TrainingEntry = Employee["training"][number] & { employeeId: string };
+// Nothing here reads the fixture (`src/data/employees.ts` is seed-only for training).
+//
+// Privacy rule: an entry is visible only to the employee and to Administrators. Every table query (here
+// and in the LMS stub) goes through a per-request client carrying the signed-in user's JWT, so the RLS
+// policies ("is this the employee, or an Administrator" — never a department or manager lookup) are
+// enforced. The scoping here is the store-level layer: staff reads are limited to the session's own
+// employee. There is no write path (creating or editing training outside the LMS is deferred). This
+// module never uses the service role.
+
+/** One training entry as views show it: `date` is the completion date, or the target date while in progress. */
+export type TrainingEntry = {
+  id: string; employeeId: string; name: string; provider: string; progress: number; date: string; result: string;
+};
+
+/**
+ * The LMS part of an employee's training, always resolved as a value: `unavailable` when the LMS (or the
+ * history read used to deduplicate) could not be reached. `asOf` is the oldest sync time across the
+ * employees read; `stale` is true when any of them is stale.
+ */
+export type CurrentTraining =
+  | {
+    status: "ok"; asOf: string; stale: boolean; inProgress: TrainingEntry[]; lmsCompleted: TrainingEntry[];
+    /** Each employee's own LMS freshness (per-employee views use it; the aggregate is for org-wide views). */
+    freshness: Record<string, { asOf: string; stale: boolean }>;
+  }
+  | { status: "unavailable" };
 
 export interface TrainingStore {
   /**
-   * Training the session may see: every employee's for an Administrator, only the session's own for
-   * staff. `employeeId` narrows the list to one employee (staff: only their own; anyone else's is `[]`).
-   * Completed entries come first (newest completion first), then in-progress entries in fixture order.
+   * Completed training the session may see, newest completion first: every employee's for an
+   * Administrator, only the session's own for staff. `employeeId` narrows the list to one employee
+   * (staff: only their own; anyone else's is `[]`).
    */
   listFor(session: SessionIdentity, employeeId?: string): Promise<TrainingEntry[]>;
+  /**
+   * LMS enrolments of the given employees: every id for an Administrator; for staff only their own id
+   * (any other id is dropped without an LMS call). One LMS call per employee, in parallel.
+   */
+  currentFor(session: SessionIdentity, employeeIds: string[]): Promise<CurrentTraining>;
 }
 
 /** The training database is unreachable or refused the query. Never treat this as "no training". */
@@ -44,6 +68,7 @@ export type TrainingRow = {
 
 const TABLE = "training_history";
 const COLUMNS = "id,employee_id,programme,provider,result,completed_on";
+const DEDUPE_COLUMNS = "employee_id,programme,provider";
 
 /** A stored entry is always complete: progress 100, dated by its completion date. */
 export function toTraining(row: TrainingRow): TrainingEntry {
@@ -54,13 +79,35 @@ export function toTraining(row: TrainingRow): TrainingEntry {
 }
 
 /**
- * In-progress entries (until Story 3.2): the fixture's entries below 100%, in fixture order. No RLS
- * applies here: callers must pass the scope derived from the session.
+ * An LMS enrolment as a training entry: in progress → its progress, dated by the target date, result
+ * "In progress"; completed → progress 100, dated by the completion date, with the LMS result.
  */
-export function fixtureInProgress(list: Employee[], employeeId?: string): TrainingEntry[] {
-  return list
-    .filter(e => employeeId === undefined || e.id === employeeId)
-    .flatMap(e => e.training.filter(t => t.progress < 100).map(t => ({ ...t, employeeId: e.id })));
+export function enrolmentToTraining(enrolment: Enrolment): TrainingEntry {
+  const base = { id: enrolment.id, employeeId: enrolment.employeeId, name: enrolment.programme, provider: enrolment.provider };
+  return enrolment.status === "in_progress"
+    ? { ...base, progress: enrolment.progress, date: enrolment.targetDate ?? "", result: "In progress" }
+    : { ...base, progress: 100, date: enrolment.completedOn ?? "", result: enrolment.result };
+}
+
+/** The identity of a course for one employee: trimmed, case-insensitive programme and provider. */
+export function courseKey(employeeId: string, programme: string, provider: string): string {
+  return [employeeId, programme.trim().toLowerCase(), provider.trim().toLowerCase()].join("\u0000");
+}
+
+/**
+ * The LMS-completed entries that are not already in stored history for the same employee (and not
+ * repeated among themselves), so each completed course shows once: the stored entry wins.
+ */
+export function dedupeLmsCompleted(
+  lmsCompleted: TrainingEntry[], stored: { employeeId: string; programme: string; provider: string }[],
+): TrainingEntry[] {
+  const seen = new Set(stored.map(s => courseKey(s.employeeId, s.programme, s.provider)));
+  return lmsCompleted.filter(entry => {
+    const key = courseKey(entry.employeeId, entry.name, entry.provider);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 type Result<T> = { data: T | null; error: unknown };
@@ -68,9 +115,13 @@ type Result<T> = { data: T | null; error: unknown };
 export type TrainingStoreClients = {
   /** Per-request client carrying the signed-in user's JWT (RLS enforced). Used for every query. */
   userClient: () => Promise<SupabaseClient>;
+  /** The LMS adapter (the only caller is this store). */
+  lms: Pick<LmsClient, "listCurrentEnrolments">;
+  /** The current time, used as `asOf` when no employee is read (injectable for tests). */
+  now?: () => Date;
 };
 
-export function createTrainingStore({ userClient }: TrainingStoreClients): TrainingStore {
+export function createTrainingStore({ userClient, lms, now = () => new Date() }: TrainingStoreClients): TrainingStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T> {
     let result: Result<T>;
     try {
@@ -97,10 +148,56 @@ export function createTrainingStore({ userClient }: TrainingStoreClients): Train
           .returns<TrainingRow[]>();
       });
       // Defence in depth: a staff session never receives another employee's rows.
-      const completed = rows.filter(r => scope === undefined || r.employee_id === scope).map(toTraining);
-      return [...completed, ...structuredClone(fixtureInProgress(fixture, scope))];
+      return rows.filter(r => scope === undefined || r.employee_id === scope).map(toTraining);
+    },
+
+    async currentFor(session, employeeIds) {
+      // Staff: only their own id, whatever was asked (other ids are dropped without an LMS call).
+      const ids = [...new Set(employeeIds)].filter(id => session.role === "admin" || id === session.employeeId);
+      if (ids.length === 0) return { status: "ok", asOf: now().toISOString(), stale: false, inProgress: [], lmsCompleted: [], freshness: {} };
+
+      let results: Awaited<ReturnType<LmsClient["listCurrentEnrolments"]>>[];
+      try {
+        results = await Promise.all(ids.map(id => lms.listCurrentEnrolments(id)));
+      } catch (error) {
+        if (error instanceof LmsUnavailableError) return { status: "unavailable" };
+        throw error;
+      }
+
+      // Defence in depth: only enrolments of the employees asked for (and in scope).
+      const enrolments = results.flatMap((result, i) => result.data.filter(e => e.employeeId === ids[i]));
+      const inProgress = enrolments.filter(e => e.status === "in_progress").map(enrolmentToTraining);
+      const completed = enrolments.filter(e => e.status === "completed").map(enrolmentToTraining);
+
+      let lmsCompleted: TrainingEntry[] = [];
+      if (completed.length > 0) {
+        const owners = [...new Set(completed.map(e => e.employeeId))];
+        let stored: { employee_id: string; programme: string; provider: string }[];
+        try {
+          stored = await run(t => t.select(DEDUPE_COLUMNS).in("employee_id", owners)
+            .returns<{ employee_id: string; programme: string; provider: string }[]>());
+        } catch (error) {
+          // Without stored history the split cannot be guaranteed: never risk showing a course twice.
+          if (error instanceof TrainingUnavailableError) return { status: "unavailable" };
+          throw error;
+        }
+        lmsCompleted = dedupeLmsCompleted(completed, stored.map(s => ({ employeeId: s.employee_id, programme: s.programme, provider: s.provider })));
+      }
+
+      // The oldest parseable asOf; an unparseable one can never be shown as fresh.
+      const times = results.map(r => Date.parse(r.asOf));
+      const valid = times.filter(t => !Number.isNaN(t));
+      const unparseable = valid.length < times.length;
+      return {
+        status: "ok",
+        asOf: valid.length > 0 ? new Date(Math.min(...valid)).toISOString() : results[0].asOf,
+        stale: unparseable || results.some(r => r.stale),
+        inProgress,
+        lmsCompleted,
+        freshness: Object.fromEntries(results.map((r, i) => [ids[i], { asOf: r.asOf, stale: r.stale || Number.isNaN(times[i]) }])),
+      };
     },
   };
 }
 
-export const trainingStore: TrainingStore = createTrainingStore({ userClient: getUserClient });
+export const trainingStore: TrainingStore = createTrainingStore({ userClient: getUserClient, lms: lmsClient });

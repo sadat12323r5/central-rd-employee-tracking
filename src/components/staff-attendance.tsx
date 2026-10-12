@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { Suspense, use, useActionState, useEffect, useState } from "react";
 import type { Employee } from "@/data/employees";
 import {
   WORK_MODES, entryStatus, formatDuration, todaysEntry, workedMinutes, summariseEntries, type TimesheetEntry,
@@ -9,6 +9,8 @@ import { formatDisplayDate } from "@/domain/dates";
 import { clockInAction, clockOutAction, saveLogAction, type ActionState } from "@/server/attendance-actions";
 import { addInterviewAction, updateInterviewAction, withdrawInterviewAction } from "@/server/interviews-actions";
 import { signOut } from "@/server/auth";
+import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
+import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -72,8 +74,48 @@ function InterviewEditor({ interview, withdrawAction, withdrawPending }: {
 }
 
 type TaskRow = { key: number; description: string; hours: string; link: string };
+type Training = Employee["training"][number];
 
-export default function StaffAttendance({ employee, entries, serverNow }: { employee: Employee; entries: TimesheetEntry[]; serverNow: string }) {
+/** Story 3.2: the employee's in-progress LMS enrolments (read with `use()` inside `<Suspense>`). */
+function CurrentEnrolments({ current, employeeId }: { current: Promise<CurrentTraining>; employeeId: string }) {
+  const result = use(current);
+  if (result.status === "unavailable") return <CurrentUnavailable history="Your completed training is still shown below." />;
+  const enrolments = result.inProgress.filter(t => t.employeeId === employeeId);
+  return <>
+    {result.stale && <StaleNote asOf={result.asOf} />}
+    {enrolments.length === 0 ? <p className="muted">No current enrolments.</p> : <div className="table-scroll"><table aria-label="Your current enrolments">
+      <thead><tr><th>Programme</th><th>Provider</th><th>Progress</th><th>Target date</th></tr></thead>
+      <tbody>{enrolments.map(t => <tr key={t.id}>
+        <td>{t.name}</td><td>{t.provider}</td>
+        <td><div className="progress-line"><progress value={t.progress} max={100} aria-label={`${t.name} progress`} /><small>{t.progress}%</small></div></td>
+        <td>{formatDisplayDate(t.date)}</td>
+      </tr>)}</tbody>
+    </table></div>}
+  </>;
+}
+
+/** Completed history: stored entries, then the LMS-completed ones (already deduplicated by training-store). */
+function CompletedTable({ entries }: { entries: (Training | TrainingEntry)[] }) {
+  if (entries.length === 0) return <p className="muted">You have no completed training on record yet.</p>;
+  return <div className="table-scroll"><table aria-label="Your completed training">
+    <thead><tr><th>Programme</th><th>Provider</th><th>Completed</th><th>Result</th></tr></thead>
+    <tbody>{entries.map(t => <tr key={t.id}>
+      <td>{t.name}</td><td>{t.provider}</td><td>{formatDisplayDate(t.date)}</td><td>{t.result}</td>
+    </tr>)}</tbody>
+  </table></div>;
+}
+
+function CompletedWithLms({ stored, current, employeeId }: { stored: Training[]; current: Promise<CurrentTraining>; employeeId: string }) {
+  const result = use(current);
+  const fromLms = result.status === "ok" ? result.lmsCompleted.filter(t => t.employeeId === employeeId) : [];
+  return <CompletedTable entries={[...stored, ...fromLms]} />;
+}
+
+export default function StaffAttendance({ employee, entries, serverNow, current }: {
+  employee: Employee; entries: TimesheetEntry[]; serverNow: string;
+  /** Story 3.2: LMS enrolments, streamed (always resolves; `unavailable` is a value). */
+  current: Promise<CurrentTraining>;
+}) {
   const [now, setNow] = useState(() => new Date(serverNow));
   const [inState, inAction, inPending] = useActionState(clockInAction, initial);
   const [outState, outAction, outPending] = useActionState(clockOutAction, initial);
@@ -87,8 +129,8 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
   const week = summariseEntries(entries.slice(0, 7), now);
   const activeInterviews = employee.interviews.filter(i => !i.withdrawn);
   const withdrawnInterviews = employee.interviews.filter(i => i.withdrawn);
-  // Story 3.1: completed entries only (newest completion first, as training-store returns them).
-  const completedTraining = employee.training.filter(t => t.progress === 100);
+  // Stored completed training (newest completion first, as training-store returns it); shown at once.
+  const completedTraining = employee.training;
 
   const [tasks, setTasks] = useState<TaskRow[]>(() =>
     today?.log?.tasks.length
@@ -218,15 +260,20 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
         </table></div>}
       </section>
 
+      <section className="panel staff-training" aria-labelledby="current-training-heading">
+        <h2 id="current-training-heading">Current enrolments</h2>
+        <p className="muted">Programmes you are enrolled in on the LMS and have not completed yet. Only you and the L&D Administrator can see them.</p>
+        <Suspense fallback={<CurrentLoading />}>
+          <CurrentEnrolments current={current} employeeId={employee.id} />
+        </Suspense>
+      </section>
+
       <section className="panel staff-training" aria-labelledby="completed-training-heading">
         <h2 id="completed-training-heading">Completed training</h2>
         <p className="muted">Programmes you have completed. Only you and the L&D Administrator can see them.</p>
-        {completedTraining.length === 0 ? <p className="muted">You have no completed training on record yet.</p> : <div className="table-scroll"><table aria-label="Your completed training">
-          <thead><tr><th>Programme</th><th>Provider</th><th>Completed</th><th>Result</th></tr></thead>
-          <tbody>{completedTraining.map(t => <tr key={t.id}>
-            <td>{t.name}</td><td>{t.provider}</td><td>{formatDisplayDate(t.date)}</td><td>{t.result}</td>
-          </tr>)}</tbody>
-        </table></div>}
+        <Suspense fallback={<CompletedTable entries={completedTraining} />}>
+          <CompletedWithLms stored={completedTraining} current={current} employeeId={employee.id} />
+        </Suspense>
       </section>
 
       <section className="panel staff-interviews" aria-labelledby="interviews-heading">

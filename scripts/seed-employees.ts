@@ -2,14 +2,15 @@
 // then the fixture's external interviews into `external_interviews` (Story 2.1) and its completed
 // training into `training_history` (Story 3.1), with the service-role client. Interview and training
 // ids are the fixture's deterministic ids (interviewSeedId, trainingSeedId), so re-running never adds
-// copies. In-progress training is never copied into the table (training-store serves it from the
-// fixture until Story 3.2). Other nested profile data stays in the fixture (read by employees-store);
-// the fixture's interviews and completed training are never read at runtime.
+// copies. In-progress training is never copied into `training_history`: it is inserted into the LMS
+// stub table `lms_stub_enrolments` (Story 3.2, ids from lmsStubSeedId), which the LMS adapter stub
+// reads. Other nested profile data stays in the fixture (read by employees-store); the fixture's
+// interviews and training are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
-  Employee, interviewSeedRows as InterviewSeedRows, trainingSeedRows as TrainingSeedRows,
+  Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
@@ -22,8 +23,9 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees, interviewSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
-  employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; trainingSeedRows: typeof TrainingSeedRows;
+const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+  employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
+  trainingSeedRows: typeof TrainingSeedRows;
 };
 
 const rows = employees.map(e => ({
@@ -61,3 +63,13 @@ if (training.error) {
   process.exit(1);
 }
 console.log(`Inserted ${training.data?.length ?? 0} new completed-training entries (existing ones left unchanged).`);
+
+// After the employees: lms_stub_enrolments.employee_id references employees (ON DELETE RESTRICT).
+// In-progress entries only; insert-only, so existing rows (and their synced_at) are left unchanged.
+const enrolments = await supabase.from("lms_stub_enrolments")
+  .upsert(lmsStubSeedRows(employees), { onConflict: "id", ignoreDuplicates: true }).select("id");
+if (enrolments.error) {
+  console.error(`Seeding LMS stub enrolments failed: ${enrolments.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${enrolments.data?.length ?? 0} new LMS stub enrolments (existing ones left unchanged).`);

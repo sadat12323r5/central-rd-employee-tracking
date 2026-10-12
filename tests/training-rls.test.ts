@@ -8,6 +8,7 @@
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createStubLmsClient } from "@/server/lms-client";
 import { createTrainingStore } from "@/server/training-store";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -28,6 +29,11 @@ const employee = (employee_id: string, email: string, auth_user_id: string | nul
   employee_id, name: `Training RLS ${employee_id}`, title: "Test", team: "Test", employment_type: "Permanent", email,
   joined_on: "2026-01-01", manager: "Test", office: "Test", status: "Available", initials: "TR",
   avatar_color: "mint", summary: "Throwaway row created by tests/training-rls.test.ts.", auth_user_id,
+});
+
+/** The store over one signed-in client (the LMS stub reads through the same JWT). */
+const storeAs = (client: SupabaseClient) => createTrainingStore({
+  userClient: async () => client, lms: createStubLmsClient({ userClient: async () => client }),
 });
 
 const trainingRow = (employee_id: string, extra: Record<string, unknown> = {}) => ({
@@ -98,9 +104,8 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
 
   it("lets staff read their own completed training through the store, newest completion first", async () => {
     const staff = await signedIn(staffEmail);
-    const list = await createTrainingStore({ userClient: async () => staff }).listFor({ role: "staff", employeeId: ownId });
-    // A throwaway employee has no fixture entry, so there is nothing in progress (fixture entries are
-    // scoped by the store from the session, not by RLS; RLS covers only the training_history rows).
+    const list = await storeAs(staff).listFor({ role: "staff", employeeId: ownId });
+    // Completed history only (in-progress enrolments come from the LMS through currentFor).
     expect(list).toEqual([
       { id: ownNewer.id, employeeId: ownId, name: ownNewer.programme, provider: "Test provider", progress: 100, date: "2026-09-01", result: "Completed" },
       { id: ownOlder.id, employeeId: ownId, name: ownOlder.programme, provider: "Test provider", progress: 100, date: "2025-03-15", result: "Completed" },
@@ -116,7 +121,7 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
     expect(all.error).toBeNull();
     expect(new Set((all.data ?? []).map(r => r.employee_id))).toEqual(new Set([ownId]));
     // Through the store, even as an admin-shaped query (RLS still scopes it to the JWT).
-    expect(await createTrainingStore({ userClient: async () => staff }).listFor({ role: "admin" }, otherId)).toEqual([]);
+    expect(await storeAs(staff).listFor({ role: "admin" }, otherId)).toEqual([]);
   });
 
   it("returns none of an employee's training to another staff member", async () => {
@@ -135,10 +140,10 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
 
   it("lets an admin read every employee's training", async () => {
     const admin = await signedIn(adminEmail);
-    const all = await createTrainingStore({ userClient: async () => admin }).listFor({ role: "admin" });
+    const all = await storeAs(admin).listFor({ role: "admin" });
     const ids = new Set(all.map(t => t.id));
     for (const row of [ownNewer, ownOlder, otherRow]) expect(ids.has(row.id)).toBe(true);
-    const one = await createTrainingStore({ userClient: async () => admin }).listFor({ role: "admin" }, otherId);
+    const one = await storeAs(admin).listFor({ role: "admin" }, otherId);
     expect(one.map(t => t.id)).toEqual([otherRow.id]);
   });
 

@@ -7,9 +7,11 @@
   skills: { name: string; level: number; evidence: string }[];
   history: { role: string; company: string; period: string; detail: string }[];
   /**
-   * Training (Story 3.1): read through training-store. Completed entries (`progress` 100, `date` = completion
-   * date) come from the `training_history` table, newest completion first; in-progress entries follow
-   * (`date` = target date).
+   * Stored completed training (Story 3.1, read through training-store from the `training_history` table):
+   * `progress` 100, `date` = completion date, newest completion first. LMS enrolments (in progress, and
+   * courses the LMS reports as completed) are not part of this list: they stream separately through
+   * `trainingStore.currentFor` (Story 3.2). In this fixture, which is seed-only for training, the entries
+   * below 100% (`date` = target date) are the seed for the LMS stub table.
    */
   training: { id: string; name: string; provider: string; progress: number; date: string; result: string }[];
   work: { project: string; role: string; allocation: number; update: string; commits: number; period: string };
@@ -58,6 +60,28 @@ export function trainingSeedRows(list: Employee[]) {
   return list.flatMap(e => e.training.filter(t => t.progress === 100).map(t => ({
     id: t.id, employee_id: e.id, programme: t.name, provider: t.provider, result: t.result, completed_on: t.date,
   })));
+}
+
+/**
+ * The deterministic `lms_stub_enrolments.id` of a fixture training entry, stable per employee and index
+ * (the same index as `trainingSeedId`), e.g. BS-1001 #1 -> 1a5b0000-0000-4000-8000-000010010001.
+ */
+export function lmsStubSeedId(employeeId: string, index: number): string {
+  const digits = /^BS-(\d{4})$/.exec(employeeId)?.[1];
+  if (!digits || !Number.isInteger(index) || index < 0 || index > 0xffff) throw new Error(`No LMS stub seed id for ${employeeId} #${index}.`);
+  return `1a5b0000-0000-4000-8000-0000${digits}${index.toString(16).padStart(4, "0")}`;
+}
+
+/**
+ * The `lms_stub_enrolments` rows `npm run db:seed` inserts (Story 3.2): in-progress fixture entries
+ * (`progress < 100`) only, as `in_progress` enrolments whose target date is the entry's date. Completed
+ * entries are never copied here (they are stored history). `synced_at` defaults to the insert time.
+ */
+export function lmsStubSeedRows(list: Employee[]) {
+  return list.flatMap(e => e.training.flatMap((t, index) => (t.progress < 100 ? [{
+    id: lmsStubSeedId(e.id, index), employee_id: e.id, programme: t.name, provider: t.provider,
+    status: "in_progress" as const, progress: t.progress, target_date: t.date,
+  }] : [])));
 }
 
 const people = [
