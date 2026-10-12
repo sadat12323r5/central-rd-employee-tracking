@@ -42,3 +42,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
   summary: Add-interview form (like the attendance forms) resets after a failed save in React 19; admin interviews list has no paging (max-rows 1000); no test asserts the empty-feedback callout is hidden.
   evidence: Low-severity items recorded in the spec's deferred list.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2-admin-workspace-contrast.md`
+  summary: The directory search box's only focus indicator (`--accent-focus-soft` #8891df) is 2.93:1 on white, below the 3:1 non-text minimum.
+  evidence: The colour was carried over unchanged in Story 6.2 because the spec keeps focus rings as they are. It belongs with the existing non-text contrast item (input borders).

@@ -1,10 +1,10 @@
 # Epic 6 Context: Colour-Contrast Remediation
 
-<!-- Compiled from planning artifacts. Edit freely. Regenerate with compile-epic-context if planning docs change. -->
+<!-- Generated from planning artifacts. Regenerate with compile-epic-context if planning docs change. -->
 
 ## Goal
 
-Make the whole workspace (sign-in page, administrator workspace, and staff portal) meet WCAG 2.2 AA colour contrast. This closes the one known, tracked accessibility gap against the workspace's stated WCAG 2.2 AA target. The work is a palette/token pass over the existing stylesheet. Today the stylesheet has about 106 distinct hard-coded colours, no shared colour variables, and the axe `color-contrast` rule switched off in both accessibility test files. The epic keeps the current look: colours that already pass are tokenised unchanged, so no design sign-off is needed. Each story fixes one area and switches the contrast check back on for it, so CI enforces each fix from the moment it lands.
+Make every part of the workspace meet WCAG 2.2 AA colour contrast, closing the one known accessibility gap. Today the global stylesheet holds about 106 distinct hard-coded colours with no shared colour variables, and both accessibility test files switch the axe `color-contrast` rule off. The epic adds a named-variable palette and fixes only the colours that fail, so the current look stays the same. It works one area at a time (sign-in, Administrator workspace, Staff portal) and turns the contrast check back on for each area as it is fixed, so CI enforces each fix from the moment it lands.
 
 ## Stories
 
@@ -14,28 +14,23 @@ Make the whole workspace (sign-in page, administrator workspace, and staff porta
 
 ## Requirements & Constraints
 
-- **Target:** WCAG 2.2 AA colour contrast. Every text/background pairing on a remediated screen must pass, with zero axe `color-contrast` failures.
-- **Known problem spots:** copy on the lavender panel of the sign-in page; muted secondary text, footer text, and status badges in the administrator workspace (dashboard, directory, open profile).
-- **Preserve the look:** colours that already pass become named CSS variables with their values carried over verbatim. Change only failing colours, and only as much as needed to pass.
-- **End state:** every colour in `src/app/styles.css` is a named variable, and no hard-coded colour values remain.
-- **Status must not rely on colour alone:** every status shown keeps a text label alongside its colour.
-- Existing accessibility baselines still apply: controls stay keyboard-operable, and dates stay in `D MMM YYYY` format. Don't regress these while restyling.
-- **Done means:** `npm run check` and `npm run test:e2e` pass with the contrast rule enabled for the area the story covers.
+- **Target:** WCAG 2.2 AA colour contrast for every text/background pairing, including copy on tinted panels (e.g. the lavender sign-in panel), muted secondary text, footer text and status badges.
+- **Keep the current look:** colours that already pass become named CSS variables with their values unchanged. Only failing colours change, and only as much as needed to pass. Because of this, no design sign-off is required.
+- **End state:** once the epic is done, `src/app/styles.css` has no hard-coded colour values left. Every colour is a named variable, including passing colours carried over verbatim. This makes the last story partly a mechanical tokenisation job, which is intended.
+- **Status is never colour alone:** every status indicator has a text label as well as its colour.
+- **Other accessibility rules still apply:** controls work with the keyboard alone, and dates render as `D MMM YYYY`. Remediation must not break either.
+- **CI enforcement:** each story re-enables the axe `color-contrast` rule for the scans of its area. The sign-in scan is in `tests/e2e/accessibility.spec.ts`; the Staff portal scan is in `tests/e2e/staff-attendance.spec.ts`. The rule must stay on after it is enabled.
+- **Done means:** `npm run check` and `npm run test:e2e` pass. The shared Definition of Done items about server actions, RLS and stores do not apply here, because this epic adds no server code or tables.
 
 ## Technical Decisions
 
-- This is CSS/token work only. It has no architectural, data, server, or persistence impact, and the general server-side rules (zod validation, stores, RLS) are irrelevant here.
-- All colours live in the single stylesheet `src/app/styles.css`. Introduce CSS custom properties (named variables) there, and touch the same file in all three stories. That overlap is intended.
-- Story 6.1 establishes the shared palette (the variable set and naming), and later stories extend it rather than starting a parallel one.
-- **Tokenisation scope:** non-failing colours become tokens verbatim, even if that means many variables. This resolves the tension between "keep the look" and "no hard-coded colours remain", and Story 6.3 may be a sizeable tokenisation job as a result.
-- **Enforcement through tests:**
-  - The sign-in and administrator-workspace scans live in `tests/e2e/accessibility.spec.ts`.
-  - The staff-portal scan lives in `tests/e2e/staff-attendance.spec.ts`.
-  - Each story removes the `color-contrast` rule exclusion for the area it covers.
+- This is CSS/token work only. It does not depend on any architecture decision and adds no stores, server actions, data model changes or new dependencies.
+- The shared palette is defined as CSS custom properties in the global stylesheet (`src/app/styles.css`). Story 6.1 creates it, and later stories extend it rather than starting a second palette.
+- Contrast is verified with the existing Playwright + axe accessibility scans (Playwright 1.63.0), not with a separate tool.
 
 ## Cross-Story Dependencies
 
-- 6.1 creates the shared palette that 6.2 and 6.3 build on, so do it first.
-- 6.3 carries the epic-wide "no hard-coded colour values remain" check, so it should land last.
-- The epic has no dependency on any other epic and can be sequenced anywhere.
-- Other epics that add UI (for example interviews, training, assignments, leave, editable records) add styles to the same stylesheet. Any colours they introduce should use the named variables so they don't reopen the gap.
+- Story 6.1 sets up the palette and its naming convention. Stories 6.2 and 6.3 reuse and extend it.
+- All three stories edit `src/app/styles.css` (expected), so run them in order to avoid conflicts.
+- Story 6.3 completes the "no hard-coded colours" end state, so it should go last.
+- This epic does not depend on any other epic and can be scheduled at any point. If other epics add UI before or alongside it, their new colours should use the palette variables.
