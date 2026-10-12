@@ -13,10 +13,16 @@ vi.mock("../src/server/employees-store", async importOriginal => {
     employeesStore: { getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn() },
   };
 });
+// Attendance is backed by an in-memory AttendanceStore so these tests stay offline (the Supabase store
+// is covered by attendance-store.test.ts and, against the shared project, attendance-rls.test.ts).
+vi.mock("../src/server/attendance-store", async importOriginal => {
+  const { createMemoryAttendanceStore } = await import("./support/memory-attendance-store");
+  return { ...(await importOriginal<typeof import("../src/server/attendance-store")>()), attendanceStore: createMemoryAttendanceStore() };
+});
 
 const { signIn, getSession, isSignedIn } = await import("../src/server/auth");
 const { clockInAction, clockOutAction, saveLogAction } = await import("../src/server/attendance-actions");
-const { attendanceStore } = await import("../src/server/attendance-store");
+const { attendanceStore, AttendanceUnavailableError } = await import("../src/server/attendance-store");
 
 const blank = { error: "", message: "" };
 const NADIA = { email: "nadia.rahman@example.com", password: "nadia-long-passphrase" };
@@ -81,5 +87,33 @@ describe("attendance actions", () => {
     expect(entry.breakMinutes).toBe(30);
     expect(entry.log?.tasks).toHaveLength(2);
     expect((await clockInAction(blank, form({ workMode: "Office" }))).error).toMatch(/already recorded/i);
+  });
+
+  it("says nothing was saved when attendance is unavailable, for every action", async () => {
+    await signIn(blank, form(NADIA));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const listSpy = vi.spyOn(attendanceStore, "listForEmployee").mockRejectedValue(new AttendanceUnavailableError());
+    try {
+      for (const result of [
+        await clockInAction(blank, form({ workMode: "Office" })),
+        await clockOutAction(blank, form({ breakMinutes: "0" })),
+        await saveLogAction(blank, form({ summary: "x", blockers: "", taskDescription: "x", taskHours: "1", taskLink: "" })),
+      ]) {
+        expect(result).toEqual({ error: "Attendance could not be reached, so nothing was saved. Please try again in a moment.", message: "" });
+      }
+    } finally {
+      listSpy.mockRestore();
+    }
+
+    const saveSpy = vi.spyOn(attendanceStore, "save").mockRejectedValue(new AttendanceUnavailableError());
+    try {
+      const result = await clockInAction(blank, form({ workMode: "Office" }));
+      expect(result.error).toMatch(/nothing was saved/);
+      expect(result.message).toBe("");
+    } finally {
+      saveSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+    expect(await attendanceStore.listAll()).toHaveLength(0);
   });
 });

@@ -40,7 +40,7 @@ development_status:
   1-2-administrator-signs-in-with-a-named-account: review
   1-3-administrator-provisions-a-staff-account: review
   1-4-administrator-archives-and-restores-an-account: backlog
-  1-5-staff-attendance-survives-restarts: in-progress
+  1-5-staff-attendance-survives-restarts: review
   epic-1-retrospective: optional
 
   epic-2: backlog

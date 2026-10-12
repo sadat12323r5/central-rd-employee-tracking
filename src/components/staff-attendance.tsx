@@ -166,7 +166,6 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
           })}</tbody>
         </table></div>}
       </section>
-      <p className="fine-print">Demonstration records are kept in server memory and reset when the server restarts.</p>
     </div>
   </main>;
 }

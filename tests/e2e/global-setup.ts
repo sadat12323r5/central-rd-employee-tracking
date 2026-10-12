@@ -7,7 +7,7 @@ import { serviceClient } from "./supabase-admin";
 // - an Administrator (E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD);
 // - three throwaway employees (BS-98nn, team/title "E2E Throwaway"): two linked to Staff users
 //   (E2E_STAFF_1_* / E2E_STAFF_2_*), one left unlinked for the provisioning spec (E2E_STAFF_UNLINKED_*).
-// global-teardown.ts deletes all of them. Leftovers of an aborted run (older than two hours) are swept first.
+// global-teardown.ts deletes all of them (their attendance entries first). Leftovers of an aborted run (older than two hours) are swept first.
 // Staff users are created directly through the service role here (test setup is the AD-6 exception).
 
 export const STAFF_EMAIL_PREFIX = "e2e-staff-";
@@ -31,6 +31,18 @@ export async function deleteUsersByPrefix(service: SupabaseClient, prefix: strin
   for (const id of doomed) await service.auth.admin.deleteUser(id);
 }
 
+/** Postgres / PostgREST "table does not exist" codes, returned until the attendance migration is applied. */
+const SCHEMA_MISSING = new Set(["42P01", "PGRST205"]);
+
+/**
+ * Deletes the attendance entries of the given (throwaway) employees, which must go before the
+ * employees themselves. A missing attendance table (migration not yet applied) means there is nothing to delete.
+ */
+export async function deleteAttendanceFor(service: SupabaseClient, employeeIds: string[]) {
+  const { error } = await service.from("attendance_entries").delete().in("employee_id", employeeIds);
+  if (error && !SCHEMA_MISSING.has(error.code)) throw new Error(`Could not delete throwaway attendance entries: ${error.message}`);
+}
+
 const throwawayRow = (employee_id: string, name: string, email: string) => ({
   employee_id, name, title: "E2E Throwaway", team: "E2E Throwaway", employment_type: "Permanent", email,
   joined_on: "2026-01-01", manager: "E2E", office: "E2E", status: "Available", initials: "ET",
@@ -46,8 +58,15 @@ export default async function globalSetup() {
   const staleBefore = new Date(Date.now() - STALE_AFTER_MS);
   await deleteUsersByPrefix(service, STAFF_EMAIL_PREFIX, staleBefore);
   await deleteUsersByPrefix(service, ADMIN_EMAIL_PREFIX, staleBefore);
-  const swept = await service.from("employees").delete().like("employee_id", THROWAWAY_ID_PATTERN).lt("created_at", staleBefore.toISOString());
-  if (swept.error) throw new Error(`Could not sweep throwaway employees: ${swept.error.message}`);
+  const stale = await service.from("employees").select("employee_id").like("employee_id", THROWAWAY_ID_PATTERN).lt("created_at", staleBefore.toISOString());
+  if (stale.error) throw new Error(`Could not list stale throwaway employees: ${stale.error.message}`);
+  const staleIds = (stale.data ?? []).map(r => r.employee_id as string);
+  if (staleIds.length) {
+    // Attendance first: attendance_entries.employee_id is ON DELETE RESTRICT.
+    await deleteAttendanceFor(service, staleIds);
+    const swept = await service.from("employees").delete().in("employee_id", staleIds);
+    if (swept.error) throw new Error(`Could not sweep throwaway employees: ${swept.error.message}`);
+  }
 
   const email = `${ADMIN_EMAIL_PREFIX}${runId}@example.test`;
   const password = `E2e-${randomBytes(18).toString("base64url")}`;

@@ -27,3 +27,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
   summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
   evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-staff-attendance-survives-restarts.md`
+  summary: Attendance lists (`listForEmployee`, `listAll`) have no limit or paging; PostgREST max-rows (default 1000) would silently truncate them.
+  evidence: Needs ~4 years of one employee's entries, and `listAll` has no app caller yet. Story 5.4 (attendance views use real data) should add a date window or paging.
