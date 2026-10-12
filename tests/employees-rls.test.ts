@@ -127,7 +127,9 @@ describe.skipIf(!configured)("employees RLS (shared Supabase project)", () => {
 
   it("does not let a signed-in user change archived_at directly", async () => {
     for (const client of [await signedIn(staffEmail), await signedIn(adminEmail)]) {
-      await client.from("employees").update({ archived_at: new Date().toISOString() }).eq("employee_id", ownId);
+      const { data: changed, error } = await client.from("employees").update({ archived_at: new Date().toISOString() }).eq("employee_id", ownId).select("employee_id");
+      // No update policy: the write is refused or matches no rows.
+      expect(error !== null || (changed ?? []).length === 0).toBe(true);
     }
     const { data } = await service.from("employees").select("archived_at").eq("employee_id", ownId).single();
     expect(data?.archived_at).toBeNull();

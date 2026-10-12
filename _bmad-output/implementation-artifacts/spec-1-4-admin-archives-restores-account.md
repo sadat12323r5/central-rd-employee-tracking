@@ -2,7 +2,7 @@
 title: 'Story 1.4 — Administrator archives and restores an account'
 type: 'feature'
 created: '2026-10-08'
-status: 'blocked'
+status: 'done'
 baseline_revision: '9e7b8162b33ad0289f514e94b63554fb08b333f6'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -10,7 +10,26 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-1-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-1-3-admin-provisions-staff-account.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Archiving ends access in the app but not at the database; an archived Staff member with a still-valid token can read their own employee row via PostgREST.
+    evidence: |-
+      No auth ban/sign-out on archive and the staff own-row RLS does not test archived_at. Fixes are a DESTRUCTIVE policy change or ban/unban in archive()/restore(); needs a decision. Exposure is the person's own data only.
+    location: >-
+      supabase/migrations/20261008000000_archive_and_audit.sql
+    severity: medium
+  - summary: >-
+      audit_events has no read path or index, and test runs leave audit rows for reused throwaway ids.
+    evidence: |-
+      Service-role-only by design; reviewing it today means the SQL editor.
+    severity: low
+  - summary: >-
+      An archived employee without an account can still be provisioned, creating an account that can never sign in.
+    evidence: |-
+      StaffAccountPanel renders on archived profiles and accounts-store.create() does not read archived_at.
+    location: >-
+      src/server/accounts-store.ts
+    severity: low
 ---
 
 <intent-contract>
@@ -106,6 +125,40 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-12 — Review pass (after the migration was applied)
+- verdicts: 30 findings — high 0, medium 2, low 24, false 4, maybe-false 0
+- findings:
+  - `medium` `defer` (blind) Archive does not cut database access for a still-valid token — deferred: fix needs a DESTRUCTIVE policy change or auth ban, a decision for a human; own data only.
+  - `medium` `patch` (blind) "On your radar" rows open employees[0]/[2] of the active-only list, so the wrong person or undefined once someone is archived — rows now look up BS-1001/BS-1003 and hide when archived.
+  - `false` `reject` (blind) Administrator accounts cannot be archived — the intent states Administrator accounts have no employee row; out of scope by intent.
+  - `low` `reject` (blind) Panel stays stale on an "already archived" conflict — needs two Administrators acting at once; a reload fixes it; the fix adds a branch.
+  - `low` `reject` (blind) No confirmation before archiving — the intent does not call for one, and restore undoes it.
+  - `low` `defer` (blind) Archived employees can still be provisioned — deferred.
+  - `low` `reject` (blind) Success message says sign-in ended for an employee with no account — wording only; needs the account state in the action.
+  - `low` `patch` (blind) Tracking files say blocked while docs say done — sprint-status now `review`, blocked entries removed from deferred-work, the superseded Story 1.5 stub spec removed (#16 carries the real one).
+  - `low` `defer` (blind) Audit log has no read path or index — deferred.
+  - `low` `patch` (blind) Live test name claims a truncate check — renamed; truncate is covered by the trigger and revoke, which PostgREST cannot reach.
+  - `low` `defer` (blind) Audit rows pile up for reused test ids — grouped with the audit-log deferral.
+  - `low` `reject` (blind) One extra DB read per Staff request — the intent requires the check on every request.
+  - `low` `reject` (blind) Team filter lists archived teams; the archived view exports archived rows — the export follows the visible list deliberately; cosmetic.
+  - `low` `patch` (blind) ARCHITECTURE.md trust-boundary sentence lost its commas — fixed.
+  - `low` `patch` (blind) Direct-update RLS test ignored the update result — now asserts an error or zero rows.
+  - `low` `reject` (blind) No portal test for revalidation after archive — e2e `archive-account.spec.ts` covers it and passes live.
+  - `low` `patch` (blind) Odd line break in the playwright.config.ts comment — reflowed.
+  - `low` `reject` (edge) Panel state on AccountStateError — same as the blind finding.
+  - `low` `reject` (edge) Local archived state vs refreshed props — the e2e header/panel flow passes; a stale state needs a concurrent change.
+  - `medium` `patch` (edge) Radar rows wrong person — same fix as above.
+  - `low` `defer` (edge) Provisioning archived employees — same as above.
+  - `low` `reject` (edge) Message for an employee with no account — same as above.
+  - `false` `reject` (edge) Admin linked to an employee row keeps access after archive — Administrator accounts are never linked to employee rows (provisioning only links Staff).
+  - `low` `patch` (verification-gap) No test that archived employees are excluded from the Learning/Attendance views and stats — added a portal test (Learning in progress stat, both sections, radar rows).
+  - `low` `patch` (verification-gap other) Radar rows — same fix.
+  - `low` `patch` (verification-gap other) Tracking files contradict — same fix.
+  - `false` `reject` (intent a/b/h) DB guarantees exercised only through fakes — the migration is now applied: the live accounts-store, employees-rls and e2e archive suites pass (318 unit, 15 e2e).
+  - `low` `reject` (intent c) Actions call getActor() rather than getSession() — the same admin check; getSession wraps getActor.
+  - `low` `reject` (intent d/e) Archived hidden everywhere, not only the three named surfaces; the "Show" select has an accessible name rather than visible text — the broad reading is consistent with "hidden from the default directory"; the label is accessible.
+  - `false` `reject` (intent g) Permission-denied rpc errors show as "unavailable" — only a misapplied grant produces it, and the live grant tests pass.
+
 ## Design Notes
 
 **Why a Postgres function.** PostgREST runs each request in its own transaction, so two client calls (update, then insert) cannot be atomic. One `rpc()` is one transaction, which the AC requires.
@@ -135,3 +188,11 @@ Blocking condition: implementation verification failed. The additive migration `
 **To unblock:** apply the migration (`npm run db:push` from a machine that can reach the database, or run the SQL in the Supabase SQL editor). Then run `npm run check` and `npm run test:e2e`, and run the step-04 review (re-dispatch this spec after setting its status to `in-review`).
 
 **Deploy-order risk:** this code reads `employees.archived_at` on every Administrator directory load and every Staff request. Deployed before the migration, the directory shows "unavailable" and Staff sessions end. Apply the migration first.
+
+### Auto Run Result (2026-10-12 follow-up run)
+
+Status: done
+
+The migration `20261008000000_archive_and_audit.sql` was applied to the shared project by a human (`employees.archived_at` and `audit_events` answer over REST). Verification now passes in full: `npm run typecheck` clean, `npm test` 318/318 passed (including the live archive/restore, audit and RLS tests), `npm run build` succeeds, `npm run test:e2e` 15/15 passed (including `archive-account.spec.ts`).
+
+Review: 4-layer review run on the full diff since `9e7b816`. Patched: radar rows look up their employees by id (medium), a new portal test for archived exclusion from Learning/Attendance/radar, stricter direct-update RLS test, truncate test renamed, ARCHITECTURE.md and playwright.config.ts comment fixes, tracking files updated (story to `review`, stale blocked entries removed, superseded Story 1.5 stub spec removed). Deferred: database-level cut-off of archived tokens (medium; needs a destructive policy change or an auth ban, a human decision), audit-log read path, provisioning archived employees. 16 rejected with reasons in the triage log. Follow-up review recommended: false (patched: 0 high, 1 medium, 6 low).

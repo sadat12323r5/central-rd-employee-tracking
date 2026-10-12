@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 
@@ -200,6 +200,21 @@ describe("Portal archived employees (Story 1.4)", () => {
     expect(screen.getAllByText("Archived").length).toBeGreaterThanOrEqual(2); // header and Account access panel
     expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restore employee" })).toBeInTheDocument();
+  });
+
+  it("leaves archived employees out of the Learning, Attendance and radar views", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={withArchived} />);
+    const learning = screen.getByText("Learning in progress").closest("article")!;
+    const activeLearning = active.flatMap(e => e.training).filter(t => t.progress < 100).length;
+    expect(learning).toHaveTextContent(String(activeLearning).padStart(2, "0"));
+    expect(screen.queryByRole("button", { name: /Meera's learning check-in/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Nadia's technical interview/ })).toBeInTheDocument();
+    for (const section of ["Learning & development", "Attendance & leave"]) {
+      await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: section }));
+      expect(screen.queryByText("Meera Das")).not.toBeInTheDocument();
+      expect(screen.queryByText("Tanvir Alam")).not.toBeInTheDocument();
+    }
   });
 
   it("offers Archive on an active employee's profile, with no Archived label", async () => {

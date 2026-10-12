@@ -584,7 +584,7 @@ describe.skipIf(!(url && anonKey && serviceKey))("archive and restore against th
     expect(await auditFor(created.user!.id)).toEqual([]);
   }, 60_000);
 
-  it("refuses to update, delete or truncate audit rows, even with the service role", async () => {
+  it("refuses to update or delete audit rows, even with the service role (truncate is blocked by a trigger and a revoke, not reachable through PostgREST)", async () => {
     const [first] = await auditFor(actor);
     expect(first).toBeDefined();
     const updated = await service.from("audit_events").update({ action: "restore" }).eq("id", first.id);
