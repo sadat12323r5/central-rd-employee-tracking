@@ -47,7 +47,7 @@ function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
 }
 
 const interview = (employeeId: string, id: string, extra: Partial<ExternalInterview> = {}): ExternalInterview => ({
-  id, employeeId, company: `Company ${id}`, role: "Engineer", date: "2026-10-01", stage: "Screening", outcome: "", feedback: "", ...extra,
+  id, employeeId, company: `Company ${id}`, role: "Engineer", date: "2026-10-01", stage: "Screening", outcome: "", feedback: "", withdrawn: false, ...extra,
 });
 const stored = [interview("BS-1001", "i-1"), interview("BS-1002", "i-2"), interview("BS-1001", "i-3")];
 
@@ -109,6 +109,13 @@ describe("employees-store data", () => {
       ...fixture.find(e => e.id === "BS-1001"), hasAccount: false,
       interviews: [withoutEmployee(stored[0]), withoutEmployee(stored[2])],
     });
+  });
+
+  it("passes withdrawn entries through unchanged, flagged (Story 2.2: views split active from history)", async () => {
+    const { client } = fakeClient(seeded);
+    const rows = [interview("BS-1001", "i-1"), interview("BS-1001", "i-w", { withdrawn: true })];
+    const employee = await createEmployeesStore(both(client, fakeInterviews(rows).store)).getFor(admin, "BS-1001");
+    expect(employee?.interviews.map(i => [i.id, i.withdrawn])).toEqual([["i-1", false], ["i-w", true]]);
   });
 
   it("never reads interviews from the fixture", async () => {

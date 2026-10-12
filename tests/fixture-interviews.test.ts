@@ -41,6 +41,11 @@ describe("fixture interviews as seed rows", () => {
     expect(nadia.feedback.length).toBeGreaterThan(0);
   });
 
+  it("are all active (not withdrawn); seed rows leave withdrawn_at to the column default", () => {
+    for (const { interview } of all) expect(interview.withdrawn).toBe(false);
+    for (const row of interviewSeedRows(employees)) expect(row).not.toHaveProperty("withdrawn_at");
+  });
+
   it("refuses ids it cannot derive", () => {
     expect(() => interviewSeedId("1001", 0)).toThrow();
     expect(() => interviewSeedId("BS-1001", -1)).toThrow();

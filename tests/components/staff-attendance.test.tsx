@@ -8,8 +8,10 @@ vi.mock("@/server/auth", () => ({ signOut: () => {} }));
 vi.mock("@/server/attendance-actions", () => ({
   clockInAction: vi.fn(), clockOutAction: vi.fn(), saveLogAction: vi.fn(),
 }));
-const { addInterviewAction } = vi.hoisted(() => ({ addInterviewAction: vi.fn() }));
-vi.mock("@/server/interviews-actions", () => ({ addInterviewAction }));
+const { addInterviewAction, updateInterviewAction, withdrawInterviewAction } = vi.hoisted(() => ({
+  addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn(),
+}));
+vi.mock("@/server/interviews-actions", () => ({ addInterviewAction, updateInterviewAction, withdrawInterviewAction }));
 
 import StaffAttendance from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
@@ -53,24 +55,27 @@ describe("StaffAttendance", () => {
 });
 
 describe("StaffAttendance external interviews", () => {
-  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now)); addInterviewAction.mockReset(); });
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now));
+    addInterviewAction.mockReset(); updateInterviewAction.mockReset(); withdrawInterviewAction.mockReset();
+  });
   afterEach(() => { vi.useRealTimers(); });
 
   const reported = {
     ...employee,
     interviews: [
-      { id: "i-2", company: "Orbit Analytics", role: "AI Engineer", date: "2026-10-20", stage: "Recruiter screen", outcome: "", feedback: "" },
-      { id: "i-1", company: "Northstar Labs (fictional)", role: "Software Engineer I", date: "2026-09-23", stage: "Technical interview", outcome: "Scheduled", feedback: "Prepare." },
+      { id: "i-2", company: "Orbit Analytics", role: "AI Engineer", date: "2026-10-20", stage: "Recruiter screen", outcome: "", feedback: "", withdrawn: false },
+      { id: "i-1", company: "Northstar Labs (fictional)", role: "Software Engineer I", date: "2026-09-23", stage: "Technical interview", outcome: "Scheduled", feedback: "Prepare.", withdrawn: false },
     ],
   };
 
-  it("lists the employee's own interviews with company, role, date, stage and a text outcome", async () => {
+  it("lists the employee's own interviews with company, role, date, stage, a text outcome and feedback", async () => {
     const { container } = render(<StaffAttendance employee={reported} entries={[]} serverNow={now} />);
     const table = screen.getByRole("table", { name: "Your external interviews" });
-    const rows = within(table).getAllByRole("row").slice(1).map(r => within(r).getAllByRole("cell").map(c => c.textContent));
+    const rows = within(table).getAllByRole("row").slice(1).map(r => within(r).getAllByRole("cell").slice(0, 6).map(c => c.textContent));
     expect(rows).toEqual([
-      ["Orbit Analytics", "AI Engineer", "20 Oct 2026", "Recruiter screen", "No outcome yet"],
-      ["Northstar Labs (fictional)", "Software Engineer I", "23 Sep 2026", "Technical interview", "Scheduled"],
+      ["Orbit Analytics", "AI Engineer", "20 Oct 2026", "Recruiter screen", "No outcome yet", "—"],
+      ["Northstar Labs (fictional)", "Software Engineer I", "23 Sep 2026", "Technical interview", "Scheduled", "Prepare."],
     ]);
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -117,5 +122,94 @@ describe("StaffAttendance external interviews", () => {
     await user.type(screen.getByRole("textbox", { name: "Stage" }), "Screen");
     await user.click(screen.getByRole("button", { name: "Add interview" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/nothing was saved/);
+  });
+});
+
+describe("StaffAttendance interview updates and withdrawal (Story 2.2)", () => {
+  beforeEach(() => { updateInterviewAction.mockReset(); withdrawInterviewAction.mockReset(); });
+
+  const active = { id: "i-1", company: "Northstar Labs (fictional)", role: "Software Engineer I", date: "2026-09-23", stage: "Technical interview", outcome: "Scheduled", feedback: "Prepare.", withdrawn: false };
+  const gone = { id: "i-0", company: "Mistake Corp", role: "Wrong role", date: "2026-09-01", stage: "Recruiter screen", outcome: "", feedback: "", withdrawn: true };
+  const both = { ...employee, interviews: [active, gone] };
+
+  it("offers only stage, outcome and feedback for an active entry, prefilled, plus withdraw", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<StaffAttendance employee={both} entries={[]} serverNow={now} />);
+    await user.click(screen.getByText("Update", { selector: "summary" }));
+    const stage = screen.getByRole("textbox", { name: "Stage · Northstar Labs (fictional)" });
+    expect(stage).toHaveValue("Technical interview");
+    expect(stage).toBeRequired();
+    expect(screen.getByRole("textbox", { name: "Outcome (optional) · Northstar Labs (fictional)" })).toHaveValue("Scheduled");
+    expect(screen.getByRole("textbox", { name: "Feedback (optional) · Northstar Labs (fictional)" })).toHaveValue("Prepare.");
+    // Locked fields are never offered for editing after creation.
+    const editor = container.querySelector("details.staff-interview-editor")!;
+    for (const name of ["company", "role", "date"]) expect(editor.querySelector(`[name="${name}"]`)).toBeNull();
+    expect(screen.getByRole("button", { name: /^Withdraw interview: Northstar Labs/ })).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("submits only id, stage, outcome and feedback to the update action and shows its message", async () => {
+    updateInterviewAction.mockResolvedValue({ error: "", message: "Interview updated." });
+    const user = userEvent.setup();
+    render(<StaffAttendance employee={both} entries={[]} serverNow={now} />);
+    await user.click(screen.getByText("Update", { selector: "summary" }));
+    const stage = screen.getByRole("textbox", { name: "Stage · Northstar Labs (fictional)" });
+    await user.clear(stage);
+    await user.type(stage, "Offer stage");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Interview updated.")).toBeInTheDocument();
+    const submitted = Object.fromEntries(updateInterviewAction.mock.calls[0][1] as FormData);
+    expect(submitted).toEqual({ id: "i-1", stage: "Offer stage", outcome: "Scheduled", feedback: "Prepare." });
+  });
+
+  it("shows an update refusal as an alert", async () => {
+    updateInterviewAction.mockResolvedValue({ error: "That interview was not found, or it is not yours, so nothing was saved.", message: "" });
+    const user = userEvent.setup();
+    render(<StaffAttendance employee={both} entries={[]} serverNow={now} />);
+    await user.click(screen.getByText("Update", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not yours/);
+  });
+
+  it("submits the entry id to the withdraw action and shows its message", async () => {
+    withdrawInterviewAction.mockResolvedValue({ error: "", message: "Interview withdrawn." });
+    const user = userEvent.setup();
+    render(<StaffAttendance employee={both} entries={[]} serverNow={now} />);
+    await user.click(screen.getByText("Update", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: /^Withdraw interview: Northstar Labs/ }));
+    expect(await screen.findByText("Interview withdrawn.")).toBeInTheDocument();
+    expect(Object.fromEntries(withdrawInterviewAction.mock.calls[0][1] as FormData)).toEqual({ id: "i-1" });
+  });
+
+  it("keeps the withdraw message once the entry has moved to the Withdrawn history (its editor unmounts)", async () => {
+    withdrawInterviewAction.mockResolvedValue({ error: "", message: "Interview withdrawn." });
+    const user = userEvent.setup();
+    const { rerender } = render(<StaffAttendance employee={both} entries={[]} serverNow={now} />);
+    await user.click(screen.getByText("Update", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: /^Withdraw interview: Northstar Labs/ }));
+    expect(await screen.findByText("Interview withdrawn.")).toBeInTheDocument();
+    // What revalidatePath delivers: the same entry, now withdrawn.
+    rerender(<StaffAttendance employee={{ ...employee, interviews: [{ ...active, withdrawn: true }, gone] }} entries={[]} serverNow={now} />);
+    expect(screen.queryByRole("table", { name: "Your external interviews" })).not.toBeInTheDocument();
+    expect(screen.getByText("Interview withdrawn.")).toBeInTheDocument();
+  });
+
+  it("keeps withdrawn entries out of the active table, in a Withdrawn history without controls", () => {
+    render(<StaffAttendance employee={both} entries={[]} serverNow={now} />);
+    const table = screen.getByRole("table", { name: "Your external interviews" });
+    expect(within(table).queryByText("Mistake Corp")).not.toBeInTheDocument();
+    const history = screen.getByRole("list", { name: "Withdrawn (history)" });
+    const item = within(history).getByRole("listitem");
+    expect(item).toHaveTextContent("Withdrawn");
+    expect(item).toHaveTextContent("Mistake Corp");
+    expect(within(item).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(item).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("says there are no active interviews when every entry is withdrawn", () => {
+    render(<StaffAttendance employee={{ ...employee, interviews: [gone] }} entries={[]} serverNow={now} />);
+    expect(screen.getByText("You have no active external interviews.")).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Your external interviews" })).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Withdrawn (history)" })).toBeInTheDocument();
   });
 });

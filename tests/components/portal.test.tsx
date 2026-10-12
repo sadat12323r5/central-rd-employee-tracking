@@ -159,7 +159,7 @@ describe("Portal employee profile", () => {
 });
 
 describe("Portal external interviews", () => {
-  const added = { id: "7d2f3c1a-0000-4000-8000-000000000001", company: "Orbit Analytics", role: "AI Engineer", date: "2026-10-20", stage: "Recruiter screen", outcome: "", feedback: "" };
+  const added = { id: "7d2f3c1a-0000-4000-8000-000000000001", company: "Orbit Analytics", role: "AI Engineer", date: "2026-10-20", stage: "Recruiter screen", outcome: "", feedback: "", withdrawn: false };
   // Two interviews at the same company would have collided on the old company-based keys.
   const withNew = employees.map(e => (e.id === "BS-1003" ? { ...e, interviews: [added, { ...added, id: "7d2f3c1a-0000-4000-8000-000000000002", date: "2026-10-01" }] } : e));
 
@@ -199,3 +199,59 @@ describe("Portal external interviews", () => {
   });
 });
 
+describe("Portal withdrawn interviews (Story 2.2)", () => {
+  // Nadia's fixture interview (Northstar, "Scheduled") is withdrawn; a corrected entry was added afterwards.
+  const nadia = employees[0];
+  const withdrawnOne = { ...nadia.interviews[0], withdrawn: true };
+  const corrected = { ...nadia.interviews[0], id: "7d2f3c1a-0000-4000-8000-0000000000aa", company: "Northstar Labs Ltd (fictional)", outcome: "Awaiting feedback", withdrawn: false };
+  const withWithdrawn = employees.map(e => (e.id === nadia.id ? { ...e, interviews: [corrected, withdrawnOne] } : e));
+  const onlyWithdrawn = employees.map(e => (e.id === nadia.id ? { ...e, interviews: [withdrawnOne] } : e));
+
+  const upcoming = () => screen.getByText("Upcoming interviews").closest("article")!.querySelector("strong")!.textContent;
+
+  it("leaves a withdrawn entry out of the Upcoming interviews stat", () => {
+    const { unmount } = render(<Portal employees={employees} />);
+    expect(upcoming()).toBe("01");
+    unmount();
+    render(<Portal employees={onlyWithdrawn} />);
+    expect(upcoming()).toBe("00");
+  });
+
+  it("leaves a withdrawn entry out of Interviews & placements", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={withWithdrawn} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Interviews & placements" }));
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(employees.flatMap(e => e.interviews).length);
+    expect(screen.queryByText("Northstar Labs (fictional)")).not.toBeInTheDocument();
+    expect(screen.getByText("Northstar Labs Ltd (fictional)")).toBeInTheDocument();
+  });
+
+  it("shows the withdrawn entry only in the profile's Withdrawn history, labelled, with no edit controls", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Portal employees={withWithdrawn} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Interviews" }));
+    const panel = screen.getByRole("tabpanel");
+    const history = within(panel).getByRole("region", { name: "Withdrawn (history)" });
+    expect(within(history).getByRole("heading", { name: "Northstar Labs (fictional)" })).toBeInTheDocument();
+    expect(within(history).getByText("Withdrawn")).toBeInTheDocument();
+    // The active list holds only the corrected entry.
+    const headings = within(panel).getAllByRole("heading", { level: 3 }).map(h => h.textContent);
+    expect(headings.filter(h => h === "Northstar Labs Ltd (fictional)")).toHaveLength(1);
+    expect(headings.filter(h => h === "Northstar Labs (fictional)")).toHaveLength(1);
+    // Administrator is read-only: nothing to edit or withdraw.
+    expect(within(panel).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /withdraw|update|edit|save/i })).not.toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("says there are no active interviews when every entry is withdrawn, and still shows the history", async () => {
+    const user = userEvent.setup();
+    render(<Portal employees={onlyWithdrawn} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Interviews" }));
+    expect(screen.getByText("This employee has no active external interviews.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Withdrawn (history)" })).toBeInTheDocument();
+  });
+});

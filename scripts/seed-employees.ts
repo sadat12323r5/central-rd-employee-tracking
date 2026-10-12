@@ -36,9 +36,12 @@ console.log(`Upserted ${data?.length ?? 0} employees.`);
 
 // After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
 const interviewRows = interviewSeedRows(employees);
-const interviews = await supabase.from("external_interviews").upsert(interviewRows, { onConflict: "id" }).select("id");
+// Insert-only: existing interview rows are never updated, so staff edits (stage, outcome, feedback) and
+// withdrawals survive a re-seed (a withdrawn row can never change: the guard trigger refuses it).
+const interviews = await supabase.from("external_interviews")
+  .upsert(interviewRows, { onConflict: "id", ignoreDuplicates: true }).select("id");
 if (interviews.error) {
   console.error(`Seeding interviews failed: ${interviews.error.message}`);
   process.exit(1);
 }
-console.log(`Upserted ${interviews.data?.length ?? 0} external interviews.`);
+console.log(`Inserted ${interviews.data?.length ?? 0} new external interviews (existing ones left unchanged).`);
