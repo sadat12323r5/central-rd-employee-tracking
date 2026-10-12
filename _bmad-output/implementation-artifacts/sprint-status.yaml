@@ -43,8 +43,8 @@ development_status:
   1-5-staff-attendance-survives-restarts: review
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-staff-adds-an-external-interview: backlog
+  epic-2: in-progress
+  2-1-staff-adds-an-external-interview: in-progress
   2-2-staff-updates-or-withdraws-an-interview: backlog
   epic-2-retrospective: optional
 
