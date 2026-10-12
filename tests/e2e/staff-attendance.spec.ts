@@ -2,14 +2,12 @@ import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { e2eStaff, signIn } from "./staff";
 
-// color-contrast stays excluded until Story 6.3 fixes the staff portal's palette
-// (Epic 6). The sign-in page already enforces it, in accessibility.spec.ts.
 async function accessibilityScan(page: Page) {
   // Server Actions here revalidate the page in place; React briefly detaches and
   // reattaches the hoisted <title> node while patching in the fresh RSC payload.
   // Wait past that gap rather than scanning mid-transition.
   await page.waitForFunction(() => document.title.length > 0);
-  return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).disableRules(["color-contrast"]).analyze();
+  return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).analyze();
 }
 
 // Records live in server memory, so this uses a throwaway Staff account no other spec signs in as
@@ -39,6 +37,9 @@ test("a staff member clocks in, writes a daily log and clocks out", async ({ pag
   await page.getByRole("button", { name: "Clock out" }).click();
   await expect(page.getByRole("cell", { name: "Completed" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "1 task" })).toBeVisible();
+
+  results = await accessibilityScan(page);
+  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
 });
 
 // A different account from the test above, which completes its account's entry for today.

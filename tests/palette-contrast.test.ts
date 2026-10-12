@@ -94,6 +94,16 @@ const pairings: [fg: string, bg: string, minimum: number, where: string][] = [
   ["--text-empty-heading", "--surface", TEXT, "empty state heading"],
   ["--success-ink", "--success-surface", TEXT, "success notice"],
   ["--rating-fill", "--rating-track", LARGE_OR_NON_TEXT, "filled against empty skill-rating segment"],
+
+  // Staff portal (Story 6.3): the status message renders on white panels and could sit on the
+  // page background, so it is checked on both.
+  ["--success-status", "--surface", TEXT, "staff status message on white"],
+  ["--success-status", "--background", TEXT, "staff status message on the page background"],
+  // The selected work-mode label (a mode is checked by default), pinned here as well as scanned.
+  ["--accent-selected-text", "--accent-selected", TEXT, "selected work-mode label"],
+  // --text-fine-print is shared with the Administrator workspace (white panels); it was darkened
+  // because the Staff portal renders its fine print directly on the page background.
+  ["--text-fine-print", "--background", TEXT, "staff portal fine print on the page background"],
 ];
 
 describe("palette contrast (WCAG 2.2 AA)", () => {
