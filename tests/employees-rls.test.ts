@@ -123,7 +123,7 @@ describe.skipIf(!configured)("employees RLS (shared Supabase project)", () => {
     }
     const { data } = await service.from("employees").select("employee_id,archived_at").in("employee_id", [ownId, otherId]).order("employee_id");
     expect(data).toEqual([{ employee_id: ownId, archived_at: null }, { employee_id: otherId, archived_at: null }]);
-  });
+  }, 30_000);
 
   it("does not let a signed-in user change archived_at directly", async () => {
     for (const client of [await signedIn(staffEmail), await signedIn(adminEmail)]) {
@@ -133,7 +133,7 @@ describe.skipIf(!configured)("employees RLS (shared Supabase project)", () => {
     }
     const { data } = await service.from("employees").select("archived_at").eq("employee_id", ownId).single();
     expect(data?.archived_at).toBeNull();
-  });
+  }, 30_000);
 
   it("does not let a signed-in user read or write audit_events", async () => {
     for (const client of [await signedIn(staffEmail), await signedIn(adminEmail), createClient(url!, anonKey!, noSession)]) {
@@ -142,5 +142,5 @@ describe.skipIf(!configured)("employees RLS (shared Supabase project)", () => {
       const { error } = await client.from("audit_events").insert({ actor: userIds[0], target: ownId, action: "archive" });
       expect(error).not.toBeNull();
     }
-  });
+  }, 30_000);
 });
