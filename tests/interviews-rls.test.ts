@@ -189,7 +189,7 @@ describe.skipIf(!configured)("external interviews RLS (shared Supabase project)"
     })).rejects.toBeInstanceOf(InterviewNotFoundError);
     const { data } = await service.from("external_interviews").select("stage").eq("id", otherRow.id).single();
     expect(data).toEqual({ stage: otherRow.stage });
-  });
+  }, 30_000);
 
   it("refuses changes to company, role or date for the author and the service role (trigger)", async () => {
     // Fail on the missing Story 2.2 schema before writing anything: without the trigger the service-role
@@ -233,7 +233,7 @@ describe.skipIf(!configured)("external interviews RLS (shared Supabase project)"
     const admin = await signedIn(adminEmail);
     const seen = (await createInterviewsStore({ userClient: async () => admin }).listFor({ role: "admin" }, ownId)).find(i => i.id === withdrawRow.id);
     expect(seen?.withdrawn).toBe(true);
-  });
+  }, 30_000);
 
   it("stamps withdrawn_at with the database time, ignoring an author-supplied value", async () => {
     const row = interviewRow(ownId, { stage: "Backdated withdraw" });
@@ -256,7 +256,7 @@ describe.skipIf(!configured)("external interviews RLS (shared Supabase project)"
     }
     const { data } = await service.from("external_interviews").select("id").in("id", [ownRow.id, otherRow.id, withdrawRow.id]);
     expect(data).toHaveLength(3);
-  });
+  }, 30_000);
 
   it("surfaces a refused store write as unavailable, never as saved", async () => {
     const staff = await signedIn(staffEmail);

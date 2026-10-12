@@ -169,7 +169,7 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
     }
     const { data } = await service.from("training_history").select("id").in("employee_id", employeeIds);
     expect(data).toHaveLength(3);
-  });
+  }, 30_000);
 
   it("updates nothing for any signed-in role", async () => {
     for (const email of allSignedIn()) {
@@ -179,7 +179,7 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
     }
     const { data } = await service.from("training_history").select("result").in("employee_id", employeeIds);
     expect((data ?? []).map(r => r.result)).toEqual(["Completed", "Completed", "Completed"]);
-  });
+  }, 30_000);
 
   it("deletes nothing for any signed-in role", async () => {
     for (const email of allSignedIn()) {
@@ -189,5 +189,5 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
     }
     const { data } = await service.from("training_history").select("id").in("id", [ownNewer.id, ownOlder.id, otherRow.id]);
     expect(data).toHaveLength(3);
-  });
+  }, 30_000);
 });
