@@ -86,7 +86,7 @@ describe.skipIf(!configured)("external interviews RLS (shared Supabase project)"
       employee(otherId, `rls-int-other-row-${run}@example.com`, otherUserId),
     ]);
     if (error) throw new Error(`Could not insert test employees: ${error.message}`);
-    const seeded = await service.from("external_interviews").insert([ownRow, otherRow, withdrawRow]);
+    const seeded = await service.from("external_interviews").insert([ownRow, otherRow, withdrawRow], { defaultToNull: false });
     if (seeded.error) throw new Error(`Could not insert test interviews (${seeded.error.code}): ${seeded.error.message}`);
   }, 30_000);
 
