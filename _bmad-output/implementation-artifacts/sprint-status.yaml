@@ -55,7 +55,7 @@ development_status:
 
   # 8-1 and 8-2 depend only on Epic 1, so they are built before Epic 4 (System Owner priority, 2026-10-13)
   8-1-administrator-downloads-one-employee-s-activity-timeline: review
-  8-2-administrator-bulk-exports-every-employee-s-activity: backlog
+  8-2-administrator-bulk-exports-every-employee-s-activity: in-progress
 
   epic-4: backlog
   4-1-administrator-manages-the-department-list: backlog
