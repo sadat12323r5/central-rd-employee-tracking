@@ -90,7 +90,7 @@ describe.skipIf(!configured)("LMS stub enrolments RLS (shared Supabase project)"
       employee(otherId, `rls-lms-other-row-${run}@example.com`, otherUserId),
     ]);
     if (error) throw new Error(`Could not insert test employees: ${error.message}`);
-    const seeded = await service.from(TABLE).insert([ownInProgress, ownCompleted, otherRow]);
+    const seeded = await service.from(TABLE).insert([ownInProgress, ownCompleted, otherRow], { defaultToNull: false });
     if (seeded.error) throw new Error(`Could not insert test enrolments (${seeded.error.code}): ${seeded.error.message}`);
   }, 30_000);
 
