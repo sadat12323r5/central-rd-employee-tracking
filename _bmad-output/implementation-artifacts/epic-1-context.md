@@ -4,7 +4,7 @@
 
 ## Goal
 
-Replace the shared demo credentials and the fixture/in-memory data with named, Administrator-provisioned Supabase Auth accounts and Supabase Postgres persistence protected by Row-Level Security. Administrators and Staff then sign in as accountable individuals, and everything they enter survives a restart. Auth and persistence together are the release gate: until both land, the workspace must not hold real employee data under any configuration. Every other roadmap epic except colour-contrast remediation depends on this one. Employee records move first because sign-in, provisioning and archiving all need them.
+Replace the single shared demo credential and the compiled fixture and in-memory stores with named, individually provisioned Supabase Auth accounts and Supabase Postgres persistence protected by Row-Level Security. Administrators and Staff each sign in with their own account, and everything they enter survives a restart. This is the production release gate. Auth and persistence must land together before the workspace can hold real employee data, and every other roadmap epic except colour-contrast work depends on it. Employee records move first because sign-in, provisioning, and archiving all depend on them.
 
 ## Stories
 
@@ -16,50 +16,43 @@ Replace the shared demo credentials and the fixture/in-memory data with named, A
 
 ## Requirements & Constraints
 
-- **No self-registration, anywhere.** Administrators provision every account, Administrator and Staff alike. The only exception is a one-time seed script with no runtime route, which creates the first Administrator. Seed steps for demo accounts are not runtime routes either.
-- **Staff credential delivery (decided 2026-10-06):** the Administrator sets an initial password when creating a Staff account and passes it on outside the app. There is no invite or magic-link email, because the shared project has no SMTP and the default mailer is rate-limited. A forced password change at first sign-in is out of scope.
-- **Provisioning rules:** one account per employee; a second one is rejected with a validation error. A Staff session calling provisioning, archive or restore directly is rejected at the server, not only hidden in the UI.
-- **Archive, never delete.** Archiving ends access on the account's next request, keeps all history, hides the employee from the default directory (an "archived" filter still shows them), and is reversible by restoring. Each archive or restore writes a minimal audit record. Staff can never archive or restore any account, including their own. An Administrator cannot archive their own account.
-- **Failed sign-in** shows one generic "incorrect" message that doesn't say which field was wrong. Archived accounts get the same message. Once Supabase auth is configured, the old `DEMO_ADMIN_*` credentials and the shared `DEMO_STAFF_PASSWORD` are rejected.
-- **Secrets** come only from environment configuration and are never hard-coded or committed. Demo account credentials are never shown on the sign-in page or in the repo.
-- **Network failure is visible.** When the database is unreachable, reads show a clear error, loading or unavailable state, never an empty or partial list. A write is never shown as saved when it wasn't.
-- **Uniqueness:** database constraints enforce unique Employee ID and primary email.
-- **Settled configuration:** the org timezone is `Asia/Dhaka` and records are kept indefinitely.
-- The "all data is fictional" banner stays until real data is loaded. Removing it is a System Owner decision, not part of any story.
-- **Definition of Done for every story:** zod validation in each new server action; both a store-level check and an RLS policy on each new table; own-record identity taken from the session, never from form data; no hard-delete paths; a matching `tests/*.test.ts` for each new `src/server`/`src/domain` module, with every acceptance criterion tested; `npm run check` and `npm run test:e2e` pass.
+- **Release gate:** the build must never be exposed with real employee data until named accounts and per-record authorization both exist. Until real data is loaded, the "all data is fictional" banner stays. Removing it is a System Owner decision and is not part of any story.
+- **No self-registration anywhere.** Every account (Administrator or Staff) is created by an Administrator. The one sanctioned exception is a one-time seed script that creates the first Administrator. It has no runtime route.
+- **Accounts are archived, never deleted or deactivated.** Archiving ends access on the very next request, keeps all history, hides the employee from the default directory (they stay reachable through an "archived" filter), and is reversible through restore. Staff can never archive any account, including their own. An Administrator cannot archive their own account.
+- **Sign-in failures** show one generic "incorrect" message that never reveals which field was wrong. The same message applies to archived accounts.
+- **Uniqueness:** Employee ID and primary email must be enforced by database constraints.
+- **Unavailable dependencies:** every network-dependent read shows a clear error, stale, or loading state. It must never show an empty or partial list, or present failed data as saved or fresh. This applies to the directory, profiles, and attendance.
+- **Secrets:** Supabase keys and any credentials are read only from environment configuration, never hard-coded or committed. The old `DEMO_*` credentials stop working as each story replaces them.
+- **Definition of Done (every story):** zod validation in every new server action before any store call. Every new table has both a store-level check and an RLS policy, and neither substitutes for the other. Staff own-record identity comes from the session, never from form data. No hard-delete paths. Every new `src/domain/*` or `src/server/*` module has a matching `tests/*.test.ts`, and every acceptance criterion is covered by an automated test. `npm run check` and `npm run test:e2e` pass.
+- **Approved settings:** the org timezone is `Asia/Dhaka` for date validation and display. Records are retained indefinitely. Dates display as `D MMM YYYY`, and status is always shown with a text label as well as colour.
 
 ## Technical Decisions
 
-- **Layering:** `src/domain/` stays pure. `src/server/` holds store interfaces and implementations, following the shape of `AttendanceStore`. The UI never imports fixtures or the database directly. A not-found read returns `null`; validation and authorization failures throw typed errors.
-- **Stores in this epic:** `employees-store.ts` and `accounts-store.ts`. `auth.ts` must not import `src/data/employees.ts` directly. Nested profile data (skills, employment history, evaluation, attendance summary) stays fixture-backed behind `employees-store` for this epic.
-- **Role scoping and RLS:** an `admin` may read any employee; a `staff` caller reads only its own session's `employeeId`. In RLS, `admin` is recognised by the role in Supabase `app_metadata`, and `staff` matches rows where `employees.auth_user_id = auth.uid()`.
-- **Staged move off the service-role client:** Story 1.1 read employees through the server-only service-role client, with scoping enforced in the app layer, because requests still carried the HMAC demo session. Story 1.2 moved only Administrators to Supabase Auth. **Story 1.3 carries over the rest:** link `employees.auth_user_id` when an account is created, switch staff reads and the sign-in lookup to the per-request JWT client so RLS is enforced, and retire the HMAC staff cookie. Seeded rows have `auth_user_id` NULL until linked, so the staff RLS policy matches no one before then.
-- **Accounts (one path for each operation):** `accounts-store.create()` is the only way to create an account (seed scripts included). `archive()` and `restore()` are the only archive and restore paths, and each writes its audit row in the same transaction. Check archive status on every request instead of relying on token expiry.
-- **Demo and test Staff accounts (decided 2026-10-06):** a seed step creates one real demo Staff account linked to a fictional seeded employee, with its email and password taken from environment variables. CI and e2e provision their own throwaway Staff account through the service role.
-- **Audit table:** `audit_events` is append-only (actor, target, action, server timestamp), and no code path may update or delete its rows. Only this minimal form is decided.
-- **Session:** Supabase Auth replaces the HMAC cookie. The session stays a discriminated union by role (`admin`, `manager`, `staff`). `manager` is derived fresh on each request and only becomes real in Epic 4. An Administrator is always `admin`. The admin/staff routing in `page.tsx` is unchanged.
-- **Attendance:** the `AttendanceStore` interface stays the same while its implementation moves from in-memory to Supabase, and the existing tests must still pass.
-- **Environments:** one shared, hosted, free-tier Supabase project serves local dev, Vercel Previews and the demo. That is acceptable only while all data is fictional; production gets its own project before real data. There is no local Docker.
-- **Migrations:** forward-only SQL in `supabase/migrations/`, applied with the pinned Supabase CLI. A story's migration is applied to the shared project only after its PR is approved.
-- **RLS tests:** Vitest integration tests sign in as each role against the shared project, using dedicated test accounts and rows the test creates and removes itself (never the seeded demo employees). They run with `npm test` when Supabase credentials are present.
-- **Secrets:** `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set in Vercel (Preview and Production) and in `.env.local`. `SUPABASE_SERVICE_ROLE_KEY` is server-only and used only by seed scripts, test provisioning and Administrator-only server actions such as provisioning. The `DEMO_*` variables are retired by the end of Story 1.3.
-- **Cutover:** staged, one story at a time in story order. The demo credentials keep working until the story that replaces them.
-- **Conventions:** dates are ISO 8601 strings at rest. Employee IDs match `^BS-\d{4}$`. Server actions return `ActionState` (`{ error, message }`). File names are kebab-case.
-
-## UX & Interaction Patterns
-
-- Existing directory, profile and portal views render as before against persisted data.
-- The directory hides archived employees by default, with an "archived" filter to show them.
-- A signed-in Staff member sees only their own portal and cannot reach the Administrator portal.
-- Database-unreachable states are explicit messages, never blank or partial lists.
-- Keep keyboard operability, text labels alongside colour for status, and `D MMM YYYY` dates.
+- **Layering (hexagonal, horizontal):** `src/domain/` is pure and imports nothing from the framework or database. `src/server/` holds both the store interfaces and their implementations. `src/data/` holds raw storage only. `src/app` and `src/components` form the UI. Do not create feature folders.
+- **Store pattern:** every entity is accessed through a store in `src/server/` with the same shape as the existing `AttendanceStore`. A "not found" read returns `null`. Validation and authorization failures throw a typed error. Scoping depends on role: Administrator queries can read any employee, while Staff queries can read only the session's own `employeeId`. Invariants are enforced at the store layer, which is the load-bearing point.
+- **`employees-store.ts`** replaces every direct fixture import. In particular, `auth.ts` must stop importing `src/data/employees.ts`. Nested profile data (skills, employment history, evaluation summary, attendance summary) keeps coming from the fixture behind the store until a later story moves it, and callers see no change.
+- **`accounts-store.ts`** is the only path for account creation (`create()`), archiving (`archive()`), and restoring (`restore()`). Any other action that needs an account must call `create()` rather than build one inline. Each archive or restore writes one `audit_events` row in the same transaction.
+- **`audit_events`** is append-only (actor, target, action, server timestamp). No code path may update or delete its rows. It is created in Story 1.4 and reused later for department transfers.
+- **Sessions:** the session is a discriminated union by role. Today that is `admin` or `staff` with `employeeId`. The existing admin/staff routing in `page.tsx` stays unchanged. A `manager` role arrives in Epic 4 and is computed fresh on every request, so do not build anything that blocks it.
+- **Staff provisioning (System Owner decisions):**
+  - The Administrator sets the initial password and passes it on outside the app. There are no invite or magic-link emails, because the project has no SMTP, and no forced password change.
+  - Creating an account links `employees.auth_user_id`.
+  - Staff reads and the sign-in lookup move from the service-role client to the per-request JWT client.
+  - The HMAC staff cookie and the shared `DEMO_STAFF_PASSWORD` are retired.
+  - A seed step creates one demo Staff account linked to a fictional employee. Its credentials come from environment variables and are never shown on the sign-in page or in the repo.
+- **Attendance:** the store's implementation moves from in-memory to Supabase, and the `AttendanceStore` interface does not change. Staff see only their own entries and Administrators see everyone's, enforced by RLS.
+- **Server actions** return the `{ error, message }` `ActionState` shape. Dates are stored as ISO 8601 strings. Employee IDs must match `^BS-\d{4}$`.
+- **Environment:**
+  - One shared free-tier Supabase project serves local development, Vercel previews, and the demo. This is acceptable only while all data is fictional.
+  - Migrations are forward-only SQL in `supabase/migrations/`, applied with the Supabase CLI. Pin the CLI version in devDependencies. A migration is applied to the shared project only after its PR is approved.
+  - RLS is tested with Vitest integration tests that sign in as each role, using dedicated test accounts and rows the tests create and then clean up. Never use seeded demo employees. These tests run under `npm test` when Supabase credentials are present.
+  - Environment variables: `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. `SUPABASE_SERVICE_ROLE_KEY` is server-only and used only by seed scripts, Administrator-only actions, and CI/e2e provisioning.
+- **Stack:** Next.js 15.5.26, React 19.3, TypeScript 5.9.3, @supabase/supabase-js 2.117.2, @supabase/ssr 0.12.7, zod 4.6.5, Vitest 3.2.7, Playwright 1.63.0.
 
 ## Cross-Story Dependencies
 
-- **Before any story:** the shared Supabase project exists, with its keys in `.env.local` and Vercel.
-- **Story 1.1** creates `employees-store`, the employees table and the RLS foundation.
-- **Story 1.2** adds `accounts-store.create()`, the first-Administrator seed and Administrator sign-in via Supabase Auth.
-- **Story 1.3** builds on `accounts-store` and finishes the staff cutover: `auth_user_id` linking, JWT-client staff reads and sign-in lookup, HMAC staff cookie retired, demo Staff seed and e2e throwaway accounts.
-- **Story 1.4** builds on `accounts-store` and creates `audit_events`, which Epic 4 later reuses for department transfers and manager archiving.
-- **Story 1.5** needs the Staff session identity and `auth_user_id` linking from Story 1.3 for its RLS.
-- **Later epics:** this epic gates Epics 2–5 and 7. Epic 4 adds the `manager` role and subtree-scoped RLS on the employees and attendance tables built here.
+- Stories are cut over one at a time, in order (1.1 → 1.5). Each merges on its own, and the demo credentials keep working until the story that replaces them lands.
+- Story 1.1 provides the employees table and `employees-store`, which 1.2–1.4 depend on. Until Story 1.3 provisions real Staff, it uses a seeded test auth user.
+- Story 1.2 introduces `accounts-store.create()` and the first-Administrator seed. Story 1.3 reuses `create()` for Staff, and Story 1.4 adds `archive()` and `restore()`.
+- Story 1.3 carries over leftover work from 1.1 and 1.2: linking `auth_user_id`, moving to the JWT client, and retiring the HMAC cookie.
+- Epics 2–5 and 7 all depend on this epic. Epic 4 will extend archive and restore rights to Department Managers for their own subtree, and will add the `manager` session role.

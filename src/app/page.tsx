@@ -2,7 +2,7 @@ import Login from "@/components/login";
 import Portal from "@/components/portal";
 import StaffAttendance from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
-import { attendanceStore } from "@/server/attendance-store";
+import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +25,10 @@ export default async function Home() {
       console.error("Employee records unavailable.", error, { cause: error.cause });
       return <EmployeesUnavailable />;
     }
+    if (error instanceof AttendanceUnavailableError) {
+      console.error("Attendance unavailable.", error, { cause: error.cause });
+      return <AttendanceUnavailable />;
+    }
     throw error;
   }
 }
@@ -35,6 +39,17 @@ function EmployeesUnavailable() {
       <div className="panel empty" role="alert">
         <h1>Employee records are unavailable</h1>
         <p>The employee database could not be reached, so no records are shown. Please refresh the page in a moment.</p>
+      </div>
+    </main>
+  );
+}
+
+function AttendanceUnavailable() {
+  return (
+    <main className="content">
+      <div className="panel empty" role="alert">
+        <h1>Attendance is unavailable</h1>
+        <p>Your attendance records could not be reached, so none are shown. Please refresh the page in a moment.</p>
       </div>
     </main>
   );

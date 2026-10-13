@@ -19,7 +19,7 @@ Copy `.env.example` to `.env.local` and fill in the Supabase values (see [Deploy
 On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`.
 
 ## What works now
-Staff attendance: Staff sign in with their own provisioned account. Staff clock in and out in Dhaka time, record breaks and work mode, write a daily log of tasks, hours and links, and see recent days. Staff sessions cannot open the manager portal. Records are held in server memory (src/server/attendance-store.ts), reset on restart, and are not persisted on Vercel.
+Staff attendance: Staff sign in with their own provisioned account. Staff clock in and out in Dhaka time, record breaks and work mode, write a daily log of tasks, hours and links, and see recent days. Staff sessions cannot open the manager portal. Records are stored in the Supabase `attendance_entries` table (src/server/attendance-store.ts) under RLS: staff read only their own entries and can create or change only today's (Dhaka) entry, Administrators read all, and nobody deletes.
 
 
 - Administrator sign-in with a named Supabase Auth account (8-hour session, no self-registration), and sign-out.

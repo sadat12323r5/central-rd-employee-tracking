@@ -27,7 +27,7 @@ Employee basic details live in the Supabase `employees` table behind `src/server
 3. Accounts are created only through `accounts-store.create()`: by the seed scripts, and by `provisionStaffAccountAction`, which checks for an Administrator session at the server before anything else. A Staff account gets the employee's own primary email and `app_metadata.employee_id`, and `employees.auth_user_id` is linked conditionally (compensated by deleting the new user on failure). There is no sign-up route, form, invite or `auth.signUp` call, and sign-ups are disabled in Supabase Auth.
 4. A wrong password, an unknown email, a valid Supabase user without a recognised role and a Staff user whose own employee row is not visible through RLS all get the same generic message. The retired `DEMO_ADMIN_*` credentials, the shared staff password and any old HMAC demo cookie are rejected or ignored.
 5. Supabase keys come only from environment variables; the service-role key is server-only.
-6. The only application write path is Staff provisioning (above). Attendance records are held in server memory until Story 1.5.
+6. The application write paths are Staff provisioning (above) and Staff attendance (Story 1.5). Attendance entries live in the Supabase `attendance_entries` table behind `src/server/attendance-store.ts`, written through the user's JWT client: RLS lets staff read only entries of the employee linked to their auth user (`employees.auth_user_id`) and insert or update only that employee's entry for today (Dhaka date), lets Administrators read all, and has no delete policy. The staff employee id always comes from the session, never the form.
 
 ## Current data model
 

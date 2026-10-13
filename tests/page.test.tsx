@@ -2,10 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor, loginProps } = vi.hoisted(() => ({ getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn() }));
+const { getSession, listFor, getFor, loginProps, listForEmployee } = vi.hoisted(() => ({
+  getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), listForEmployee: vi.fn(async () => [] as unknown[]),
+}));
 
 vi.mock("@/server/auth", () => ({ getSession }));
-vi.mock("@/server/attendance-store", () => ({ attendanceStore: { listForEmployee: vi.fn(async () => []) } }));
+vi.mock("@/server/attendance-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/server/attendance-store")>()),
+  attendanceStore: { listForEmployee },
+}));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
   employeesStore: { listFor, getFor },
@@ -17,10 +22,13 @@ vi.mock("@/components/login", () => ({
   },
 }));
 vi.mock("@/components/portal", () => ({ default: () => <p>Employee directory</p> }));
-vi.mock("@/components/staff-attendance", () => ({ default: () => <p>Staff portal</p> }));
+vi.mock("@/components/staff-attendance", () => ({
+  default: ({ entries }: { entries: unknown[] }) => <><p>Staff portal</p><table aria-label="Recent days"><tbody>{entries.map((_, i) => <tr key={i}><td>entry</td></tr>)}</tbody></table></>,
+}));
 
 const { default: Home } = await import("@/app/page");
 const { EmployeesUnavailableError } = await import("@/server/employees-store");
+const { AttendanceUnavailableError } = await import("@/server/attendance-store");
 
 describe("Home when employee records are unavailable", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -88,5 +96,31 @@ describe("Home routing by role", () => {
     listFor.mockResolvedValue([]);
     render(await Home());
     expect(screen.getByText("Employee directory")).toBeInTheDocument();
+  });
+});
+
+describe("Home when attendance is unavailable", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(async () => {
+    const { employees } = await import("@/data/employees");
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
+    listForEmployee.mockRejectedValue(new AttendanceUnavailableError());
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    listForEmployee.mockReset();
+    listForEmployee.mockResolvedValue([]);
+  });
+
+  it("shows the attendance alert instead of the staff portal and no entries table", async () => {
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/attendance is unavailable/i);
+    expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sign-in form/)).not.toBeInTheDocument();
+    expect(listForEmployee).toHaveBeenCalledWith("BS-1003");
+    expect(errorSpy).toHaveBeenCalled();
   });
 });
