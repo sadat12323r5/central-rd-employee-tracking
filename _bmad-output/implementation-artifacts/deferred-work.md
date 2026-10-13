@@ -30,7 +30,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-staff-attendance-survives-restarts.md`
   summary: Attendance lists (`listForEmployee`, `listAll`) have no limit or paging; PostgREST max-rows (default 1000) would silently truncate them.
   evidence: Needs ~4 years of one employee's entries, and `listAll` has no app caller yet. Story 5.4 (attendance views use real data) should add a date window or paging.
-<<<<<<< HEAD
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
   summary: Staff sign-in, the staff page and the Administrator directory fail as a whole when the interviews read fails (employees-store merges interviews).
   evidence: Both tables share one database, so in practice only an unapplied migration splits them; DEPLOYMENT.md documents the deploy order. Decoupling the sign-in check from the interviews read needs a new store method.
@@ -43,8 +42,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
   summary: Add-interview form (like the attendance forms) resets after a failed save in React 19; admin interviews list has no paging (max-rows 1000); no test asserts the empty-feedback callout is hidden.
   evidence: Low-severity items recorded in the spec's deferred list.
-=======
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-2-admin-workspace-contrast.md`
   summary: The directory search box's only focus indicator (`--accent-focus-soft` #8891df) is 2.93:1 on white, below the 3:1 non-text minimum.
   evidence: The colour was carried over unchanged in Story 6.2 because the spec keeps focus rings as they are. It belongs with the existing non-text contrast item (input borders).
->>>>>>> story/1-5-staff-attendance
