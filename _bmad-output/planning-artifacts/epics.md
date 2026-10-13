@@ -112,7 +112,12 @@ Every user gets a workspace that actually meets WCAG 2.2 AA colour contrast, clo
 Administrators (and Department Managers within their own department) add new employees — placed in a department from the start — and maintain basic details, employment history, skills, and the evaluation summary; employees edit their own employment history.
 **Covers:** PRD §4.5, SRS 11.3 (partly — see Epic 7's deferrals). Depends on Epic 1 (persistence) and Epic 4 (departments, manager authority).
 
-**Dependency flow:** Epic 1 gates Epics 2–5 and 7; Epic 4 gates Epics 5 and 7; Epic 6 is independent.
+### Epic 8: Employee Activity Export
+*Added 2026-10-13 at the System Owner's request.*
+Administrators, and Department Managers within their own department, download a CSV timeline of everything recorded about an employee in a chosen period: attendance and work logs, interviews, training, LMS enrolments and, once their epics land, assignments (placements), evaluations and leave. It works for one employee or for everyone in scope.
+**Covers:** System Owner request 2026-10-13 (extends the directory CSV export, FR-1). Depends on Epic 1 (8.1, 8.2), Epic 4 (8.3, 8.4) and Epic 5 (8.4).
+
+**Dependency flow:** Epic 1 gates Epics 2–5, 7 and 8; Epic 4 gates Epics 5, 7 and the manager and assignment parts of Epic 8; Epic 6 is independent.
 
 ## Definition of Done (applies to every story)
 
@@ -1011,3 +1016,136 @@ So that readiness decisions are based on current, written-down assessments.
 **Given** the existing demo skills and evaluation data
 **When** this story ships
 **Then** it is moved into the database, and skills and the evaluation summary are no longer read from `src/data/employees.ts`
+
+## Epic 8: Employee Activity Export
+
+*Added 2026-10-13 at the System Owner's request.* An authorized manager downloads a CSV of everything recorded about an employee in a chosen time period, for one employee or for everyone in scope. "Authorized manager" means the Administrator for anyone, or a Department Manager for employees in their own department subtree (Epic 4). Staff cannot export, not even their own record.
+
+**System Owner decisions (2026-10-13):**
+- **Who:** the Administrator and Department Managers within their own department. No Staff export.
+- **Format:** one **timeline CSV**, with one row per recorded event sorted by date, then time. Columns, in order: `employee_id, employee_name, date, type, title, details, status`. `type` is one of `attendance`, `interview`, `training`, `enrolment`, `assignment`, `evaluation`, `leave`.
+  - Encoded as UTF-8 with a BOM, so Excel opens it correctly.
+  - Fields are quoted as the directory export already does.
+  - Any cell starting with `=`, `+`, `-` or `@` is prefixed with `'` (CSV injection guard).
+- **Periods:**
+  - **This week** and **Last week.** Weeks run Sunday to Saturday in Asia/Dhaka (the Bangladesh working week). This is an assumption; change it here if the organisation's calendar differs.
+  - **A month** (pick month and year) or **a year.**
+  - **A custom date range**, inclusive.
+  - **All time.**
+  - All dates are calendar dates in Asia/Dhaka.
+- **Bulk:** the same export for every employee in the manager's scope, in one CSV. Archived employees are excluded unless "Include archived" is ticked.
+- **Accountability:** every export writes one `audit_events` row (actor, scope, period) through the existing append-only audit table from Story 1.4.
+
+### Story 8.1: Administrator downloads one employee's activity timeline
+
+As the L&D manager,
+I want to download a CSV of everything recorded about one employee in a period I choose,
+So that I can review or share their activity offline.
+
+**Acceptance Criteria:**
+
+**Given** a signed-in Administrator on an employee's profile
+**When** they open "Download activity", choose a period (this week, last week, a month, a year, a custom range or all time) and download
+**Then** they receive `activity-<employeeId>-<from>_to_<to>.csv` with one row per event in that inclusive period. "All time" uses the employee's first and last record dates.
+
+**Given** the data that exists today
+**When** the export runs
+**Then** it includes:
+- `attendance` rows: clock-in/out and work log, from Story 1.5;
+- `interview` rows: reported interviews with stage, outcome and withdrawn state, from 2.1 and 2.2;
+- `training` rows: completed training, from 3.1;
+- `enrolment` rows: current LMS enrolments, from 3.2.
+
+  Each source reads through its own store; there are no direct table reads.
+
+**Given** a period with no records
+**When** they download
+**Then** they get a CSV containing only the header row, never an error page
+
+**Given** a custom range whose end is before its start, or that ends in the future
+**When** they submit
+**Then** a validation error is shown and nothing is downloaded
+
+**Given** any store is unavailable
+**When** the export runs
+**Then** nothing partial is downloaded, and an "unavailable, try again" message is shown
+
+**Given** a Staff session
+**When** it calls the export directly
+**Then** it is rejected at the server
+
+**Given** a successful export
+**When** it completes
+**Then** one audit event records the actor, the employee and the period
+
+### Story 8.2: Administrator bulk-exports every employee's activity
+
+As the L&D manager,
+I want one CSV covering every employee's activity for a period,
+So that I can report across the whole team.
+
+**Acceptance Criteria:**
+
+**Given** a signed-in Administrator on the directory
+**When** they choose "Download activity (all employees)" and a period
+**Then** they receive one timeline CSV with the same columns as 8.1, covering every active employee, sorted by employee then date
+
+**Given** "Include archived" is ticked
+**When** they export
+**Then** archived employees' records are included too. Otherwise they are excluded.
+
+**Given** a period producing a large export (for example, all time for every employee)
+**When** it is generated
+**Then** it completes without loading partial data. Rows stream or page through the stores rather than relying on a single query capped at the PostgREST row limit.
+
+**Given** a Staff session
+**When** it calls the bulk export directly
+**Then** it is rejected at the server
+
+**Given** a successful bulk export
+**When** it completes
+**Then** one audit event records the actor, "all employees" and the period
+
+### Story 8.3: Department managers export within their department
+
+As a department manager,
+I want the same per-employee and bulk activity exports, limited to my department,
+So that I can review my team's activity.
+
+*Depends on Epic 4 (department-manager authority, Stories 4.2–4.4).*
+
+**Acceptance Criteria:**
+
+**Given** a Department Manager
+**When** they export one employee or use the bulk export
+**Then** only employees in their own department subtree are allowed or included. Asking for anyone else is rejected at the server.
+
+**Given** interview privacy for managers (Story 4.4)
+**When** a Department Manager exports
+**Then** `interview` rows are excluded. Interviews are visible to the employee and the Administrator only.
+
+**Given** a successful export
+**When** it completes
+**Then** one audit event records the manager, the scope and the period
+
+### Story 8.4: Exports include assignments, evaluations and leave
+
+As the L&D manager,
+I want the activity export to include placements, evaluations and leave,
+So that the timeline is complete once those records exist.
+
+*Depends on Epic 4 (assignments and evaluations, Stories 4.5–4.7) and Epic 5 (leave, Stories 5.2–5.3).*
+
+**Acceptance Criteria:**
+
+**Given** assignments (placements), including backfilled past projects
+**When** an export covers their dates
+**Then** `assignment` rows show the project, client, role and start/end. An assignment overlapping the period is included.
+
+**Given** closed-assignment evaluations
+**When** an export covers the evaluation date
+**Then** `evaluation` rows show the evaluator and the outcome summary. Optional client feedback appears in `details` only for authorized managers.
+
+**Given** recorded leave
+**When** an export covers any day of a leave period
+**Then** `leave` rows show the type, the dates, the working-day count and the status (including cancelled)
