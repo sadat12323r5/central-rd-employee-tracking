@@ -63,3 +63,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
   summary: Story 4.3 must update the staff copy "Only you and the L&D Administrator can see them" in the Completed training section when it adds manager-scoped training RLS.
   evidence: Epic 3 context lists manager-scoped training RLS under 4.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-1-admin-downloads-activity-timeline.md`
+  summary: The activity export reads attendance, interviews and training in one PostgREST request each, so an employee with more than 1000 rows in one source (max_rows) would get a silently truncated export.
+  evidence: Pre-existing single-request store reads (no .range() paging). Story 8.2 (bulk export) must page through the stores per the epic; fix the stores there.

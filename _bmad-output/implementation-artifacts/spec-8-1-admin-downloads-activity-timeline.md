@@ -2,14 +2,21 @@
 title: 'Story 8.1: Administrator downloads one employee''s activity timeline'
 type: 'feature'
 created: '2026-10-13'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '2cbe98983ac7382276527cf80f74045aed43361c'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-8-context.md'
 warnings: [oversized]
-deferred: []
+deferred:
+  - summary: >-
+      Activity export reads each source in one PostgREST request, so more than 1000 rows (max_rows) for one employee would be silently truncated.
+    evidence: |-
+      attendance-store list(), interviews-store listFor and training-store listFor issue a single select with no .range() paging; supabase/config.toml max_rows = 1000. Pre-existing store behaviour (the profile views share it); an employee reaches 1000 attendance days after roughly 4 years. Story 8.2 (bulk) must page through the stores per the epic; fix the stores there.
+    location: >-
+      src/server/attendance-store.ts:79
+    severity: medium
 ---
 
 <intent-contract>
@@ -100,3 +107,33 @@ deferred: []
 **Commands:**
 - `npm run check` -- typecheck, unit tests and build pass. Live tests that need the new migration may fail only with schema-missing codes (PGRST202/42703/23514).
 - `npm run test:e2e` -- passes, or the export spec fails only with a schema-missing audit error until the migration is applied.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Administrators get a "Download activity" panel on the employee profile (Overview). It exports one employee's attendance, interviews, completed training and LMS enrolments for this week, last week, a month, a year, a custom range or all time, as a BOM-prefixed, quoted, injection-guarded timeline CSV named `activity-<id>-<from>_to_<to>.csv`. Each successful export writes one `audit_events` row (`export_activity`, actor, employee, period) through a new service-role-only function. Any failing source, the LMS or the audit write fails the whole export with an inline "unavailable" message.
+
+**Files changed:**
+- `supabase/migrations/20261013000000_activity_export_audit.sql` -- DESTRUCTIVE (replaces and widens the `audit_events.action` check). Adds nullable period columns, a period check and `record_activity_export`.
+- `src/domain/activity.ts` -- period resolution, record span, timeline rows, CSV and filename (pure).
+- `src/domain/csv.ts` -- `CSV_BOM` and `guardCell`.
+- `src/server/audit-store.ts` -- audit write via the rpc, with typed errors.
+- `src/server/activity-export.ts` -- the export pipeline: validation, reads through the stores, all-or-nothing, audit last.
+- `src/server/activity-actions.ts` -- admin-checked server action.
+- `src/components/activity-export-panel.tsx`, `src/components/portal.tsx` -- the profile panel.
+- `src/server/supabase.ts` -- comment only. `tests/no-registration.test.ts` -- allows the new service-role caller.
+- Tests: `tests/activity.test.ts`, `tests/activity-export.test.ts`, `tests/audit-store.test.ts` (with a live block), `tests/components/activity-export-panel.test.tsx`, `tests/csv.test.ts`, `tests/components/portal.test.tsx`, `tests/e2e/activity-export.spec.ts`.
+
+**Review:** 28 findings. 7 entries patched (all low): period check, download anchor/revoke, tab/CR guard, e2e race catch, stale-LMS export test. 1 entry deferred (medium): the PostgREST max_rows truncation in the store reads. 13 rejected with reasons (see the triage log).
+
+**Follow-up review recommended:** false (patched: high 0, medium 0, low 7).
+
+**Verification:**
+- `npm run typecheck` clean.
+- `npx vitest run`: 746/748 pass. The 2 failures are live tests in `tests/audit-store.test.ts` that need the new migration: "column audit_events.period_from does not exist" (42703), and the rpc is missing.
+- `npm run build` passes.
+- `npx playwright test`: 19/20 pass (run against the preinstalled chromium-1194 via a temporary config). `activity-export.spec.ts` fails only because the audit write is unavailable until the migration is applied; the panel shows "Activity could not be exported because a record source is unavailable…".
+- The migration was applied on a throwaway local Postgres 16 by the implementer. The period-check patch was not re-run there.
+
+**Residual risks:** the migration is unapplied in the shared project. Store reads are capped at 1000 rows (deferred). Enrolment rows are dated by target date (in progress) or completion date, so a currently-running enrolment appears only in periods that include its target date.

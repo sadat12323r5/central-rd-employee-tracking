@@ -12,6 +12,9 @@ vi.mock("@/server/account-actions", () => ({
   archiveEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
   restoreEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
+vi.mock("@/server/activity-actions", () => ({
+  exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 
 import Portal from "@/components/portal";
 import { employees } from "@/data/employees";
@@ -148,6 +151,15 @@ describe("Portal employee profile", () => {
     expect(screen.getByRole("heading", { name: "Sign-in account" })).toBeInTheDocument();
     expect(screen.getByLabelText("Initial password")).toHaveAttribute("type", "password");
     expect(screen.getByRole("button", { name: "Create Staff account" })).toBeInTheDocument();
+  });
+
+  it("offers Download activity on the Overview tab of an employee's profile", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Meera Das's profile" }));
+    expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Period" })).toBeInTheDocument();
   });
 
   it("shows that an employee already has an account, with no form", async () => {
