@@ -53,6 +53,10 @@ development_status:
   3-2-staff-and-administrator-see-current-lms-enrolments: review
   epic-3-retrospective: optional
 
+  # 8-1 and 8-2 depend only on Epic 1, so they are built before Epic 4 (System Owner priority, 2026-10-13)
+  8-1-administrator-downloads-one-employee-s-activity-timeline: backlog
+  8-2-administrator-bulk-exports-every-employee-s-activity: backlog
+
   epic-4: backlog
   4-1-administrator-manages-the-department-list: backlog
   4-2-administrator-assigns-a-department-manager: backlog
@@ -85,6 +89,11 @@ development_status:
   7-3-maintain-employment-history: backlog
   7-4-record-skills-assessments-and-the-manager-evaluation: backlog
   epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-3-department-managers-export-within-their-department: backlog
+  8-4-exports-include-assignments-evaluations-and-leave: backlog
+  epic-8-retrospective: optional
 
 action_items:
   - epic: 1
