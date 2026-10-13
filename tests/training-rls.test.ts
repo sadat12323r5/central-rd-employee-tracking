@@ -57,11 +57,21 @@ describe.skipIf(!configured)("training history RLS (shared Supabase project)", (
     return data.user.id;
   }
 
-  async function signedIn(email: string) {
-    const client = createClient(url!, anonKey!, noSession);
-    const { error } = await client.auth.signInWithPassword({ email, password });
-    if (error) throw new Error(`Could not sign in test user: ${error.message}`);
-    return client;
+  // One sign-in per test user per file: Supabase Auth rate-limits sign-ins per IP, and none of
+  // these tests sign out, so a shared session per user is equivalent.
+  const sessions = new Map<string, Promise<SupabaseClient>>();
+  function signedIn(email: string): Promise<SupabaseClient> {
+    let session = sessions.get(email);
+    if (!session) {
+      session = (async () => {
+        const client = createClient(url!, anonKey!, noSession);
+        const { error } = await client.auth.signInWithPassword({ email, password });
+        if (error) throw new Error(`Could not sign in test user: ${error.message}`);
+        return client;
+      })();
+      sessions.set(email, session);
+    }
+    return session;
   }
 
   async function cleanup() {
