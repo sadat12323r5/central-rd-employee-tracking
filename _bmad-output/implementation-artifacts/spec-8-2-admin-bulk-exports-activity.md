@@ -2,15 +2,22 @@
 title: 'Story 8.2: Administrator bulk-exports every employee''s activity'
 type: 'feature'
 created: '2026-10-13'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '132b1ce6472a700a20ea72c6bcae1375e828db32'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-8-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-8-1-admin-downloads-activity-timeline.md'
 warnings: [oversized]
-deferred: []
+deferred:
+  - summary: >-
+      Store paging is offset-based (.range) without a snapshot, so a row written or deleted between page requests can be duplicated or skipped in a large export.
+    evidence: |-
+      src/server/paging.ts readAllPages issues separate requests; attendance orders by work_date desc, so a clock-in during a multi-page export shifts later pages by one. Only matters once a source exceeds 1000 rows. Keyset paging on the total order (or a snapshot RPC) would remove it.
+    location: >-
+      src/server/paging.ts
+    severity: medium
 ---
 
 <intent-contract>
@@ -105,3 +112,40 @@ deferred: []
 **Commands:**
 - `npm run check` -- typecheck, unit tests and build pass. The live audit tests may fail only with schema-missing codes (PGRST202/42703) until the 8.1 and 8.2 migrations are applied.
 - `npm run test:e2e` -- passes, or the export specs fail only with the unavailable message caused by the missing migrations.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Added a "Download activity (all employees)" panel in the Employees section with the 8.1 period picker and an "Include archived" checkbox. An Administrator-only action reuses the 8.1 pipeline over every employee in scope:
+- rows are sorted by employee id, then by 8.1 order;
+- the file is named `activity-all-employees-<from>_to_<to>.csv`;
+- the audit target is `all-employees` or `all-employees+archived`.
+
+Store reads now page through PostgREST: attendance, interviews, training and employees lists, plus the batched and paged LMS dedupe read. LMS calls run 8 at a time.
+
+**Files changed:**
+- `supabase/migrations/20261013010000_bulk_activity_export_audit.sql`: ADDITIVE. New function `record_bulk_activity_export`, service_role only.
+- `src/server/paging.ts`: `readAllPages`.
+- `src/server/{attendance,interviews,training,employees}-store.ts`: paged reads. Training-store also batches the dedupe read and caps LMS concurrency.
+- `src/server/audit-store.ts`: `recordBulkActivityExport`.
+- `src/server/activity-export.ts`, `src/server/activity-actions.ts`: `exportAllActivity` / `exportAllActivityAction`.
+- `src/domain/activity.ts`: `activityBulkFilename`.
+- `src/components/activity-export-panel.tsx`, `src/components/portal.tsx`, `src/app/styles.css`: the bulk panel. The form now submits via `onSubmit`.
+- Tests: the store paging suites with `tests/support/paged-client.ts`, bulk cases in `tests/activity-export.test.ts`, `tests/audit-store.test.ts` (live block), panel and portal component tests, `tests/activity.test.ts`, and the e2e bulk download.
+
+**Review:** 21 findings.
+- Patched: 4 entries (3 medium, 1 low): the dedupe read paged and batched, LMS concurrency capped, the checkbox kept after a download, test naming plus a stored-history failure case.
+- Deferred: 1 (medium): offset paging can duplicate or skip a row on concurrent writes.
+- Rejected: 9, with reasons in the triage log.
+
+**Follow-up review recommended:** true (patched: high 0, medium 3, low 1). Unverified risk: the panel's switch from `<form action>` to `onSubmit` with `startTransition` also changes the 8.1 single-employee panel, which no longer resets after a download. The new bounded-concurrency helper in `training-store` affects every `currentFor` caller, including the portal.
+
+**Verification:**
+- `npm run typecheck`: clean.
+- `npx vitest run`: 804/808 pass. The 4 failures are the live audit tests that need the 8.1 and 8.2 migrations (42703 "column audit_events.period_from does not exist", and PGRST202 for the missing function).
+- `npm run build`: passes.
+- Playwright (chromium-1194 via a temporary config): 19/21 pass. Both export specs fail only with the unavailable message, because the audit write fails until the migrations are applied.
+- Migrations 8.1 and 8.2 applied on a throwaway local Postgres 16 by the implementer.
+
+**Residual risks:** both migrations are unapplied in the shared project. Offset paging under concurrent writes (deferred). The whole CSV is built in memory.

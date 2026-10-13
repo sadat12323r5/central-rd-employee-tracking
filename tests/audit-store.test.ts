@@ -56,6 +56,41 @@ describe("audit-store.recordActivityExport", () => {
   });
 });
 
+describe("audit-store.recordBulkActivityExport (Story 8.2)", () => {
+  const bulk = { actorId, includeArchived: false, from: "2026-09-01", to: "2026-09-30" };
+
+  it.each([false, true])("records one bulk export through record_bulk_activity_export (includeArchived %s)", async includeArchived => {
+    const { client, rpc } = fakeClient({ data: 7, error: null });
+    await createAuditStore(() => client).recordBulkActivityExport({ ...bulk, includeArchived });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("record_bulk_activity_export", {
+      p_actor: actorId, p_include_archived: includeArchived, p_from: "2026-09-01", p_to: "2026-09-30",
+    });
+  });
+
+  it.each([
+    [{ ...bulk, actorId: "not-a-uuid" }, ["actorId"]],
+    [{ ...bulk, includeArchived: "on" as unknown as boolean }, ["includeArchived"]],
+    [{ ...bulk, to: "2026-13-01" }, ["to"]],
+    [{ ...bulk, from: "2026-10-01" }, ["to"]],
+  ])("rejects %j without calling the database", async (input, fields) => {
+    const { client, rpc } = fakeClient({ data: 1, error: null });
+    const error = await createAuditStore(() => client).recordBulkActivityExport(input).catch(e => e);
+    expect(error).toBeInstanceOf(AuditValidationError);
+    expect(error.fields).toEqual(fields);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a database error", { data: null, error: { message: "invalid_period" } }],
+    ["a missing function", { data: null, error: { message: "Could not find the function" } }],
+    ["no id returned", { data: null, error: null }],
+    ["a network failure", new TypeError("fetch failed")],
+  ] as const)("throws AuditUnavailableError on %s", async (_name, answer) => {
+    const { client } = fakeClient(answer as never);
+    await expect(createAuditStore(() => client).recordBulkActivityExport(bulk)).rejects.toBeInstanceOf(AuditUnavailableError);
+  });
+});
+
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -105,5 +140,36 @@ describe.skipIf(!configured)("activity export audit against the shared project",
     const { error } = await anon.rpc("record_activity_export", { p_actor: actor, p_employee_id: employeeId, p_from: "2026-09-01", p_to: "2026-09-30" });
     expect(error).not.toBeNull();
     expect(await auditFor(actor)).toHaveLength(1);
+  }, 30_000);
+});
+
+describe.skipIf(!configured)("bulk activity export audit against the shared project (Story 8.2)", () => {
+  const service = configured ? createClient(url!, serviceKey!, noSession) : (undefined as never);
+  // A fresh actor id per run, so this run's audit rows are told apart from earlier runs' residue.
+  const actor = randomUUID();
+
+  const auditFor = async (by: string) => {
+    const { data, error } = await service.from("audit_events").select("actor,target,action,period_from,period_to").eq("actor", by).order("id");
+    expect(error).toBeNull();
+    return data!;
+  };
+
+  it("writes exactly one export_activity row per bulk export, targeting all-employees or all-employees+archived", async () => {
+    const store = createAuditStore(() => service);
+    await store.recordBulkActivityExport({ actorId: actor, includeArchived: false, from: "2026-09-01", to: "2026-09-30" });
+    await store.recordBulkActivityExport({ actorId: actor, includeArchived: true, from: "2025-01-03", to: "2026-10-10" });
+    expect((await auditFor(actor)).map(r => [r.actor, r.target, r.action, r.period_from, r.period_to])).toEqual([
+      [actor, "all-employees", "export_activity", "2026-09-01", "2026-09-30"],
+      [actor, "all-employees+archived", "export_activity", "2025-01-03", "2026-10-10"],
+    ]);
+  }, 30_000);
+
+  it("refuses a reversed period and is not callable by anon users", async () => {
+    const { error: reversed } = await service.rpc("record_bulk_activity_export", { p_actor: actor, p_include_archived: false, p_from: "2026-10-01", p_to: "2026-09-01" });
+    expect(reversed?.message).toBe("invalid_period");
+    const anon = createClient(url!, anonKey!, noSession);
+    const { error } = await anon.rpc("record_bulk_activity_export", { p_actor: actor, p_include_archived: false, p_from: "2026-09-01", p_to: "2026-09-30" });
+    expect(error).not.toBeNull();
+    expect(await auditFor(actor)).toHaveLength(2);
   }, 30_000);
 });

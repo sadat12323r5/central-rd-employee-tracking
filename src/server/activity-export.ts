@@ -1,8 +1,9 @@
 import { z } from "zod";
 import {
-  activityFilename, ActivityPeriodError, buildTimeline, PERIODS, recordSpan, resolvePeriod, timelineCsv,
-  type ActivitySources, type PeriodInput,
+  activityBulkFilename, activityFilename, ActivityPeriodError, buildTimeline, PERIODS, recordSpan, resolvePeriod, timelineCsv,
+  type ActivityRow, type ActivitySources, type Period, type PeriodInput,
 } from "@/domain/activity";
+import type { Employee } from "@/data/employees";
 import { isCalendarDate } from "@/domain/dates";
 import { dhakaDate } from "@/domain/timesheet";
 import { AttendanceUnavailableError, type AttendanceStore } from "./attendance-store";
@@ -17,6 +18,9 @@ import { TrainingUnavailableError, type TrainingStore } from "./training-store";
 // through its store, with the Administrator's session; the CSV is all or nothing: any unavailable source
 // (or LMS) fails the whole export. The audit row is written after every read and before the CSV is
 // returned, so an export that is handed out is always audited, and a failed audit hands out nothing.
+//
+// Story 8.2 adds the bulk export (exportAllActivity): the same pipeline for every employee, each source
+// read once for the whole export (paged by the stores), one audit row for the whole file.
 
 export type ActivityExportDeps = {
   employees: Pick<EmployeesStore, "getFor">;
@@ -24,6 +28,14 @@ export type ActivityExportDeps = {
   interviews: Pick<InterviewsStore, "listFor">;
   training: Pick<TrainingStore, "listFor" | "currentFor">;
   audit: Pick<AuditStore, "recordActivityExport">;
+};
+
+export type BulkActivityExportDeps = {
+  /** Every employee, with their stored interviews and training (one read of each for everyone). */
+  employees: Pick<EmployeesStore, "listFor">;
+  attendance: Pick<AttendanceStore, "listAll">;
+  training: Pick<TrainingStore, "currentFor">;
+  audit: Pick<AuditStore, "recordBulkActivityExport">;
 };
 
 export type ActivityExport = { csv: string; filename: string; from: string; to: string };
@@ -91,10 +103,8 @@ function messageOf(error: z.ZodError, fallback: string): string {
   return message && !message.startsWith("Invalid") ? message : fallback;
 }
 
-function parseInput(input: ActivityExportInput): { employeeId: string; period: PeriodInput } {
-  // The employee is checked first, then the period, so the message names the first thing to fix.
-  const employee = baseForm.shape.employeeId.safeParse(input.employeeId);
-  if (!employee.success) throw new ActivityValidationError(UNKNOWN_EMPLOYEE);
+/** The period fields of the form (shared by the single and the bulk export). */
+function parsePeriodInput(input: Partial<Record<"period" | "month" | "year" | "from" | "to", unknown>>): PeriodInput {
   const kind = baseForm.shape.period.safeParse(input.period);
   if (!kind.success) throw new ActivityValidationError("Choose a period.");
   const fields = periodForms[kind.data].safeParse(input);
@@ -102,7 +112,37 @@ function parseInput(input: ActivityExportInput): { employeeId: string; period: P
     const fallback = kind.data === "custom" ? "Enter a valid start and end date." : kind.data === "month" ? "Choose a month and a year." : "Choose a year.";
     throw new ActivityValidationError(messageOf(fields.error, fallback));
   }
-  return { employeeId: employee.data, period: { period: kind.data, ...fields.data } as PeriodInput };
+  return { period: kind.data, ...fields.data } as PeriodInput;
+}
+
+function parseInput(input: ActivityExportInput): { employeeId: string; period: PeriodInput } {
+  // The employee is checked first, then the period, so the message names the first thing to fix.
+  const employee = baseForm.shape.employeeId.safeParse(input.employeeId);
+  if (!employee.success) throw new ActivityValidationError(UNKNOWN_EMPLOYEE);
+  return { employeeId: employee.data, period: parsePeriodInput(input) };
+}
+
+/** The raw bulk form values: the period fields, plus the "Include archived" checkbox (`on` when ticked). */
+export type BulkActivityExportInput = Partial<Record<"period" | "month" | "year" | "from" | "to" | "includeArchived", unknown>>;
+
+const INCLUDE_ARCHIVED = "Choose whether to include archived employees.";
+const includeArchivedField = z.union([z.literal("on"), z.literal(""), z.null(), z.undefined()], INCLUDE_ARCHIVED);
+
+function parseBulkInput(input: BulkActivityExportInput): { includeArchived: boolean; period: PeriodInput } {
+  const period = parsePeriodInput(input);
+  const includeArchived = includeArchivedField.safeParse(input.includeArchived);
+  if (!includeArchived.success) throw new ActivityValidationError(INCLUDE_ARCHIVED);
+  return { includeArchived: includeArchived.data === "on", period };
+}
+
+/** A fixed period resolved before any read (so it is validated first); `undefined` for "all". */
+function fixedPeriod(input: PeriodInput, today: string): Period | undefined {
+  try {
+    return input.period === "all" ? undefined : resolvePeriod(input, today);
+  } catch (error) {
+    if (error instanceof ActivityPeriodError) throw new ActivityValidationError(error.message);
+    throw error;
+  }
 }
 
 const UNAVAILABLE_ERRORS = [
@@ -124,13 +164,7 @@ export async function exportActivity(
   const today = dhakaDate(now);
 
   // Validate the period before any read ("all" is resolved once the records are known).
-  let period;
-  try {
-    period = periodInput.period === "all" ? undefined : resolvePeriod(periodInput, today);
-  } catch (error) {
-    if (error instanceof ActivityPeriodError) throw new ActivityValidationError(error.message);
-    throw error;
-  }
+  const period = fixedPeriod(periodInput, today);
 
   try {
     const employee = await deps.employees.getFor(session, employeeId);
@@ -163,6 +197,89 @@ export async function exportActivity(
   } catch (error) {
     if (error instanceof AuditEmployeeNotFoundError) throw new ActivityEmployeeNotFoundError();
     if (isUnavailable(error) || error instanceof AuditValidationError) throw new ActivityUnavailableError({ cause: error });
+    throw error;
+  }
+}
+
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** The earliest start and latest end of the spans (for "All time" across employees), or null when none. */
+function combinedSpan(spans: (Period | null)[]): Period | null {
+  const known = spans.filter((span): span is Period => span !== null);
+  if (known.length === 0) return null;
+  return {
+    from: known.map(s => s.from).reduce((a, b) => (b < a ? b : a)),
+    to: known.map(s => s.to).reduce((a, b) => (b > a ? b : a)),
+  };
+}
+
+/**
+ * Exports every employee's activity timeline for the requested period as one CSV (Story 8.2): rows are
+ * sorted by employee id, then within an employee exactly as the single export. Archived employees (and
+ * all their rows) are left out unless `includeArchived` is `on`. Each source is read once for the whole
+ * export: employees with their stored interviews and training, all attendance, and the LMS enrolments of
+ * the included employees. "All time" spans the first to the last record date across the included
+ * employees. One audit row (target `all-employees` or `all-employees+archived`) is written after every
+ * read. Throws ActivityForbiddenError, ActivityValidationError or ActivityUnavailableError; on any of
+ * them nothing is returned and no audit row exists.
+ */
+export async function exportAllActivity(
+  deps: BulkActivityExportDeps, session: SessionIdentity, actorId: string, input: BulkActivityExportInput, now: Date,
+): Promise<ActivityExport> {
+  if (session.role !== "admin") throw new ActivityForbiddenError();
+  const { includeArchived, period: periodInput } = parseBulkInput(input);
+  const today = dhakaDate(now);
+  const period = fixedPeriod(periodInput, today);
+
+  const inScope = (list: Employee[]) => list
+    .filter(e => includeArchived || e.archived !== true)
+    .sort((a, b) => compare(a.id, b.id));
+
+  try {
+    // All or nothing: every read must succeed. The LMS is asked only about the included employees.
+    const employeesRead = deps.employees.listFor(session);
+    const [list, attendance, current] = await Promise.all([
+      employeesRead,
+      deps.attendance.listAll(),
+      employeesRead.then(all => deps.training.currentFor(session, inScope(all).map(e => e.id))),
+    ]);
+    if (current.status !== "ok") throw new ActivityUnavailableError({ cause: "LMS unavailable" });
+
+    const included = inScope(list);
+    const attendanceOf = new Map<string, typeof attendance>();
+    for (const entry of attendance) {
+      const own = attendanceOf.get(entry.employeeId);
+      if (own) own.push(entry);
+      else attendanceOf.set(entry.employeeId, [entry]);
+    }
+    const enrolments = [...current.inProgress, ...current.lmsCompleted];
+
+    const employees = included.map(employee => {
+      const freshness = current.freshness[employee.id];
+      const sources: ActivitySources = {
+        attendance: attendanceOf.get(employee.id) ?? [],
+        interviews: employee.interviews,
+        training: employee.training,
+        enrolments: {
+          entries: enrolments.filter(e => e.employeeId === employee.id),
+          asOf: freshness?.asOf ?? current.asOf,
+          stale: freshness?.stale ?? current.stale,
+        },
+      };
+      return { employee, sources };
+    });
+
+    const resolved = period ?? resolvePeriod(periodInput, today, combinedSpan(employees.map(e => recordSpan(e.sources))));
+    const rows: ActivityRow[] = employees.flatMap(({ employee, sources }) =>
+      buildTimeline({ id: employee.id, name: employee.name }, sources, resolved, now));
+    const csv = timelineCsv(rows);
+
+    await deps.audit.recordBulkActivityExport({ actorId, includeArchived, from: resolved.from, to: resolved.to });
+    return { csv, filename: activityBulkFilename(resolved), ...resolved };
+  } catch (error) {
+    if (isUnavailable(error) || error instanceof AuditValidationError || error instanceof AuditEmployeeNotFoundError) {
+      throw new ActivityUnavailableError({ cause: error });
+    }
     throw error;
   }
 }

@@ -5,8 +5,10 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 
 const exportMock = vi.fn();
+const exportAllMock = vi.fn();
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: (...args: unknown[]) => exportMock(...args),
+  exportAllActivityAction: (...args: unknown[]) => exportAllMock(...args),
 }));
 
 import ActivityExportPanel from "@/components/activity-export-panel";
@@ -19,6 +21,7 @@ describe("ActivityExportPanel", () => {
 
   beforeEach(() => {
     exportMock.mockReset();
+    exportAllMock.mockReset();
     saved = {};
     URL.createObjectURL = vi.fn((blob: Blob) => { saved.blob = blob; return "blob:activity"; });
     URL.revokeObjectURL = vi.fn();
@@ -87,6 +90,82 @@ describe("ActivityExportPanel", () => {
     const { container } = render(<ActivityExportPanel employeeId="BS-1001" />);
     expect(await axe(container)).toHaveNoViolations();
     await user.selectOptions(screen.getByLabelText("Period"), "custom");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("ActivityExportPanel bulk mode (Story 8.2)", () => {
+  let click: ReturnType<typeof vi.spyOn>;
+  let saved: { filename?: string };
+
+  beforeEach(() => {
+    exportMock.mockReset();
+    exportAllMock.mockReset();
+    saved = {};
+    URL.createObjectURL = vi.fn(() => "blob:activity");
+    URL.revokeObjectURL = vi.fn();
+    click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      saved.filename = this.download;
+    });
+  });
+  afterEach(() => click.mockRestore());
+
+  it("is titled for all employees and offers every period and an unticked Include archived checkbox", () => {
+    render(<ActivityExportPanel />);
+    expect(screen.getByRole("heading", { name: "Download activity (all employees)" })).toBeInTheDocument();
+    expect([...(screen.getByLabelText("Period") as HTMLSelectElement).options].map(o => o.text))
+      .toEqual(["This week", "Last week", "Month", "Year", "Custom range", "All time"]);
+    expect(screen.getByRole("checkbox", { name: "Include archived" })).not.toBeChecked();
+  });
+
+  it("sends the bulk action the period only (no Employee ID) and downloads the file", async () => {
+    exportAllMock.mockResolvedValue({ error: "", message: "", csv: CSV, filename: "activity-all-employees-2026-10-05_to_2026-10-11.csv" });
+    const user = userEvent.setup();
+    render(<ActivityExportPanel />);
+    await user.selectOptions(screen.getByLabelText("Period"), "last-week");
+    await user.click(screen.getByRole("button", { name: "Download activity (all employees)" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Downloaded activity-all-employees-2026-10-05_to_2026-10-11.csv.");
+    expect(saved.filename).toBe("activity-all-employees-2026-10-05_to_2026-10-11.csv");
+    expect(exportMock).not.toHaveBeenCalled();
+    expect(Object.fromEntries(exportAllMock.mock.calls[0][1] as FormData)).toEqual({ period: "last-week" });
+  });
+
+  it("sends includeArchived=on when Include archived is ticked", async () => {
+    exportAllMock.mockResolvedValue({ error: "", message: "", csv: CSV, filename: "activity-all-employees-2025-01-03_to_2026-10-10.csv" });
+    const user = userEvent.setup();
+    render(<ActivityExportPanel />);
+    await user.selectOptions(screen.getByLabelText("Period"), "all");
+    await user.click(screen.getByRole("checkbox", { name: "Include archived" }));
+    await user.click(screen.getByRole("button", { name: "Download activity (all employees)" }));
+    await screen.findByRole("status");
+    expect(Object.fromEntries(exportAllMock.mock.calls[0][1] as FormData)).toEqual({ period: "all", includeArchived: "on" });
+  });
+
+  it("keeps Include archived ticked after a download, so the next one includes archived employees too", async () => {
+    exportAllMock.mockResolvedValue({ error: "", message: "", csv: CSV, filename: "activity-all-employees-2025-01-03_to_2026-10-10.csv" });
+    const user = userEvent.setup();
+    render(<ActivityExportPanel />);
+    await user.click(screen.getByRole("checkbox", { name: "Include archived" }));
+    await user.click(screen.getByRole("button", { name: "Download activity (all employees)" }));
+    await screen.findByRole("status");
+    expect(screen.getByRole("checkbox", { name: "Include archived" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Download activity (all employees)" }));
+    await vi.waitFor(() => expect(exportAllMock).toHaveBeenCalledTimes(2));
+    expect((exportAllMock.mock.calls[1][1] as FormData).get("includeArchived")).toBe("on");
+  });
+
+  it("shows a server error as an alert and downloads nothing", async () => {
+    exportAllMock.mockResolvedValue({ error: "The end date cannot be before the start date.", message: "" });
+    const user = userEvent.setup();
+    render(<ActivityExportPanel />);
+    await user.click(screen.getByRole("button", { name: "Download activity (all employees)" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The end date cannot be before the start date.");
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it("has no detectable accessibility violations", async () => {
+    const { container } = render(<ActivityExportPanel />);
     expect(await axe(container)).toHaveNoViolations();
   });
 });

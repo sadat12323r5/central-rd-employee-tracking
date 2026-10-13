@@ -14,6 +14,7 @@ vi.mock("@/server/account-actions", () => ({
 }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
+  exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 
 import Portal from "@/components/portal";
@@ -160,6 +161,17 @@ describe("Portal employee profile", () => {
     expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download activity" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Period" })).toBeInTheDocument();
+  });
+
+  it("offers Download activity (all employees) on the directory, below the directory panel", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} />);
+    expect(screen.queryByRole("heading", { name: "Download activity (all employees)" })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: /Employees/ }));
+    const heading = screen.getByRole("heading", { name: "Download activity (all employees)" });
+    expect(screen.getByRole("heading", { name: /Employee directory/ }).compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Include archived" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download activity (all employees)" })).toBeInTheDocument();
   });
 
   it("shows that an employee already has an account, with no form", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  activityFilename, ActivityPeriodError, buildTimeline, recordSpan, resolvePeriod, TIMELINE_HEADER, timelineCsv,
+  activityBulkFilename, activityFilename, ActivityPeriodError, buildTimeline, recordSpan, resolvePeriod, TIMELINE_HEADER, timelineCsv,
   type ActivitySources, type ActivityTraining,
 } from "../src/domain/activity";
 import type { TimesheetEntry } from "../src/domain/timesheet";
@@ -202,5 +202,11 @@ describe("timelineCsv", () => {
 describe("activityFilename", () => {
   it("names the employee and the inclusive period", () => {
     expect(activityFilename("BS-1001", { from: "2026-09-01", to: "2026-09-30" })).toBe("activity-BS-1001-2026-09-01_to_2026-09-30.csv");
+  });
+});
+
+describe("activityBulkFilename", () => {
+  it("names all employees and the inclusive period", () => {
+    expect(activityBulkFilename({ from: "2026-09-01", to: "2026-09-30" })).toBe("activity-all-employees-2026-09-01_to_2026-09-30.csv");
   });
 });

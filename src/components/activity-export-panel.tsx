@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState, useId, useState } from "react";
+import { startTransition, useActionState, useId, useState, type FormEvent } from "react";
 import { dhakaDate } from "@/domain/timesheet";
-import { exportActivityAction, type ActivityExportState } from "@/server/activity-actions";
+import { exportActivityAction, exportAllActivityAction, type ActivityExportState } from "@/server/activity-actions";
 
 const PERIOD_OPTIONS = [
   ["this-week", "This week"],
@@ -31,7 +31,9 @@ function save(csv: string, filename: string) {
 }
 
 async function submit(previous: ActivityExportState, form: FormData): Promise<ActivityExportState> {
-  const result = await exportActivityAction({ error: previous.error, message: previous.message }, form);
+  // A form with an Employee ID is the single export (Story 8.1); without one, the bulk export (Story 8.2).
+  const exportAction = form.has("employeeId") ? exportActivityAction : exportAllActivityAction;
+  const result = await exportAction({ error: previous.error, message: previous.message }, form);
   if (result.error || !result.csv || !result.filename) return { error: result.error || "Nothing was downloaded. Please try again.", message: "" };
   save(result.csv, result.filename);
   // The CSV is not kept in state once it has been saved.
@@ -42,20 +44,37 @@ async function submit(previous: ActivityExportState, form: FormData): Promise<Ac
  * Administrator-only: download one employee's activity timeline (attendance, interviews, training and
  * LMS enrolments) for a chosen period as a CSV. The form sends only the Employee ID and the period;
  * the acting Administrator is taken from the session at the server, which also audits the export.
+ * Without an `employeeId` (Story 8.2, on the directory) it is the bulk export of every employee, with an
+ * "Include archived" checkbox.
  */
-export default function ActivityExportPanel({ employeeId }: { employeeId: string }) {
+export default function ActivityExportPanel({ employeeId }: { employeeId?: string }) {
+  const bulk = employeeId === undefined;
+  const title = bulk ? "Download activity (all employees)" : "Download activity";
   const [state, action, pending] = useActionState(submit, initial);
+  // Submitted by hand rather than through `<form action>`, so React does not reset the form after the
+  // action: the chosen period and the controlled "Include archived" box stay as the Administrator left them.
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    startTransition(() => action(form));
+  };
   const id = useId();
   const today = dhakaDate(new Date());
   const [period, setPeriod] = useState<string>("this-week");
+  // Controlled, so React's form reset after the action does not silently untick it.
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [year, month] = today.split("-");
   return (
     <article className="panel account-panel activity-export-panel">
-      <h2>Download activity</h2>
-      <p className="muted">Attendance, interviews, training and LMS enrolments in one CSV, one row per event. Every download is recorded in the audit log.</p>
+      <h2>{title}</h2>
+      <p className="muted">
+        {bulk
+          ? "Every employee's attendance, interviews, training and LMS enrolments in one CSV, one row per event, sorted by employee then date. Archived employees are left out unless included. Every download is recorded in the audit log."
+          : "Attendance, interviews, training and LMS enrolments in one CSV, one row per event. Every download is recorded in the audit log."}
+      </p>
       {state.message && <p role="status" className="notice">{state.message}</p>}
-      <form action={action} className="account-form">
-        <input type="hidden" name="employeeId" value={employeeId} />
+      <form onSubmit={onSubmit} className="account-form">
+        {!bulk && <input type="hidden" name="employeeId" value={employeeId} />}
         <div className="staff-field">
           <label htmlFor={`${id}-period`}>Period</label>
           <select id={`${id}-period`} name="period" value={period} onChange={e => setPeriod(e.target.value)}>
@@ -89,8 +108,14 @@ export default function ActivityExportPanel({ employeeId }: { employeeId: string
             </div>
           </>
         )}
+        {bulk && (
+          <div className="check-field">
+            <input id={`${id}-archived`} name="includeArchived" type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} />
+            <label htmlFor={`${id}-archived`}>Include archived</label>
+          </div>
+        )}
         {state.error && <p role="alert" className="form-error">{state.error}</p>}
-        <button className="secondary" disabled={pending}>{pending ? "Preparing…" : "Download activity"}</button>
+        <button className="secondary" disabled={pending}>{pending ? "Preparing…" : title}</button>
       </form>
     </article>
   );

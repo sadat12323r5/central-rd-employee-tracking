@@ -66,3 +66,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-1-admin-downloads-activity-timeline.md`
   summary: The activity export reads attendance, interviews and training in one PostgREST request each, so an employee with more than 1000 rows in one source (max_rows) would get a silently truncated export.
   evidence: Pre-existing single-request store reads (no .range() paging). Story 8.2 (bulk export) must page through the stores per the epic; fix the stores there.
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-2-admin-bulk-exports-activity.md`
+  summary: Store paging (src/server/paging.ts) is offset-based without a snapshot, so a row written or deleted between page requests can be duplicated or skipped in an export larger than 1000 rows per source.
+  evidence: Separate .range() requests; attendance orders by work_date desc, so a clock-in during a multi-page read shifts later pages. Keyset paging on the total order (or a snapshot RPC) would remove it.

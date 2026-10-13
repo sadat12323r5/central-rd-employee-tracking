@@ -188,3 +188,8 @@ export function timelineCsv(rows: readonly ActivityRow[]): string {
 export function activityFilename(employeeId: string, period: Period): string {
   return `activity-${employeeId}-${period.from}_to_${period.to}.csv`;
 }
+
+/** `activity-all-employees-<from>_to_<to>.csv` for a bulk export (Story 8.2). */
+export function activityBulkFilename(period: Period): string {
+  return `activity-all-employees-${period.from}_to_${period.to}.csv`;
+}
