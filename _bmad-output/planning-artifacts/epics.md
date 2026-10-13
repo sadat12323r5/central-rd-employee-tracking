@@ -1028,7 +1028,7 @@ So that readiness decisions are based on current, written-down assessments.
   - Fields are quoted as the directory export already does.
   - Any cell starting with `=`, `+`, `-` or `@` is prefixed with `'` (CSV injection guard).
 - **Periods:**
-  - **This week** and **Last week.** Weeks run Sunday to Saturday in Asia/Dhaka (the Bangladesh working week). This is an assumption; change it here if the organisation's calendar differs.
+  - **This week** and **Last week.** Weeks run Monday to Sunday in Asia/Dhaka. Brain Station 23 works Monday to Friday to align with its foreign clients (System Owner, 2026-10-13), which matches the leave calculator's Saturday/Sunday weekend.
   - **A month** (pick month and year) or **a year.**
   - **A custom date range**, inclusive.
   - **All time.**
