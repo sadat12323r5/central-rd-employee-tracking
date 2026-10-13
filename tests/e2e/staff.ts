@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 /** A throwaway Staff account linked by global-setup.ts (1 or 2). */
 export function e2eStaff(n: 1 | 2) {
@@ -22,4 +22,6 @@ export async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel("Email address").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in to workspace" }).click();
+  // The first sign-in of a run can be slow while the dev server compiles; wait for the request to finish.
+  await expect(page.getByRole("button", { name: "Signing in…" })).toHaveCount(0, { timeout: 30_000 });
 }

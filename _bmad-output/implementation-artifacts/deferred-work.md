@@ -30,6 +30,27 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-staff-attendance-survives-restarts.md`
   summary: Attendance lists (`listForEmployee`, `listAll`) have no limit or paging; PostgREST max-rows (default 1000) would silently truncate them.
   evidence: Needs ~4 years of one employee's entries, and `listAll` has no app caller yet. Story 5.4 (attendance views use real data) should add a date window or paging.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Staff sign-in, the staff page and the Administrator directory fail as a whole when the interviews read fails (employees-store merges interviews).
+  evidence: Both tables share one database, so in practice only an unapplied migration splits them; DEPLOYMENT.md documents the deploy order. Decoupling the sign-in check from the interviews read needs a new store method.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Overview "Upcoming interviews" stat (outcome === "Scheduled") and the hard-coded "On your radar" interview row ignore staff-added interviews.
+  evidence: Staff outcome is optional free text; the radar row is pre-existing demo content. Neither view is in Story 2.1's acceptance criteria.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Story 2.2 should decide whether `db:seed` keeps overwriting seeded interview rows once edits are possible (upsert on id rewrites all columns).
+  evidence: Seed ids derive from fixture list position; stale rows are never removed.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-staff-adds-external-interview.md`
+  summary: Add-interview form (like the attendance forms) resets after a failed save in React 19; admin interviews list has no paging (max-rows 1000); no test asserts the empty-feedback callout is hidden.
+  evidence: Low-severity items recorded in the spec's deferred list.
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-2-admin-workspace-contrast.md`
   summary: The directory search box's only focus indicator (`--accent-focus-soft` #8891df) is 2.93:1 on white, below the 3:1 non-text minimum.
   evidence: The colour was carried over unchanged in Story 6.2 because the spec keeps focus rings as they are. It belongs with the existing non-text contrast item (input borders).
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
+  summary: The `db:seed` writes (completed training, interviews) are never executed by a test.
+  evidence: Only the pure `trainingSeedRows` / `interviewSeedRows` helpers are tested. Covering the writes needs a testable seed function or a CI seed run.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
+  summary: A failed training read (like the interviews read) makes the whole employee record unavailable. Story 3.2's per-section states should decouple this.
+  evidence: employees-store maps TrainingUnavailableError to EmployeesUnavailableError (the "never a profile with missing data" rule from 2.1).
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
+  summary: Story 4.3 must update the staff copy "Only you and the L&D Administrator can see them" in the Completed training section when it adds manager-scoped training RLS.
+  evidence: Epic 3 context lists manager-scoped training RLS under 4.3.

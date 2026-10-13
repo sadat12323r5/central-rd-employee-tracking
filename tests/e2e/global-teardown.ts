@@ -1,4 +1,4 @@
-import { deleteAttendanceFor, deleteUsersByPrefix, STAFF_EMAIL_PREFIX } from "./global-setup";
+import { deleteAttendanceFor, deleteInterviewsFor, deleteUsersByPrefix, STAFF_EMAIL_PREFIX } from "./global-setup";
 import { serviceClient } from "./supabase-admin";
 
 export default async function globalTeardown() {
@@ -20,11 +20,16 @@ export default async function globalTeardown() {
   }
   const ids = process.env.E2E_STAFF_IDS?.split(",").filter(Boolean) ?? [];
   if (ids.length) {
-    // Attendance first: attendance_entries.employee_id is ON DELETE RESTRICT.
+    // Attendance and interviews first: their employee_id is ON DELETE RESTRICT.
     try {
       await deleteAttendanceFor(service, ids);
     } catch (error) {
       console.error(error instanceof Error ? error.message : "Could not delete the throwaway attendance entries.");
+    }
+    try {
+      await deleteInterviewsFor(service, ids);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "Could not delete the throwaway external interviews.");
     }
     const { error } = await service.from("employees").delete().in("employee_id", ids);
     if (error) console.error(`Could not delete the throwaway employees: ${error.message}`);

@@ -1,12 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { Suspense, use, useActionState, useEffect, useState } from "react";
 import type { Employee } from "@/data/employees";
 import {
   WORK_MODES, entryStatus, formatDuration, todaysEntry, workedMinutes, summariseEntries, type TimesheetEntry,
 } from "@/domain/timesheet";
+import { formatDisplayDate } from "@/domain/dates";
 import { clockInAction, clockOutAction, saveLogAction, type ActionState } from "@/server/attendance-actions";
+import { addInterviewAction, updateInterviewAction, withdrawInterviewAction } from "@/server/interviews-actions";
 import { signOut } from "@/server/auth";
+import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
+import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -26,18 +30,107 @@ function Feedback({ state }: { state: ActionState }) {
   return <p role="status" className="staff-status">{state.message}</p>;
 }
 
-type TaskRow = { key: number; description: string; hours: string; link: string };
+type Interview = Employee["interviews"][number];
 
-export default function StaffAttendance({ employee, entries, serverNow }: { employee: Employee; entries: TimesheetEntry[]; serverNow: string }) {
+/**
+ * Story 2.2: one active interview's editor. Only stage, outcome and feedback are offered (company, role
+ * and date are locked after creation), plus a separate form to withdraw the entry. The withdraw action
+ * state is owned by StaffAttendance: a withdrawn entry leaves the active table (this editor unmounts),
+ * so its message is shown once at section level.
+ */
+function InterviewEditor({ interview, withdrawAction, withdrawPending }: {
+  interview: Interview; withdrawAction: (form: FormData) => void; withdrawPending: boolean;
+}) {
+  const [updateState, updateAction, updatePending] = useActionState(updateInterviewAction, initial);
+  const key = interview.id;
+  const name = `${interview.company}, ${formatDisplayDate(interview.date)}`;
+  return <details className="staff-interview-editor">
+    <summary aria-label={`Update interview: ${name}`}>Update</summary>
+    <form action={updateAction} className="staff-log">
+      <input type="hidden" name="id" value={interview.id} />
+      <div className="staff-field">
+        <label htmlFor={`stage-${key}`}>Stage<span className="sr-only"> · {interview.company}</span></label>
+        <input id={`stage-${key}`} name="stage" maxLength={200} defaultValue={interview.stage} required />
+      </div>
+      <div className="staff-field">
+        <label htmlFor={`outcome-${key}`}>Outcome (optional)<span className="sr-only"> · {interview.company}</span></label>
+        <input id={`outcome-${key}`} name="outcome" maxLength={200} defaultValue={interview.outcome} />
+      </div>
+      <div className="staff-field">
+        <label htmlFor={`feedback-${key}`}>Feedback (optional)<span className="sr-only"> · {interview.company}</span></label>
+        <textarea id={`feedback-${key}`} name="feedback" rows={3} maxLength={2000} defaultValue={interview.feedback} />
+      </div>
+      <div className="staff-actions">
+        <button className="primary" disabled={updatePending}>{updatePending ? "Saving…" : "Save changes"}</button>
+      </div>
+      <Feedback state={updateState} />
+    </form>
+    <form action={withdrawAction} className="staff-actions">
+      <input type="hidden" name="id" value={interview.id} />
+      <button className="secondary" disabled={withdrawPending} aria-label={`Withdraw interview: ${name}`}>{withdrawPending ? "Withdrawing…" : "Withdraw interview"}</button>
+      <small>Withdrawn entries stay in your history and cannot be changed again.</small>
+    </form>
+  </details>;
+}
+
+type TaskRow = { key: number; description: string; hours: string; link: string };
+type Training = Employee["training"][number];
+
+/** Story 3.2: the employee's in-progress LMS enrolments (read with `use()` inside `<Suspense>`). */
+function CurrentEnrolments({ current, employeeId }: { current: Promise<CurrentTraining>; employeeId: string }) {
+  const result = use(current);
+  if (result.status === "unavailable") return <CurrentUnavailable history="Your completed training is still shown below." />;
+  const enrolments = result.inProgress.filter(t => t.employeeId === employeeId);
+  return <>
+    {result.stale && <StaleNote asOf={result.asOf} />}
+    {enrolments.length === 0 ? <p className="muted">No current enrolments.</p> : <div className="table-scroll"><table aria-label="Your current enrolments">
+      <thead><tr><th>Programme</th><th>Provider</th><th>Progress</th><th>Target date</th></tr></thead>
+      <tbody>{enrolments.map(t => <tr key={t.id}>
+        <td>{t.name}</td><td>{t.provider}</td>
+        <td><div className="progress-line"><progress value={t.progress} max={100} aria-label={`${t.name} progress`} /><small>{t.progress}%</small></div></td>
+        <td>{formatDisplayDate(t.date)}</td>
+      </tr>)}</tbody>
+    </table></div>}
+  </>;
+}
+
+/** Completed history: stored entries, then the LMS-completed ones (already deduplicated by training-store). */
+function CompletedTable({ entries }: { entries: (Training | TrainingEntry)[] }) {
+  if (entries.length === 0) return <p className="muted">You have no completed training on record yet.</p>;
+  return <div className="table-scroll"><table aria-label="Your completed training">
+    <thead><tr><th>Programme</th><th>Provider</th><th>Completed</th><th>Result</th></tr></thead>
+    <tbody>{entries.map(t => <tr key={t.id}>
+      <td>{t.name}</td><td>{t.provider}</td><td>{formatDisplayDate(t.date)}</td><td>{t.result}</td>
+    </tr>)}</tbody>
+  </table></div>;
+}
+
+function CompletedWithLms({ stored, current, employeeId }: { stored: Training[]; current: Promise<CurrentTraining>; employeeId: string }) {
+  const result = use(current);
+  const fromLms = result.status === "ok" ? result.lmsCompleted.filter(t => t.employeeId === employeeId) : [];
+  return <CompletedTable entries={[...stored, ...fromLms]} />;
+}
+
+export default function StaffAttendance({ employee, entries, serverNow, current }: {
+  employee: Employee; entries: TimesheetEntry[]; serverNow: string;
+  /** Story 3.2: LMS enrolments, streamed (always resolves; `unavailable` is a value). */
+  current: Promise<CurrentTraining>;
+}) {
   const [now, setNow] = useState(() => new Date(serverNow));
   const [inState, inAction, inPending] = useActionState(clockInAction, initial);
   const [outState, outAction, outPending] = useActionState(clockOutAction, initial);
   const [logState, logAction, logPending] = useActionState(saveLogAction, initial);
+  const [interviewState, interviewAction, interviewPending] = useActionState(addInterviewAction, initial);
+  const [withdrawState, withdrawAction, withdrawPending] = useActionState(withdrawInterviewAction, initial);
 
   const today = todaysEntry(entries, employee.id, now);
   const open = today && !today.clockOut;
   const missing = entries.filter(e => entryStatus(e, now) === "Missing clock-out");
   const week = summariseEntries(entries.slice(0, 7), now);
+  const activeInterviews = employee.interviews.filter(i => !i.withdrawn);
+  const withdrawnInterviews = employee.interviews.filter(i => i.withdrawn);
+  // Stored completed training (newest completion first, as training-store returns it); shown at once.
+  const completedTraining = employee.training;
 
   const [tasks, setTasks] = useState<TaskRow[]>(() =>
     today?.log?.tasks.length
@@ -165,6 +258,73 @@ export default function StaffAttendance({ employee, entries, serverNow }: { empl
             </tr>;
           })}</tbody>
         </table></div>}
+      </section>
+
+      <section className="panel staff-training" aria-labelledby="current-training-heading">
+        <h2 id="current-training-heading">Current enrolments</h2>
+        <p className="muted">Programmes you are enrolled in on the LMS and have not completed yet. Only you and the L&D Administrator can see them.</p>
+        <Suspense fallback={<CurrentLoading />}>
+          <CurrentEnrolments current={current} employeeId={employee.id} />
+        </Suspense>
+      </section>
+
+      <section className="panel staff-training" aria-labelledby="completed-training-heading">
+        <h2 id="completed-training-heading">Completed training</h2>
+        <p className="muted">Programmes you have completed. Only you and the L&D Administrator can see them.</p>
+        <Suspense fallback={<CompletedTable entries={completedTraining} />}>
+          <CompletedWithLms stored={completedTraining} current={current} employeeId={employee.id} />
+        </Suspense>
+      </section>
+
+      <section className="panel staff-interviews" aria-labelledby="interviews-heading">
+        <h2 id="interviews-heading">External interviews</h2>
+        <p className="muted">Interviews with other companies. Only you and the L&D Administrator can see them.</p>
+        {activeInterviews.length === 0 ? <p className="muted">{withdrawnInterviews.length === 0 ? "You have not added any external interviews yet." : "You have no active external interviews."}</p> : <div className="table-scroll"><table aria-label="Your external interviews">
+          <thead><tr><th>Company</th><th>Role</th><th>Date</th><th>Stage</th><th>Outcome</th><th>Feedback</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <tbody>{activeInterviews.map(i => <tr key={i.id}>
+            <td>{i.company}</td><td>{i.role}</td><td>{formatDisplayDate(i.date)}</td><td>{i.stage}</td><td>{i.outcome || "No outcome yet"}</td>
+            <td>{i.feedback || "—"}</td>
+            <td><InterviewEditor interview={i} withdrawAction={withdrawAction} withdrawPending={withdrawPending} /></td>
+          </tr>)}</tbody>
+        </table></div>}
+
+        <Feedback state={withdrawState} />
+
+        {withdrawnInterviews.length > 0 && <div className="staff-interview-history">
+          <h3 id="withdrawn-interviews-heading">Withdrawn (history)</h3>
+          <ul aria-labelledby="withdrawn-interviews-heading">{withdrawnInterviews.map(i => <li key={i.id}>
+            <span className="badge withdrawn"><span className="dot" />Withdrawn</span>{" "}
+            <strong>{i.company}</strong> · {i.role} · {formatDisplayDate(i.date)} · {i.stage}{i.outcome ? ` · ${i.outcome}` : ""}
+          </li>)}</ul>
+        </div>}
+
+        <form action={interviewAction} className="staff-log staff-interview-form">
+          <h3>Add an interview</h3>
+          <div className="staff-field">
+            <label htmlFor="interview-company">Company</label>
+            <input id="interview-company" name="company" maxLength={200} required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-role">Role</label>
+            <input id="interview-role" name="role" maxLength={200} required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-date">Interview date</label>
+            <input id="interview-date" name="date" type="date" required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-stage">Stage</label>
+            <input id="interview-stage" name="stage" maxLength={200} placeholder="For example: Technical interview" required />
+          </div>
+          <div className="staff-field">
+            <label htmlFor="interview-outcome">Outcome (optional)</label>
+            <input id="interview-outcome" name="outcome" maxLength={200} />
+          </div>
+          <div className="staff-actions">
+            <button className="primary" disabled={interviewPending}>{interviewPending ? "Adding…" : "Add interview"}</button>
+          </div>
+          <Feedback state={interviewState} />
+        </form>
       </section>
     </div>
   </main>;
