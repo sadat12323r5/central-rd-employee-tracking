@@ -1,9 +1,17 @@
-// Idempotent seed: upserts the fixture's basic employee fields into the Supabase `employees` table
-// with the service-role client. Nested profile data stays in the fixture (read by employees-store).
+// Idempotent seed: upserts the fixture's basic employee fields into the Supabase `employees` table,
+// then the fixture's external interviews into `external_interviews` (Story 2.1) and its completed
+// training into `training_history` (Story 3.1), with the service-role client. Interview and training
+// ids are the fixture's deterministic ids (interviewSeedId, trainingSeedId), so re-running never adds
+// copies. In-progress training is never copied into `training_history`: it is inserted into the LMS
+// stub table `lms_stub_enrolments` (Story 3.2, ids from lmsStubSeedId), which the LMS adapter stub
+// reads. Other nested profile data stays in the fixture (read by employees-store); the fixture's
+// interviews and training are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
-import type { Employee } from "../src/data/employees";
+import type {
+  Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
+} from "../src/data/employees";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -15,7 +23,10 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees } = (await import(fixtureUrl)) as { employees: Employee[] };
+const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+  employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
+  trainingSeedRows: typeof TrainingSeedRows;
+};
 
 const rows = employees.map(e => ({
   employee_id: e.id, name: e.name, title: e.title, team: e.team, employment_type: e.type,
@@ -30,3 +41,35 @@ if (error) {
   process.exit(1);
 }
 console.log(`Upserted ${data?.length ?? 0} employees.`);
+
+// After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
+const interviewRows = interviewSeedRows(employees);
+// Insert-only: existing interview rows are never updated, so staff edits (stage, outcome, feedback) and
+// withdrawals survive a re-seed (a withdrawn row can never change: the guard trigger refuses it).
+const interviews = await supabase.from("external_interviews")
+  .upsert(interviewRows, { onConflict: "id", ignoreDuplicates: true }).select("id");
+if (interviews.error) {
+  console.error(`Seeding interviews failed: ${interviews.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${interviews.data?.length ?? 0} new external interviews (existing ones left unchanged).`);
+
+// After the employees: training_history.employee_id references employees (ON DELETE RESTRICT).
+// Completed entries only; insert-only, so existing rows are left unchanged.
+const training = await supabase.from("training_history")
+  .upsert(trainingSeedRows(employees), { onConflict: "id", ignoreDuplicates: true }).select("id");
+if (training.error) {
+  console.error(`Seeding training failed: ${training.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${training.data?.length ?? 0} new completed-training entries (existing ones left unchanged).`);
+
+// After the employees: lms_stub_enrolments.employee_id references employees (ON DELETE RESTRICT).
+// In-progress entries only; insert-only, so existing rows (and their synced_at) are left unchanged.
+const enrolments = await supabase.from("lms_stub_enrolments")
+  .upsert(lmsStubSeedRows(employees), { onConflict: "id", ignoreDuplicates: true }).select("id");
+if (enrolments.error) {
+  console.error(`Seeding LMS stub enrolments failed: ${enrolments.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${enrolments.data?.length ?? 0} new LMS stub enrolments (existing ones left unchanged).`);

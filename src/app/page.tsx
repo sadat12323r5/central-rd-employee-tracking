@@ -2,8 +2,10 @@ import Login from "@/components/login";
 import Portal from "@/components/portal";
 import StaffAttendance from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
-import { attendanceStore } from "@/server/attendance-store";
+import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
+import type { SessionIdentity } from "@/server/session";
+import { trainingStore, type CurrentTraining } from "@/server/training-store";
 
 export const dynamic = "force-dynamic";
 
@@ -15,18 +17,38 @@ export default async function Home() {
     if (session.role === "staff") {
       const employee = await employeesStore.getFor(session, session.employeeId);
       if (!employee) return login;
+      // Started before the attendance read and never awaited here: the page streams it (Story 3.2).
+      const current = currentTraining(session, [employee.id]);
       const entries = await attendanceStore.listForEmployee(employee.id);
-      return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} />;
+      return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current} />;
     }
-    return <Portal employees={await employeesStore.listFor(session)} />;
+    const employees = await employeesStore.listFor(session);
+    return <Portal employees={employees} current={currentTraining(session, employees.map(e => e.id))} />;
   } catch (error) {
     // Never fall back to an empty or partial list: say plainly that records could not be loaded.
     if (error instanceof EmployeesUnavailableError) {
       console.error("Employee records unavailable.", error, { cause: error.cause });
       return <EmployeesUnavailable />;
     }
+    if (error instanceof AttendanceUnavailableError) {
+      console.error("Attendance unavailable.", error, { cause: error.cause });
+      return <AttendanceUnavailable />;
+    }
     throw error;
   }
+}
+
+/**
+ * LMS enrolments for the client components to read with `use()` inside `<Suspense>`. The promise always
+ * resolves: any unexpected error becomes `unavailable` (logged), so it never reaches an error boundary.
+ */
+function currentTraining(session: SessionIdentity, employeeIds: string[]): Promise<CurrentTraining> {
+  return Promise.resolve()
+    .then(() => trainingStore.currentFor(session, employeeIds))
+    .catch((error: unknown): CurrentTraining => {
+      console.error("Current training unavailable.", error);
+      return { status: "unavailable" };
+    });
 }
 
 function EmployeesUnavailable() {
@@ -35,6 +57,17 @@ function EmployeesUnavailable() {
       <div className="panel empty" role="alert">
         <h1>Employee records are unavailable</h1>
         <p>The employee database could not be reached, so no records are shown. Please refresh the page in a moment.</p>
+      </div>
+    </main>
+  );
+}
+
+function AttendanceUnavailable() {
+  return (
+    <main className="content">
+      <div className="panel empty" role="alert">
+        <h1>Attendance is unavailable</h1>
+        <p>Your attendance records could not be reached, so none are shown. Please refresh the page in a moment.</p>
       </div>
     </main>
   );

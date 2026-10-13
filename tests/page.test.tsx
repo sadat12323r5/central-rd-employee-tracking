@@ -2,13 +2,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor, loginProps } = vi.hoisted(() => ({ getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn() }));
+const { getSession, listFor, getFor, loginProps, listForEmployee, currentFor, portalProps, staffProps } = vi.hoisted(() => ({
+  getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), listForEmployee: vi.fn(async () => [] as unknown[]),
+  currentFor: vi.fn(), portalProps: vi.fn(), staffProps: vi.fn(),
+}));
 
 vi.mock("@/server/auth", () => ({ getSession }));
-vi.mock("@/server/attendance-store", () => ({ attendanceStore: { listForEmployee: vi.fn(async () => []) } }));
+vi.mock("@/server/attendance-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/server/attendance-store")>()),
+  attendanceStore: { listForEmployee },
+}));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
   employeesStore: { listFor, getFor, isActive: vi.fn(async () => true) },
+}));
+vi.mock("@/server/training-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/server/training-store")>()),
+  trainingStore: { currentFor },
 }));
 vi.mock("@/components/login", () => ({
   default: (props: Record<string, unknown>) => {
@@ -16,11 +26,22 @@ vi.mock("@/components/login", () => ({
     return <p>Sign-in form</p>;
   },
 }));
-vi.mock("@/components/portal", () => ({ default: () => <p>Employee directory</p> }));
-vi.mock("@/components/staff-attendance", () => ({ default: () => <p>Staff portal</p> }));
+vi.mock("@/components/portal", () => ({
+  default: (props: Record<string, unknown>) => {
+    portalProps(props);
+    return <p>Employee directory</p>;
+  },
+}));
+vi.mock("@/components/staff-attendance", () => ({
+  default: (props: { entries: unknown[] }) => {
+    staffProps(props);
+    return <><p>Staff portal</p><table aria-label="Recent days"><tbody>{props.entries.map((_, i) => <tr key={i}><td>entry</td></tr>)}</tbody></table></>;
+  },
+}));
 
 const { default: Home } = await import("@/app/page");
 const { EmployeesUnavailableError } = await import("@/server/employees-store");
+const { AttendanceUnavailableError } = await import("@/server/attendance-store");
 
 describe("Home when employee records are unavailable", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -88,5 +109,79 @@ describe("Home routing by role", () => {
     listFor.mockResolvedValue([]);
     render(await Home());
     expect(screen.getByText("Employee directory")).toBeInTheDocument();
+  });
+});
+
+describe("Home when attendance is unavailable", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(async () => {
+    const { employees } = await import("@/data/employees");
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
+    listForEmployee.mockRejectedValue(new AttendanceUnavailableError());
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    listForEmployee.mockReset();
+    listForEmployee.mockResolvedValue([]);
+  });
+
+  it("shows the attendance alert instead of the staff portal and no entries table", async () => {
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/attendance is unavailable/i);
+    expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sign-in form/)).not.toBeInTheDocument();
+    expect(listForEmployee).toHaveBeenCalledWith("BS-1003");
+    expect(errorSpy).toHaveBeenCalled();
+  });
+});
+
+describe("Home streams current LMS enrolments (Story 3.2)", () => {
+  const okResult = { status: "ok", asOf: "2026-10-12T05:00:00.000Z", stale: false, inProgress: [], lmsCompleted: [], freshness: {} } as const;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listFor.mockReset(); getFor.mockReset(); currentFor.mockReset(); portalProps.mockReset(); staffProps.mockReset();
+  });
+  afterEach(() => errorSpy.mockRestore());
+
+  it("passes the staff portal a promise for the staff member's own id, without awaiting it", async () => {
+    const { employees } = await import("@/data/employees");
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
+    currentFor.mockReturnValue(new Promise(() => {})); // never resolves: the page must still render
+    render(await Home());
+    expect(screen.getByText("Staff portal")).toBeInTheDocument();
+    expect(currentFor).toHaveBeenCalledWith({ role: "staff", employeeId: "BS-1003" }, ["BS-1003"]);
+    expect(staffProps.mock.calls[0][0].current).toBeInstanceOf(Promise);
+  });
+
+  it("passes the Administrator portal a promise for every listed employee", async () => {
+    const { employees } = await import("@/data/employees");
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue(employees);
+    currentFor.mockResolvedValue(okResult);
+    render(await Home());
+    expect(currentFor).toHaveBeenCalledWith({ role: "admin" }, employees.map(e => e.id));
+    await expect(portalProps.mock.calls[0][0].current).resolves.toEqual(okResult);
+  });
+
+  it("turns an unexpected error into unavailable (a resolved value) and logs it", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    currentFor.mockRejectedValue(new TypeError("bug"));
+    render(await Home());
+    await expect(portalProps.mock.calls[0][0].current).resolves.toEqual({ status: "unavailable" });
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("turns a synchronous throw into unavailable too", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    currentFor.mockImplementation(() => { throw new TypeError("bug"); });
+    render(await Home());
+    await expect(portalProps.mock.calls[0][0].current).resolves.toEqual({ status: "unavailable" });
   });
 });

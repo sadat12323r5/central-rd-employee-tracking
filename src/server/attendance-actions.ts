@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { buildLog, clockIn, clockOut, todaysEntry, TimesheetValidationError } from "@/domain/timesheet";
 import { getSession } from "./auth";
-import { attendanceStore } from "./attendance-store";
+import { attendanceStore, AttendanceUnavailableError } from "./attendance-store";
 
 export type ActionState = { error: string; message: string };
 
@@ -24,6 +24,11 @@ async function run(work: (employeeId: string, now: Date) => Promise<string>): Pr
     return { error: "", message };
   } catch (error) {
     if (error instanceof TimesheetValidationError) return { error: error.message, message: "" };
+    // Never report success when the database could not be reached or refused the write.
+    if (error instanceof AttendanceUnavailableError) {
+      console.error("Attendance unavailable.", error, { cause: error.cause });
+      return { error: "Attendance could not be reached, so nothing was saved. Please try again in a moment.", message: "" };
+    }
     throw error;
   }
 }

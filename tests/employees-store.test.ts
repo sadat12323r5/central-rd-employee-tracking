@@ -2,6 +2,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { employees as fixture } from "@/data/employees";
 import { createEmployeesStore, EmployeesUnavailableError, type EmployeeRow } from "@/server/employees-store";
+import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
+import type { SessionIdentity } from "@/server/session";
+import { TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "@/server/training-store";
 
 const rowFor = (id: string): EmployeeRow => {
   const e = fixture.find(x => x.id === id)!;
@@ -44,7 +47,47 @@ function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
   return { client: client as unknown as SupabaseClient, queries };
 }
 
-const both = (client: SupabaseClient) => ({ userClient: async () => client });
+const interview = (employeeId: string, id: string, extra: Partial<ExternalInterview> = {}): ExternalInterview => ({
+  id, employeeId, company: `Company ${id}`, role: "Engineer", date: "2026-10-01", stage: "Screening", outcome: "", feedback: "", withdrawn: false, ...extra,
+});
+const stored = [interview("BS-1001", "i-1"), interview("BS-1002", "i-2"), interview("BS-1001", "i-3")];
+
+/** Stand-in for interviews-store: applies the same session scoping and records every call. */
+function fakeInterviews(rows: ExternalInterview[] = stored, fail = false) {
+  const calls: [SessionIdentity, string | undefined][] = [];
+  const store: Pick<InterviewsStore, "listFor"> = {
+    async listFor(session, employeeId) {
+      calls.push([session, employeeId]);
+      if (fail) throw new InterviewsUnavailableError({ cause: "connection refused" });
+      const scope = session.role === "admin" ? employeeId : session.employeeId;
+      return rows.filter(r => scope === undefined || r.employeeId === scope).map(r => ({ ...r }));
+    },
+  };
+  return { store, calls };
+}
+
+/** What training-store would return for the fixture: each employee's entries, in profile order. */
+const fixtureTraining: TrainingEntry[] = fixture.flatMap(e => e.training.map(t => ({ ...t, employeeId: e.id })));
+
+/** Stand-in for training-store: applies the same session scoping and records every call. */
+function fakeTraining(rows: TrainingEntry[] = fixtureTraining, fail = false) {
+  const calls: [SessionIdentity, string | undefined][] = [];
+  const store: Pick<TrainingStore, "listFor"> = {
+    async listFor(session, employeeId) {
+      calls.push([session, employeeId]);
+      if (fail) throw new TrainingUnavailableError({ cause: "connection refused" });
+      if (session.role !== "admin" && employeeId !== undefined && employeeId !== session.employeeId) return [];
+      const scope = session.role === "admin" ? employeeId : session.employeeId;
+      return rows.filter(r => scope === undefined || r.employeeId === scope).map(r => ({ ...r }));
+    },
+  };
+  return { store, calls };
+}
+
+const both = (client: SupabaseClient, interviews = fakeInterviews().store, training = fakeTraining().store) => ({
+  userClient: async () => client, interviews, training,
+});
+const withoutEmployee = ({ employeeId: _, ...rest }: ExternalInterview) => rest;
 
 const seeded = ["BS-1001", "BS-1002", "BS-1003"].map(rowFor);
 const admin = { role: "admin" } as const;
@@ -80,10 +123,54 @@ describe("employees-store role scoping", () => {
 });
 
 describe("employees-store data", () => {
-  it("merges each row with the fixture's nested profile data by id", async () => {
+  it("merges each row with the fixture's nested profile data by id, but interviews and training from their stores", async () => {
     const { client } = fakeClient(seeded);
     const employee = await createEmployeesStore(both(client)).getFor(admin, "BS-1001");
-    expect(employee).toEqual({ ...fixture.find(e => e.id === "BS-1001"), hasAccount: false, archived: false });
+    expect(employee).toEqual({
+      ...fixture.find(e => e.id === "BS-1001"), hasAccount: false, archived: false,
+      interviews: [withoutEmployee(stored[0]), withoutEmployee(stored[2])],
+    });
+  });
+
+  it("passes withdrawn entries through unchanged, flagged (Story 2.2: views split active from history)", async () => {
+    const { client } = fakeClient(seeded);
+    const rows = [interview("BS-1001", "i-1"), interview("BS-1001", "i-w", { withdrawn: true })];
+    const employee = await createEmployeesStore(both(client, fakeInterviews(rows).store)).getFor(admin, "BS-1001");
+    expect(employee?.interviews.map(i => [i.id, i.withdrawn])).toEqual([["i-1", false], ["i-w", true]]);
+  });
+
+  it("never reads interviews from the fixture", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client, fakeInterviews([]).store));
+    expect((await store.getFor(admin, "BS-1001"))?.interviews).toEqual([]);
+    expect((await store.listFor(admin)).flatMap(e => e.interviews)).toEqual([]);
+    expect(fixture.find(e => e.id === "BS-1001")!.interviews.length).toBeGreaterThan(0);
+  });
+
+  it("makes one interviews query for an admin's whole list and groups the interviews by employee", async () => {
+    const { client } = fakeClient(seeded);
+    const interviews = fakeInterviews();
+    const list = await createEmployeesStore(both(client, interviews.store)).listFor(admin);
+    expect(interviews.calls).toEqual([[admin, undefined]]);
+    expect(list.map(e => [e.id, e.interviews.map(i => i.id)])).toEqual([["BS-1001", ["i-1", "i-3"]], ["BS-1002", ["i-2"]], ["BS-1003", []]]);
+  });
+
+  it("gives staff only their own interviews, on the list and on their own record", async () => {
+    const { client } = fakeClient(seeded);
+    const interviews = fakeInterviews();
+    const store = createEmployeesStore(both(client, interviews.store));
+    expect((await store.listFor(staff)).map(e => e.interviews.map(i => i.id))).toEqual([["i-2"]]);
+    expect((await store.getFor(staff, "BS-1002"))?.interviews.map(i => i.id)).toEqual(["i-2"]);
+    expect(interviews.calls).toEqual([[staff, undefined], [staff, "BS-1002"]]);
+  });
+
+  it("does not read interviews for an employee that does not exist or is out of scope", async () => {
+    const { client } = fakeClient(seeded);
+    const interviews = fakeInterviews();
+    const store = createEmployeesStore(both(client, interviews.store));
+    expect(await store.getFor(admin, "BS-1999")).toBeNull();
+    expect(await store.getFor(staff, "BS-1001")).toBeNull();
+    expect(interviews.calls).toEqual([]);
   });
 
   it("uses the database's basic fields over the fixture's", async () => {
@@ -113,6 +200,76 @@ describe("employees-store data", () => {
   });
 });
 
+const entry = (employeeId: string, id: string, extra: Partial<TrainingEntry> = {}): TrainingEntry => ({
+  id, employeeId, name: `Programme ${id}`, provider: "BS23 Learning & Development", progress: 100, date: "2026-08-20", result: "Completed", ...extra,
+});
+
+describe("employees-store training (Story 3.1)", () => {
+  it("takes training from the training store, never from the fixture", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client, fakeInterviews().store, fakeTraining([]).store));
+    expect((await store.getFor(admin, "BS-1001"))?.training).toEqual([]);
+    expect((await store.listFor(admin)).flatMap(e => e.training)).toEqual([]);
+    expect(fixture.find(e => e.id === "BS-1001")!.training.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the store's order (completed newest first, then in progress) and drops the store's employeeId", async () => {
+    const { client } = fakeClient(seeded);
+    const rows = [
+      entry("BS-1001", "t-new", { date: "2026-09-01" }), entry("BS-1001", "t-old", { date: "2026-03-01" }),
+      entry("BS-1001", "t-prog", { progress: 60, date: "2026-12-01", result: "In progress" }),
+    ];
+    const employee = await createEmployeesStore(both(client, fakeInterviews().store, fakeTraining(rows).store)).getFor(admin, "BS-1001");
+    expect(employee?.training).toEqual([
+      { id: "t-new", name: "Programme t-new", provider: "BS23 Learning & Development", progress: 100, date: "2026-09-01", result: "Completed" },
+      { id: "t-old", name: "Programme t-old", provider: "BS23 Learning & Development", progress: 100, date: "2026-03-01", result: "Completed" },
+      { id: "t-prog", name: "Programme t-prog", provider: "BS23 Learning & Development", progress: 60, date: "2026-12-01", result: "In progress" },
+    ]);
+  });
+
+  it("makes one training read for an admin's whole list and groups it by employee", async () => {
+    const { client } = fakeClient(seeded);
+    const training = fakeTraining([entry("BS-1001", "t-1"), entry("BS-1002", "t-2"), entry("BS-1001", "t-3")]);
+    const list = await createEmployeesStore(both(client, fakeInterviews().store, training.store)).listFor(admin);
+    expect(training.calls).toEqual([[admin, undefined]]);
+    expect(list.map(e => [e.id, e.training.map(t => t.id)])).toEqual([["BS-1001", ["t-1", "t-3"]], ["BS-1002", ["t-2"]], ["BS-1003", []]]);
+  });
+
+  it("gives staff only their own training, on the list and on their own record", async () => {
+    const { client } = fakeClient(seeded);
+    const training = fakeTraining([entry("BS-1001", "t-1"), entry("BS-1002", "t-2")]);
+    const store = createEmployeesStore(both(client, fakeInterviews().store, training.store));
+    expect((await store.listFor(staff)).map(e => e.training.map(t => t.id))).toEqual([["t-2"]]);
+    expect((await store.getFor(staff, "BS-1002"))?.training.map(t => t.id)).toEqual(["t-2"]);
+    expect(training.calls).toEqual([[staff, undefined], [staff, "BS-1002"]]);
+  });
+
+  it("does not read training for an employee that does not exist or is out of scope", async () => {
+    const { client } = fakeClient(seeded);
+    const training = fakeTraining();
+    const store = createEmployeesStore(both(client, fakeInterviews().store, training.store));
+    expect(await store.getFor(admin, "BS-1999")).toBeNull();
+    expect(await store.getFor(staff, "BS-1001")).toBeNull();
+    expect(training.calls).toEqual([]);
+  });
+
+  it("throws EmployeesUnavailableError (never a profile without training) when the training read fails", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client, fakeInterviews().store, fakeTraining(fixtureTraining, true).store));
+    for (const call of [() => store.listFor(admin), () => store.listFor(staff), () => store.getFor(admin, "BS-1001"), () => store.getFor(staff, "BS-1002")]) {
+      await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    }
+  });
+
+  it("rethrows a non-availability error from the training read unchanged", async () => {
+    const { client } = fakeClient(seeded);
+    const bug = new TypeError("bug");
+    const store = createEmployeesStore(both(client, fakeInterviews().store, { listFor: async () => { throw bug; } }));
+    await expect(store.listFor(admin)).rejects.toBe(bug);
+    await expect(store.getFor(admin, "BS-1001")).rejects.toBe(bug);
+  });
+});
+
 describe("employees-store unavailability", () => {
   const calls = (store: ReturnType<typeof createEmployeesStore>) => [
     () => store.listFor(admin), () => store.listFor(staff), () => store.getFor(admin, "BS-1001"), () => store.getFor(staff, "BS-1002"),
@@ -130,7 +287,21 @@ describe("employees-store unavailability", () => {
 
   it("throws EmployeesUnavailableError when Supabase is not configured", async () => {
     const unconfigured = () => { throw new Error("Supabase is not configured"); };
-    const store = createEmployeesStore({ userClient: async () => unconfigured() });
+    const store = createEmployeesStore({ userClient: async () => unconfigured(), interviews: fakeInterviews().store, training: fakeTraining().store });
+    for (const call of calls(store)) await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+
+  it("rethrows a non-availability error from the interviews read unchanged", async () => {
+    const { client } = fakeClient(seeded);
+    const bug = new TypeError("bug");
+    const store = createEmployeesStore(both(client, { listFor: async () => { throw bug; } }));
+    await expect(store.listFor(admin)).rejects.toBe(bug);
+    await expect(store.getFor(admin, "BS-1001")).rejects.toBe(bug);
+  });
+
+  it("throws EmployeesUnavailableError (never a profile without interviews) when the interviews read fails", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client, fakeInterviews(stored, true).store));
     for (const call of calls(store)) await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });
@@ -138,7 +309,7 @@ describe("employees-store unavailability", () => {
 describe("employees-store client and columns", () => {
   it("reads with the user's JWT client (RLS) for both roles; it has no service-role client to use", async () => {
     const user = fakeClient(seeded);
-    const store = createEmployeesStore({ userClient: async () => user.client });
+    const store = createEmployeesStore({ userClient: async () => user.client, interviews: fakeInterviews().store, training: fakeTraining().store });
     await store.listFor(admin);
     await store.getFor(admin, "BS-1003");
     await store.listFor(staff);
@@ -182,7 +353,7 @@ describe("employees-store client and columns", () => {
   });
 
   it("reports the directory unavailable when the user client cannot be created", async () => {
-    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); } });
+    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); }, interviews: fakeInterviews().store, training: fakeTraining().store });
     await expect(store.listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
     await expect(store.getFor(staff, "BS-1002")).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });

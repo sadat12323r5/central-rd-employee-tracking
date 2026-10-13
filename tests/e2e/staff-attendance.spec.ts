@@ -10,9 +10,10 @@ async function accessibilityScan(page: Page) {
   return new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag22aa"]).analyze();
 }
 
-// Records live in server memory, so this uses a throwaway Staff account no other spec signs in as
-// (global-setup.ts provisions it through the service role and links it to a throwaway employee).
-test("a staff member clocks in, writes a daily log and clocks out", async ({ page }) => {
+// Attendance is stored in Supabase (one entry per employee per day), so this uses a throwaway Staff
+// account no other spec signs in as (global-setup.ts provisions it through the service role and links
+// it to a throwaway employee; global-teardown.ts deletes its attendance entries and the employee).
+test("a staff member clocks in, writes a daily log and clocks out", async ({ page, browser }) => {
   const staff = e2eStaff(1);
   await page.goto("/");
   await signIn(page, staff.email, staff.password);
@@ -34,6 +35,24 @@ test("a staff member clocks in, writes a daily log and clocks out", async ({ pag
   results = await accessibilityScan(page);
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
 
+  // The entry and log are persisted, not held by this page or one server instance's memory:
+  // a fresh browser context (new cookies, new request) signs in and reads them back.
+  const context = await browser.newContext();
+  try {
+    const fresh = await context.newPage();
+    await fresh.goto("/");
+    await signIn(fresh, staff.email, staff.password);
+    await expect(fresh.getByRole("button", { name: "Clock out" })).toBeVisible();
+    await expect(fresh.getByLabel("What did you work on today?")).toHaveValue("Reviewed the regression suite.");
+    await expect(fresh.getByRole("textbox", { name: "Task 1" })).toHaveValue("Regression review");
+    await expect(fresh.getByRole("cell", { name: "Remote" })).toBeVisible();
+    await expect(fresh.getByRole("cell", { name: "1 task" })).toBeVisible();
+  } finally {
+    await context.close();
+  }
+
+  await page.reload();
+  await expect(page.getByLabel("What did you work on today?")).toHaveValue("Reviewed the regression suite.");
   await page.getByRole("button", { name: "Clock out" }).click();
   await expect(page.getByRole("cell", { name: "Completed" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "1 task" })).toBeVisible();
