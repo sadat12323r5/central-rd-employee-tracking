@@ -2,9 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { AccountExistsError, AccountsUnavailableError, AccountValidationError, createAccountsStore } from "./accounts-store";
+import {
+  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveSelfError, createAccountsStore,
+} from "./accounts-store";
 import type { ActionState } from "./attendance-actions";
-import { getSession } from "./auth";
+import { getActor, getSession } from "./auth";
 import { getServiceClient } from "./supabase";
 
 // Administrator-only Staff provisioning (Story 1.3). The admin session is checked here, at the
@@ -54,4 +56,51 @@ export async function provisionStaffAccountAction(_previous: ActionState, form: 
     console.error("Staff provisioning failed.", error instanceof Error ? error.name : "unknown error");
     return failure(UNAVAILABLE);
   }
+}
+
+// Administrator-only archive and restore (Story 1.4). As above, the admin session is checked first,
+// and a Staff session or no session never reaches accounts-store. The acting Administrator recorded in
+// audit_events is the validated Supabase user from the session, never anything in the form.
+
+const NOT_ADMIN_ARCHIVE = "Only an Administrator can archive or restore accounts.";
+const UNAVAILABLE_ARCHIVE = "Accounts are temporarily unavailable. Nothing was changed.";
+const SELF = "You cannot archive your own account.";
+
+const archiveForm = z.object({ employeeId: z.string().trim().regex(/^BS-\d{4}$/) });
+
+async function setArchived(form: FormData, archive: boolean): Promise<ActionState> {
+  const actor = await getActor();
+  if (actor?.identity.role !== "admin") return failure(NOT_ADMIN_ARCHIVE);
+
+  const parsed = archiveForm.safeParse({ employeeId: form.get("employeeId") ?? "" });
+  if (!parsed.success) return failure(UNKNOWN_EMPLOYEE);
+  const { employeeId } = parsed.data;
+
+  try {
+    const store = createAccountsStore(getServiceClient);
+    const input = { employeeId, actorId: actor.userId };
+    const result = archive ? await store.archive(input) : await store.restore(input);
+    revalidatePath("/");
+    return {
+      error: "",
+      message: archive ? `${result.name} was archived. Their sign-in access has ended.` : `${result.name} was restored.`,
+    };
+  } catch (error) {
+    if (error instanceof AccountStateError) {
+      const name = error.employeeName ?? employeeId;
+      return failure(error.state === "archived" ? `${name} is already archived.` : `${name} is not archived.`);
+    }
+    if (error instanceof ArchiveSelfError) return failure(SELF);
+    if (error instanceof AccountValidationError && error.fields.includes("employeeId")) return failure(UNKNOWN_EMPLOYEE);
+    console.error(`Account ${archive ? "archive" : "restore"} failed.`, error instanceof Error ? error.name : "unknown error");
+    return failure(UNAVAILABLE_ARCHIVE);
+  }
+}
+
+export async function archiveEmployeeAction(_previous: ActionState, form: FormData): Promise<ActionState> {
+  return setArchived(form, true);
+}
+
+export async function restoreEmployeeAction(_previous: ActionState, form: FormData): Promise<ActionState> {
+  return setArchived(form, false);
 }

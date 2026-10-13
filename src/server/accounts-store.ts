@@ -4,6 +4,9 @@ import { z } from "zod";
 // The only way an account is created (AD-6). scripts/seed-admin.ts uses it to create the first
 // Administrator, scripts/seed-demo-staff.ts the demo Staff account, and the Administrator-only server
 // action in account-actions.ts provisions Staff accounts through it at runtime.
+// archive()/restore() (Story 1.4) are likewise the only way an employee's access is ended or given
+// back: both call the Postgres function `set_employee_archived`, which changes `employees.archived_at`
+// and writes one append-only `audit_events` row in the same transaction.
 // There is deliberately no runtime singleton here, and this module imports nothing but types from
 // other src/ modules, so `node --experimental-strip-types` can load it from the seed scripts.
 // The client passed in must be the service-role client: only it may create users, set app_metadata
@@ -29,6 +32,16 @@ const staffInput = z.object({
   role: z.literal("staff"),
 });
 
+const archiveInput = z.object({
+  employeeId: z.string().trim().regex(/^BS-\d{4}$/),
+  actorId: z.uuid(),
+});
+
+export type ArchiveInput = z.input<typeof archiveInput>;
+
+/** The outcome of an archive or restore: the employee's name (for the message) and the new state. */
+export type ArchiveResult = { employeeId: string; name: string; archived: boolean };
+
 const accountInput = z.discriminatedUnion("role", [adminInput, staffInput]);
 
 export type AccountInput = z.input<typeof accountInput>;
@@ -43,6 +56,14 @@ export interface AccountsStore {
   create(input: AccountInput): Promise<Account>;
   /** True when at least one auth user has `app_metadata.role === "admin"`. */
   hasAdministrator(): Promise<boolean>;
+  /**
+   * Archives the employee (sets `archived_at`) and records one `audit_events` row for `actorId`, in one
+   * transaction. Throws AccountValidationError(["employeeId"]) for an unknown employee, AccountStateError
+   * when already archived, ArchiveSelfError when the employee's account is the actor's own.
+   */
+  archive(input: ArchiveInput): Promise<ArchiveResult>;
+  /** Restores an archived employee and records one `audit_events` row. AccountStateError when not archived. */
+  restore(input: ArchiveInput): Promise<ArchiveResult>;
 }
 
 /** The input failed validation. `fields` names the offending inputs; values are never included. */
@@ -60,6 +81,27 @@ export class AccountExistsError extends Error {
   constructor() {
     super("An account with this email already exists.");
     this.name = "AccountExistsError";
+  }
+}
+
+/** The employee is already in the requested state: `archived` (archive refused) or `active` (restore refused). */
+export class AccountStateError extends Error {
+  readonly state: "archived" | "active";
+  /** The employee's name, when the database reported it. */
+  readonly employeeName?: string;
+  constructor(state: "archived" | "active", employeeName?: string) {
+    super(state === "archived" ? "The employee is already archived." : "The employee is not archived.");
+    this.name = "AccountStateError";
+    this.state = state;
+    this.employeeName = employeeName;
+  }
+}
+
+/** The actor tried to archive the employee linked to their own account. Nothing changed. */
+export class ArchiveSelfError extends Error {
+  constructor() {
+    super("An account cannot be archived by its own user.");
+    this.name = "ArchiveSelfError";
   }
 }
 
@@ -164,7 +206,35 @@ export function createAccountsStore(getClient: () => SupabaseClient): AccountsSt
     return { id: user.id, email: user.email ?? email, role: "staff", employeeId: employee.employee_id, name: employee.name };
   }
 
+  /** One rpc() call = one transaction: the state change and its audit row commit together or not at all. */
+  async function setArchived(input: ArchiveInput, archived: boolean): Promise<ArchiveResult> {
+    const parsed = archiveInput.safeParse(input);
+    if (!parsed.success) throw new AccountValidationError(validationFields(parsed.error.issues));
+    const { employeeId, actorId } = parsed.data;
+    let result: { data: unknown; error: { message?: string; details?: string | null } | null };
+    try {
+      result = await client().rpc("set_employee_archived", { p_employee_id: employeeId, p_archived: archived, p_actor: actorId });
+    } catch (cause) {
+      if (cause instanceof AccountsUnavailableError) throw cause;
+      throw new AccountsUnavailableError({ cause });
+    }
+    if (result.error) {
+      switch (result.error.message) {
+        case "employee_not_found": throw new AccountValidationError(["employeeId"]);
+        case "already_archived": throw new AccountStateError("archived", result.error.details || undefined);
+        case "not_archived": throw new AccountStateError("active", result.error.details || undefined);
+        case "cannot_archive_self": throw new ArchiveSelfError();
+        default: throw new AccountsUnavailableError({ cause: result.error });
+      }
+    }
+    if (typeof result.data !== "string") throw new AccountsUnavailableError({ cause: "no employee name returned" });
+    return { employeeId, name: result.data, archived };
+  }
+
   return {
+    archive: input => setArchived(input, true),
+    restore: input => setArchived(input, false),
+
     async create(input) {
       const schema = (input as { role?: unknown } | null)?.role === "staff" ? staffInput : adminInput;
       const parsed = schema.safeParse(input);

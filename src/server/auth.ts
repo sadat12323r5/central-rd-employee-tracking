@@ -54,7 +54,10 @@ function isCredentialRejection(error: unknown): boolean {
   return isAuthApiError(error) && error.status >= 400 && error.status < 500 && error.status !== 429;
 }
 
-async function supabaseSession(): Promise<SessionIdentity | null> {
+/** The validated session's identity plus the Supabase user id behind it (the actor for audited actions). */
+export type Actor = { identity: SessionIdentity; userId: string };
+
+async function supabaseSession(): Promise<Actor | null> {
   try {
     const client = await getUserClient();
     // getUser() asks Supabase Auth to validate the token; cookie contents alone are never trusted.
@@ -66,17 +69,40 @@ async function supabaseSession(): Promise<SessionIdentity | null> {
     // this session's own password sign-in must be recent, so a sign-in on another device cannot extend it.
     const now = Date.now();
     const lastSignIn = data.user.last_sign_in_at ? Date.parse(data.user.last_sign_in_at) : undefined;
-    if (withinWindow(identity, lastSignIn, now) && withinWindow(identity, await passwordSignInAt(client), now)) return identity;
-    await signOutSupabase(client);
-    return null;
+    if (!withinWindow(identity, lastSignIn, now) || !withinWindow(identity, await passwordSignInAt(client), now)) {
+      await signOutSupabase(client);
+      return null;
+    }
+    // Archiving (Story 1.4) ends a Staff member's access on their next request: the linked employee row
+    // must still be visible through RLS and not archived. Administrator accounts have no employee row.
+    if (identity.role === "staff") {
+      let active: boolean;
+      try {
+        active = await employeesStore.isActive(identity);
+      } catch (error) {
+        // A read error is not proof of archiving: no session for this request, but stay signed in.
+        console.error("Session check failed: employee records unavailable.", error instanceof Error ? error.name : "unknown error");
+        return null;
+      }
+      if (!active) {
+        await signOutSupabase(client);
+        return null;
+      }
+    }
+    return { identity, userId: data.user.id };
   } catch (error) {
     console.error("Session check failed.", error instanceof Error ? error.name : "unknown error");
     return null;
   }
 }
 
-export async function getSession(): Promise<SessionIdentity | null> {
+/** The signed-in identity and its Supabase user id, or null. Use for actions that record who acted. */
+export async function getActor(): Promise<Actor | null> {
   return supabaseSession();
+}
+
+export async function getSession(): Promise<SessionIdentity | null> {
+  return (await getActor())?.identity ?? null;
 }
 
 export async function isSignedIn() {
@@ -122,10 +148,10 @@ async function supabaseSignIn(email: string, password: string): Promise<SignInRe
     return { error: INCORRECT };
   }
   if (identity.role === "staff") {
-    // The staff account must reach its own employee row through RLS (employees_select_own).
+    // The staff account must reach its own employee row through RLS (employees_select_own), and that
+    // row must not be archived (Story 1.4); either way the message is the same generic one.
     try {
-      const employee = await employeesStore.getFor(identity, identity.employeeId);
-      if (!employee) {
+      if (!(await employeesStore.isActive(identity))) {
         await signOutSupabase(client);
         return { error: INCORRECT };
       }

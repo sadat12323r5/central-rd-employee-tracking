@@ -14,7 +14,7 @@ vi.mock("@/server/attendance-store", async importOriginal => ({
 }));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
-  employeesStore: { listFor, getFor },
+  employeesStore: { listFor, getFor, isActive: vi.fn(async () => true) },
 }));
 vi.mock("@/server/training-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/training-store")>()),

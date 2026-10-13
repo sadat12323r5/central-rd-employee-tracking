@@ -51,7 +51,7 @@ There is no invite or magic-link email (the shared project has no SMTP): the Adm
 
 **Demo Staff account.** Put `SEED_DEMO_STAFF_EMAIL` (a seeded employee's email, e.g. one from `npm run db:seed`) and `SEED_DEMO_STAFF_PASSWORD` (at least 12 characters) in `.env.local` and run `npm run db:seed-demo-staff`. It creates and links the account through `accounts-store.create()` and prints only the email. If that employee already has an account it exits 0 and creates nothing; missing or short variables exit non-zero naming the variable.
 
-e2e global setup inserts throwaway employees (`BS-98nn`, team/title `E2E Throwaway`, emails `e2e-staff-<run>-<n>@example.test`), links two of them to throwaway Staff users through the service role, and leaves one unlinked for the provisioning spec. Teardown deletes them; setup first sweeps leftovers of an aborted run.
+e2e global setup inserts throwaway employees (`BS-98nn`, team/title `E2E Throwaway`, emails `e2e-staff-<run>-<n>@example.test`), links three of them to throwaway Staff users through the service role (one is archived and restored by the archive spec), and leaves one unlinked for the provisioning spec. Teardown deletes them; setup first sweeps leftovers of an aborted run.
 
 ## Database migrations and seed
 
@@ -65,6 +65,7 @@ npm run db:seed-demo-staff   # optional: creates the demo Staff account (see abo
 ```
 
 - `db:push` reads `SUPABASE_DB_URL` from the environment or `.env.local` and never prints it.
+- `20261008000000_archive_and_audit.sql` (Story 1.4) is additive: it adds `employees.archived_at`, the append-only `audit_events` table and the `set_employee_archived` function. The Story 1.4 code reads `archived_at` on every Administrator directory load and every Staff request, so apply this migration before deploying that code; otherwise the directory reports "Employee records are unavailable" and Staff sessions end. `audit_events` rows cannot be updated or deleted by any API role, the service role included; live tests and e2e leave audit rows for their throwaway `BS-98nn`/`BS-99nn` ids behind by design.
 - `db:seed` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the same way and upserts employees by Employee ID, so it is safe to rerun. Migrations never seed data. For interviews, training and LMS stub enrolments it is insert-only by deterministic ids (`interviewSeedId`, `trainingSeedId`, `lmsStubSeedId`): existing rows are never updated, so staff edits and withdrawals of seeded demo interviews survive a re-run. Completed training (`progress` 100) goes into `training_history`; in-progress entries go only into `lms_stub_enrolments` (`status` `in_progress`, `synced_at` = insert time), never into `training_history`. Because re-seeding does not refresh `synced_at`, seeded stub data shows as "Stale … as of" once it is more than 24 hours old, which is truthful.
 - Data sources: interviews are read only from `external_interviews` (through `interviews-store`); training only through `training-store` (completed entries from `training_history`; current enrolments from the LMS adapter `lms-client`, a stub over `lms_stub_enrolments` until real LMS access exists). Nothing reads the fixture for training at runtime. Other nested profile data (skills, history, attendance summary, review) still comes from `src/data/employees.ts` through `employees-store`.
 - The `db:seed` script runs TypeScript directly and needs Node 24 (or Node 22 with `--experimental-strip-types`, which the script passes).
@@ -73,12 +74,13 @@ npm run db:seed-demo-staff   # optional: creates the demo Staff account (see abo
 
 1. Apply every pending migration with `npm run db:push`, which applies them in filename order. Every employee read (the Administrator directory, staff sign-in and the staff page) reads interviews and training, so until a migration below is applied those reads show "employee records unavailable".
    1. `20261006000000_employees.sql` (Story 1.1): the `employees` table and its RLS. ADDITIVE (new table).
-   2. `20261012000000_attendance.sql` (Story 1.5): `attendance_entries`. ADDITIVE.
-   3. `20261012010000_external_interviews.sql` (Story 2.1): `external_interviews`. ADDITIVE. Missing: PGRST205 / 42P01.
-   4. `20261012020000_external_interview_updates.sql` (Story 2.2): `external_interviews.withdrawn_at` (null default), the own-row UPDATE policy and the `external_interviews_guard` trigger that locks company, role, date and employee and makes withdrawn rows immutable for every role, including the service role. ADDITIVE. Missing: Postgres 42703.
-   5. `20261012030000_training_history.sql` (Story 3.1): `training_history` (completed training, no department column), its `employee_id` index and two select-only RLS policies (employee-own and Administrator; no insert, update or delete policy). ADDITIVE. Missing: PGRST205 / 42P01.
-   6. `20261012040000_lms_stub_enrolments.sql` (Story 3.2): `lms_stub_enrolments` (the LMS adapter stub's data: status `in_progress`/`completed`, progress, target and completion dates, result, `synced_at`; no department column), its status/progress/date checks, `employee_id` index and two select-only RLS policies (employee-own and Administrator; no insert, update or delete policy). ADDITIVE. Missing: PGRST205 / 42P01. Until it is applied, every "Current enrolments" view shows the "unavailable" alert (history still shows).
-2. Run `npm run db:seed`. Until it runs after migration 5 the demo employees show no completed training, and until it runs after migration 6 they show no current enrolments.
+   2. `20261008000000_archive_and_audit.sql` (Story 1.4): `employees.archived_at`, the append-only `audit_events` table and the `set_employee_archived` function. ADDITIVE. Missing: Postgres 42703 (the directory and Staff sessions read `archived_at`).
+   3. `20261012000000_attendance.sql` (Story 1.5): `attendance_entries`. ADDITIVE.
+   4. `20261012010000_external_interviews.sql` (Story 2.1): `external_interviews`. ADDITIVE. Missing: PGRST205 / 42P01.
+   5. `20261012020000_external_interview_updates.sql` (Story 2.2): `external_interviews.withdrawn_at` (null default), the own-row UPDATE policy and the `external_interviews_guard` trigger that locks company, role, date and employee and makes withdrawn rows immutable for every role, including the service role. ADDITIVE. Missing: Postgres 42703.
+   6. `20261012030000_training_history.sql` (Story 3.1): `training_history` (completed training, no department column), its `employee_id` index and two select-only RLS policies (employee-own and Administrator; no insert, update or delete policy). ADDITIVE. Missing: PGRST205 / 42P01.
+   7. `20261012040000_lms_stub_enrolments.sql` (Story 3.2): `lms_stub_enrolments` (the LMS adapter stub's data: status `in_progress`/`completed`, progress, target and completion dates, result, `synced_at`; no department column), its status/progress/date checks, `employee_id` index and two select-only RLS policies (employee-own and Administrator; no insert, update or delete policy). ADDITIVE. Missing: PGRST205 / 42P01. Until it is applied, every "Current enrolments" view shows the "unavailable" alert (history still shows).
+2. Run `npm run db:seed`. Until it runs after migration 6 the demo employees show no completed training, and until it runs after migration 7 they show no current enrolments.
 3. Deploy the code.
 
 If the database is unreachable, the app shows an "Employee records are unavailable" alert instead of an empty or partial directory, and Staff sign-in reports that it is temporarily unavailable.
@@ -92,6 +94,6 @@ If the database is unreachable, the app shows an "Employee records are unavailab
 5. Confirm unauthenticated visits show sign-in, an incorrect password, the retired `manager@example.com` credentials and the old shared staff password are rejected, the Administrator's named account opens the employee directory, and a provisioned Staff account opens only its own portal.
 6. Refresh after sign-in to check session persistence, open an employee profile, verify filtering and sign out.
 
-This is a demonstration with fictional records. Administrators and Staff have named accounts; archiving (Story 1.4), persisted attendance (Story 1.5) and external integrations remain separate implementation work.
+This is a demonstration with fictional records. Administrators and Staff have named accounts. An Administrator can archive and restore an employee's access from their profile (Story 1.4) and Staff attendance is persisted (Story 1.5); external integrations remain separate implementation work.
 
 References: [Vercel CLI](https://vercel.com/docs/cli), [environment variables](https://vercel.com/docs/environment-variables) and [Supabase CLI](https://supabase.com/docs/reference/cli).

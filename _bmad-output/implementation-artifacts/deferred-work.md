@@ -27,6 +27,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-admin-named-account.md`
   summary: Story 1.3 carries over the `auth_user_id` linking (from Story 1.1's deferral) and the switch of staff reads from the service-role client to the JWT client.
   evidence: Story 1.2 moved only Administrators to Supabase Auth, per the staged cutover. Staff have no Supabase accounts until 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-admin-archives-restores-account.md`
+  summary: Archiving ends access in the app (getSession and sign-in) but not at the database. An archived Staff member holding a still-valid access/refresh token can call PostgREST with the anon key and read their own employee row, and (with Story 1.5) write today's attendance.
+  evidence: The auth user is not banned or signed out, and the staff RLS policies do not test `archived_at is null`. Fix options are a DESTRUCTIVE policy change (add `archived_at is null` to the staff own-row policies) or banning/unbanning the auth user in archive()/restore(). Both need a decision; the exposure is the person's own data only.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-admin-archives-restores-account.md`
+  summary: The audit log has no read path (no function, script or UI, no index on target/occurred_at), and test runs leave audit rows for reused BS-98nn/BS-99nn ids in the shared project.
+  evidence: audit_events is service-role only by design; reviewing it today means the SQL editor.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-admin-archives-restores-account.md`
+  summary: An archived employee without an account can still be provisioned (StaffAccountPanel renders and provisionStaffAccountAction does not check archived_at), creating an account that can never sign in.
+  evidence: accounts-store.create() does not read archived_at.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-staff-attendance-survives-restarts.md`
   summary: Attendance lists (`listForEmployee`, `listAll`) have no limit or paging; PostgREST max-rows (default 1000) would silently truncate them.
   evidence: Needs ~4 years of one employee's entries, and `listAll` has no app caller yet. Story 5.4 (attendance views use real data) should add a date window or paging.
