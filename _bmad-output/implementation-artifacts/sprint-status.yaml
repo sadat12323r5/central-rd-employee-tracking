@@ -54,7 +54,7 @@ development_status:
   epic-3-retrospective: optional
 
   # 8-1 and 8-2 depend only on Epic 1, so they are built before Epic 4 (System Owner priority, 2026-10-13)
-  8-1-administrator-downloads-one-employee-s-activity-timeline: backlog
+  8-1-administrator-downloads-one-employee-s-activity-timeline: in-progress
   8-2-administrator-bulk-exports-every-employee-s-activity: backlog
 
   epic-4: backlog
