@@ -26,7 +26,9 @@ export default async function Home() {
     if (session.role === "manager") {
       // Story 4.2: the management portal without Departments, interviews or account controls. Managers
       // read through the non-admin paths (their own record until Story 4.3) and never read departments.
-      const employees = await employeesStore.listFor(session);
+      // Story 4.4: interviews are stripped here, server-side, so a manager's client payload can never carry
+      // them whatever the store returns (FR-3); hiding the views in the portal is not the guarantee.
+      const employees = withoutInterviews(await employeesStore.listFor(session));
       return <Portal role="manager" employees={employees} current={currentTraining(session, employees.map(e => e.id))} />;
     }
     // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
@@ -48,6 +50,11 @@ export default async function Home() {
     }
     throw error;
   }
+}
+
+/** Every employee with `interviews: []`: what a manager session may receive (Story 4.4). Pure. */
+function withoutInterviews<T extends { interviews: unknown[] }>(employees: readonly T[]): T[] {
+  return employees.map(e => ({ ...e, interviews: [] }));
 }
 
 /**

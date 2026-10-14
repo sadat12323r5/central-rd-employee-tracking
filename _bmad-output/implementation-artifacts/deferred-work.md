@@ -63,3 +63,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-1-staff-views-completed-training-history.md`
   summary: Story 4.3 must update the staff copy "Only you and the L&D Administrator can see them" in the Completed training section when it adds manager-scoped training RLS.
   evidence: Epic 3 context lists manager-scoped training RLS under 4.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-4-interview-privacy.md`
+  summary: Once Story 4.3 lands, add a page-level or live test that a manager's in-scope employee arrives with training, attendance and work intact and interviews empty (AC3 data path).
+  evidence: Story 4.4 was built on the 4.3 claim branch before 4.3's scoping existed, so AC3 is proven only at the Portal component level.

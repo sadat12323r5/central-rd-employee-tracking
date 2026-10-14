@@ -137,6 +137,37 @@ describe("Home routing by role", () => {
     expect(props.departments).toBeUndefined();
   });
 
+  it("strips interviews server-side from every employee a manager session receives (Story 4.4)", async () => {
+    const { employees } = await import("@/data/employees");
+    const withInterviews = employees.filter(e => e.interviews.length > 0).slice(0, 2);
+    expect(withInterviews).toHaveLength(2);
+    const manager = { role: "manager", employeeId: "BS-1003" };
+    getSession.mockResolvedValue(manager);
+    listFor.mockResolvedValue(withInterviews);
+    currentFor.mockReset();
+    currentFor.mockResolvedValue({ status: "unavailable" });
+    portalProps.mockClear();
+    render(await Home());
+    const props = portalProps.mock.calls.at(-1)?.[0] as { role: string; employees: { id: string; interviews: unknown[] }[] };
+    expect(props.role).toBe("manager");
+    expect(props.employees).toEqual(withInterviews.map(e => ({ ...e, interviews: [] })));
+    expect(JSON.stringify(props.employees)).not.toContain(withInterviews[0].interviews[0].company);
+    // Training ids are unchanged by the strip.
+    expect(currentFor).toHaveBeenCalledWith(manager, withInterviews.map(e => e.id));
+    // The store's own objects are not mutated.
+    expect(withInterviews.every(e => e.interviews.length > 0)).toBe(true);
+  });
+
+  it("passes interviews through unchanged for an admin (Story 4.4 regression)", async () => {
+    const { employees } = await import("@/data/employees");
+    const withInterviews = employees.filter(e => e.interviews.length > 0).slice(0, 2);
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue(withInterviews);
+    portalProps.mockClear();
+    render(await Home());
+    expect((portalProps.mock.calls.at(-1)?.[0] as { employees: unknown[] }).employees).toEqual(withInterviews);
+  });
+
   it("passes no role (the Administrator portal) for an admin", async () => {
     getSession.mockResolvedValue({ role: "admin" });
     listFor.mockResolvedValue([]);
