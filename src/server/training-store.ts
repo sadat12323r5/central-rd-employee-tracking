@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { lmsClient, LmsUnavailableError, type Enrolment, type LmsClient } from "./lms-client";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { ManagerIdentity, SessionIdentity } from "./session";
+import { readAllPages } from "./paging";
 import { getUserClient } from "./supabase";
 
 // The single source of training for every view (Stories 3.1 and 3.2): the staff portal, the
@@ -119,6 +120,34 @@ export function dedupeLmsCompleted(
 
 type Result<T> = { data: T | null; error: unknown };
 
+/** At most this many LMS calls are in flight at once (a bulk export asks about every employee). */
+const LMS_CONCURRENCY = 8;
+/** Employee ids per stored-history dedupe request. */
+const DEDUPE_BATCH = 100;
+
+/**
+ * `fn` over `items` with at most `limit` calls in flight, results in item order. The first failure
+ * rejects (like Promise.all) and no further calls are started.
+ */
+async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try {
+        results[i] = await fn(items[i]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 export type TrainingStoreClients = {
   /** Per-request client carrying the signed-in user's JWT (RLS enforced). Used for every query. */
   userClient: () => Promise<SupabaseClient>;
@@ -158,14 +187,16 @@ export function createTrainingStore({ userClient, lms, now = () => new Date(), s
     // Out of scope (or nothing in scope): nothing, without a training query.
     if (employeeId !== undefined && !ids.has(employeeId)) return [];
     if (ids.size === 0) return [];
-    const rows = await run<TrainingRow[]>(t => {
+    // Paged (Story 8.2) like the Administrator and Staff list; the order is total (id last).
+    const rows = await readAllPages((from, to) => run<TrainingRow[]>(t => {
       const query = t.select(COLUMNS);
       return (employeeId === undefined ? query.in("employee_id", [...ids]) : query.eq("employee_id", employeeId))
         .order("completed_on", { ascending: false })
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
+        .range(from, to)
         .returns<TrainingRow[]>();
-    });
+    }));
     // Defence in depth: only rows of in-scope employees (and of the one asked for).
     return rows.filter(r => ids.has(r.employee_id) && (employeeId === undefined || r.employee_id === employeeId)).map(toTraining);
   }
@@ -176,14 +207,16 @@ export function createTrainingStore({ userClient, lms, now = () => new Date(), s
       // Staff only ever see their own training; asking for anyone else's returns nothing, without a query.
       if (session.role !== "admin" && employeeId !== undefined && employeeId !== session.employeeId) return [];
       const scope = session.role === "admin" ? employeeId : session.employeeId;
-      const rows = await run<TrainingRow[]>(t => {
+      // Paged (Story 8.2): one request is capped at PostgREST's max_rows; the order is total (id last).
+      const rows = await readAllPages((from, to) => run<TrainingRow[]>(t => {
         const query = t.select(COLUMNS);
         return (scope === undefined ? query : query.eq("employee_id", scope))
           .order("completed_on", { ascending: false })
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
+          .range(from, to)
           .returns<TrainingRow[]>();
-      });
+      }));
       // Defence in depth: a staff session never receives another employee's rows.
       return rows.filter(r => scope === undefined || r.employee_id === scope).map(toTraining);
     },
@@ -208,7 +241,7 @@ export function createTrainingStore({ userClient, lms, now = () => new Date(), s
 
       let results: Awaited<ReturnType<LmsClient["listCurrentEnrolments"]>>[];
       try {
-        results = await Promise.all(ids.map(id => lms.listCurrentEnrolments(id)));
+        results = await mapLimited(ids, LMS_CONCURRENCY, id => lms.listCurrentEnrolments(id));
       } catch (error) {
         if (error instanceof LmsUnavailableError) return { status: "unavailable" };
         throw error;
@@ -224,8 +257,15 @@ export function createTrainingStore({ userClient, lms, now = () => new Date(), s
         const owners = [...new Set(completed.map(e => e.employeeId))];
         let stored: { employee_id: string; programme: string; provider: string }[];
         try {
-          stored = await run(t => t.select(DEDUPE_COLUMNS).in("employee_id", owners)
-            .returns<{ employee_id: string; programme: string; provider: string }[]>());
+          // Batches of owners (short URLs), each paged past max_rows with a total order.
+          const batches: string[][] = [];
+          for (let i = 0; i < owners.length; i += DEDUPE_BATCH) batches.push(owners.slice(i, i + DEDUPE_BATCH));
+          stored = [];
+          for (const batch of batches) {
+            stored.push(...await readAllPages((from, to) => run(t => t.select(DEDUPE_COLUMNS).in("employee_id", batch)
+              .order("id").range(from, to)
+              .returns<{ employee_id: string; programme: string; provider: string }[]>())));
+          }
         } catch (error) {
           // Without stored history the split cannot be guaranteed: never risk showing a course twice.
           if (error instanceof TrainingUnavailableError) return { status: "unavailable" };

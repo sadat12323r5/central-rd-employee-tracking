@@ -6,6 +6,7 @@ import {
   type TrainingEntry, type TrainingRow,
 } from "@/server/training-store";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
+import { many, pagedClient } from "./support/paged-client";
 
 type Mode = "ok" | "error" | "throw" | "null";
 type Call = { table: string; method: string; args: unknown[] };
@@ -35,6 +36,7 @@ function fakeClient(rows: TrainingRow[], mode: Mode = "ok") {
         eq: (...args: unknown[]) => { record("eq", args); return builder; },
         in: (...args: unknown[]) => { record("in", args); return builder; },
         order: (...args: unknown[]) => { record("order", args); return builder; },
+        range: (...args: unknown[]) => { record("range", args); return builder; },
         insert: (...args: unknown[]) => { record("insert", args); return builder; },
         update: (...args: unknown[]) => { record("update", args); return builder; },
         delete: (...args: unknown[]) => { record("delete", args); return builder; },
@@ -120,6 +122,7 @@ describe("training-store reads", () => {
       ["order", "completed_on", { ascending: false }],
       ["order", "created_at", { ascending: false }],
       ["order", "id", { ascending: false }],
+      ["range", 0, 999],
     ]);
     // Stored completed entries only, in table order: nothing comes from the fixture any more.
     expect(list.map(t => t.id)).toEqual(["a", "b", "c"]);
@@ -435,5 +438,90 @@ describe("training-store and manager sessions (Story 4.3: scoped to the departme
     await store.currentFor(admin, ["BS-1001"]);
     await store.currentFor(staff, ["BS-1001"]);
     expect(scope.calls).toEqual([]);
+  });
+});
+
+describe("training-store paging (Story 8.2)", () => {
+  const rowAt = (i: number) => row("BS-1001", `row-${i}`);
+
+  it("reads 1000-row pages until a short page, using every row", async () => {
+    const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
+    const all = await storeFor(client).listFor(admin);
+    expect(all).toHaveLength(2003);
+    expect(all[2002].id).toBe("row-2002");
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("throws the unavailable error when a later page fails", async () => {
+    const { client, requests } = pagedClient([many(1000, rowAt), "error", many(3, rowAt)]);
+    await expect(storeFor(client).listFor(admin)).rejects.toBeInstanceOf(TrainingUnavailableError);
+    expect(requests()).toBe(2);
+  });
+});
+
+describe("training-store currentFor at bulk scale (Story 8.2)", () => {
+  it("dedupes LMS-completed courses against stored history that spans pages", async () => {
+    const stored = (i: number) => ({ employee_id: "BS-1001", programme: `Programme s${i}`, provider: "BS23 Learning & Development" });
+    const { client, ranges, ins } = pagedClient([many(1000, stored), many(3, stored, 1000)]);
+    // Both courses are stored only on the second page (indices 1000 and 1002).
+    const { lms } = fakeLms({ "BS-1001": answer([enrolment("BS-1001", "s1000", "completed"), enrolment("BS-1001", "s1002", "completed")]) });
+    const result = await storeFor(client, lms).currentFor(admin, ["BS-1001"]);
+    expect(result).toMatchObject({ status: "ok", lmsCompleted: [] });
+    expect(ranges).toEqual([[0, 999], [1000, 1999]]);
+    expect(ins).toEqual([["BS-1001"], ["BS-1001"]]);
+  });
+
+  it("reads stored history for the owners in batches of 100", async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `BS-${String(2000 + i)}`);
+    const { client, ins } = pagedClient<never>([[], []]);
+    const { lms } = fakeLms(Object.fromEntries(ids.map(id => [id, answer([enrolment(id, `c-${id}`, "completed")])])));
+    const result = await storeFor(client, lms).currentFor(admin, ids);
+    expect(result.status === "ok" && result.lmsCompleted).toHaveLength(150);
+    expect(ins.map(batch => batch.length)).toEqual([100, 50]);
+    expect(ins.flat()).toEqual(ids);
+  });
+
+  it("maps a failed later dedupe page to unavailable", async () => {
+    const stored = (i: number) => ({ employee_id: "BS-1001", programme: `Programme s${i}`, provider: "x" });
+    const { client } = pagedClient([many(1000, stored), "error"]);
+    const { lms } = fakeLms({ "BS-1001": answer([enrolment("BS-1001", "z", "completed")]) });
+    expect(await storeFor(client, lms).currentFor(admin, ["BS-1001"])).toEqual({ status: "unavailable" });
+  });
+
+  it("keeps at most 8 LMS calls in flight, with results in id order", async () => {
+    const ids = Array.from({ length: 20 }, (_, i) => `BS-${String(3000 + i)}`);
+    const fake = fakeLms(Object.fromEntries(ids.map(id => [id, answer([enrolment(id, `p-${id}`, "in_progress")])])));
+    const result = await storeFor(fakeClient([]).client, fake.lms).currentFor(admin, ids);
+    expect(fake.calls).toHaveLength(20);
+    expect(fake.maxInFlight()).toBe(8);
+    expect(result.status === "ok" && result.inProgress.map(e => e.employeeId)).toEqual(ids);
+    expect(result.status === "ok" && Object.keys(result.freshness)).toEqual(ids);
+  });
+
+  it("still reports the LMS as unavailable when one bounded call fails", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `BS-${String(3000 + i)}`);
+    const fake = fakeLms({ "BS-3005": new LmsUnavailableError() });
+    expect(await storeFor(fakeClient([]).client, fake.lms).currentFor(admin, ids)).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("training-store manager paging (Story 4.3 with Story 8.2)", () => {
+  const manager = { role: "manager", employeeId: "BS-1099", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const rowAt = (i: number) => row("BS-1001", `row-${i}`);
+  const scope: ManagerScope = { forManager: async () => ({ departmentIds: new Set(["d"]), employeeIds: new Set(["BS-1001"]) }) };
+  const storeWith = (client: SupabaseClient) => createTrainingStore({ userClient: async () => client, lms: fakeLms().lms, now: () => NOW, scope });
+
+  it("pages a manager's subtree training past 1000 rows, for the list and for one employee", async () => {
+    const list = pagedClient([many(1000, rowAt), many(3, rowAt, 1000)]);
+    expect(await storeWith(list.client).listFor(manager)).toHaveLength(1003);
+    expect(list.ranges).toEqual([[0, 999], [1000, 1999]]);
+    const one = pagedClient([many(1000, rowAt), []]);
+    expect(await storeWith(one.client).listFor(manager, "BS-1001")).toHaveLength(1000);
+    expect(one.ranges).toEqual([[0, 999], [1000, 1999]]);
+  });
+
+  it("throws TrainingUnavailableError when a later manager page fails", async () => {
+    const { client } = pagedClient([many(1000, rowAt), "error"]);
+    await expect(storeWith(client).listFor(manager)).rejects.toBeInstanceOf(TrainingUnavailableError);
   });
 });

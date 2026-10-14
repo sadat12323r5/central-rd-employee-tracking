@@ -9,22 +9,25 @@ type Options = { throws?: boolean; departmentsError?: boolean; employeesError?: 
 
 /** Minimal stand-in for the supabase-js query builder over departments and employees; records each query. */
 function fakeClient(departments: DeptRow[], employees: EmpRow[], options: Options = {}) {
-  const queries: { table: string; columns?: string; within?: [string, unknown[]] }[] = [];
+  const queries: { table: string; columns?: string; within?: [string, unknown[]]; range?: [number, number] }[] = [];
   const client = {
     from(table: string) {
       if (options.throws) throw new TypeError("fetch failed");
-      const query: { table: string; columns?: string; within?: [string, unknown[]] } = { table };
+      const query: { table: string; columns?: string; within?: [string, unknown[]]; range?: [number, number] } = { table };
       queries.push(query);
       const result = () => {
         if (table === "departments" && options.departmentsError) return { data: null, error: { code: "08006", message: "down" } };
         if (table === "employees" && options.employeesError) return { data: null, error: { code: "08006", message: "down" } };
         const rows = (table === "departments" ? departments : employees) as Record<string, unknown>[];
         const within = query.within;
-        return { data: within && !options.ignoreIn ? rows.filter(r => within[1].includes(r[within[0]])) : rows, error: null };
+        const matched = within && !options.ignoreIn ? rows.filter(r => within[1].includes(r[within[0]])) : rows;
+        return { data: query.range ? matched.slice(query.range[0], query.range[1] + 1) : matched, error: null };
       };
       const builder = {
         select: (columns: string) => { query.columns = columns; return builder; },
         in: (col: string, vals: unknown[]) => { query.within = [col, vals]; return builder; },
+        order: () => builder,
+        range: (from: number, to: number) => { query.range = [from, to]; return builder; },
         returns: () => builder,
         then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => Promise.resolve(result()).then(resolve, reject),
       };
@@ -120,5 +123,21 @@ describe("manager-scope forManager", () => {
     const error = await scopeFor(client).forManager(managerOf("u-a")).catch(e => e);
     expect(error).toBeInstanceOf(ManagerScopeUnavailableError);
     expect((error as Error).cause).toBeInstanceOf(DepartmentHierarchyError);
+  });
+});
+
+describe("manager-scope paging (Story 8.2)", () => {
+  it("pages departments and employees past 1000 rows, so the scope is never truncated", async () => {
+    const depts: DeptRow[] = Array.from({ length: 1002 }, (_, i) => ({ id: `d-${i}`, parent_department_id: i === 0 ? null : "d-0", manager_user_id: i === 0 ? "u-root" : null }));
+    // The managed root is the last row: it is only on the second page.
+    depts.reverse();
+    const emps: EmpRow[] = Array.from({ length: 1500 }, (_, i) => ({ employee_id: `BS-${i}`, department_id: `d-${i % 1002}` }));
+    const { client, queries } = fakeClient(depts, emps);
+    const scope = await scopeFor(client).forManager(managerOf("u-root"));
+    expect(scope.departmentIds.size).toBe(1002);
+    expect(scope.employeeIds.size).toBe(1500);
+    expect(queries.map(q => [q.table, q.range])).toEqual([
+      ["departments", [0, 999]], ["departments", [1000, 1999]], ["employees", [0, 999]], ["employees", [1000, 1999]],
+    ]);
   });
 });

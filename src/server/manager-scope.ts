@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { DepartmentHierarchyError, managedDepartmentIds } from "@/domain/departments";
+import { readAllPages } from "./paging";
 import type { ManagerIdentity } from "./session";
 import { getUserClient } from "./supabase";
 
@@ -53,8 +54,11 @@ export function createManagerScope({ userClient }: ManagerScopeClients): Manager
 
   return {
     async forManager(session) {
-      const rows = await run<ScopeDepartmentRow[]>("departments", t => t.select("id,parent_department_id,manager_user_id")
-        .returns<ScopeDepartmentRow[]>());
+      // Paged (Story 8.2): one request is capped at PostgREST's max_rows, and a truncated read would
+      // silently shrink the scope. `id` (primary key) makes the order total.
+      const rows = await readAllPages((from, to) => run<ScopeDepartmentRow[]>("departments", t => t
+        .select("id,parent_department_id,manager_user_id").order("id").range(from, to)
+        .returns<ScopeDepartmentRow[]>()));
       let departmentIds: string[];
       try {
         departmentIds = managedDepartmentIds(
@@ -67,9 +71,9 @@ export function createManagerScope({ userClient }: ManagerScopeClients): Manager
       }
       // No department (e.g. the manager was just unassigned): an empty scope, never everything.
       if (departmentIds.length === 0) return { departmentIds: new Set(), employeeIds: new Set() };
-      const employees = await run<{ employee_id: string; department_id: string | null }[]>("employees", t => t
-        .select("employee_id,department_id").in("department_id", departmentIds)
-        .returns<{ employee_id: string; department_id: string | null }[]>());
+      const employees = await readAllPages((from, to) => run<{ employee_id: string; department_id: string | null }[]>("employees", t => t
+        .select("employee_id,department_id").in("department_id", departmentIds).order("employee_id").range(from, to)
+        .returns<{ employee_id: string; department_id: string | null }[]>()));
       const inScope = new Set(departmentIds);
       return {
         departmentIds: inScope,

@@ -4,6 +4,7 @@ import {
   createInterviewsStore, InterviewLockedError, InterviewNotFoundError, InterviewsForbiddenError, InterviewsUnavailableError,
   InterviewWithdrawnError, toInterview, type InterviewChanges, type InterviewRow, type NewInterview,
 } from "@/server/interviews-store";
+import { many, pagedClient } from "./support/paged-client";
 
 type Mode = "ok" | "error" | "throw" | "foreign" | "update-error" | "update-none";
 type Call = { table: string; method: string; args: unknown[] };
@@ -42,6 +43,7 @@ function fakeClient(rows: InterviewRow[], mode: Mode = "ok") {
         select: (...args: unknown[]) => { record("select", args); return builder; },
         eq: (...args: unknown[]) => { record("eq", args); return builder; },
         order: (...args: unknown[]) => { record("order", args); return builder; },
+        range: (...args: unknown[]) => { record("range", args); return builder; },
         insert: (...args: unknown[]) => { record("insert", args); return builder; },
         update: (...args: unknown[]) => { record("update", args); return builder; },
         is: (...args: unknown[]) => { record("is", args); return builder; },
@@ -91,6 +93,7 @@ describe("interviews-store reads", () => {
       ["order", "interview_date", { ascending: false }],
       ["order", "created_at", { ascending: false }],
       ["order", "id", { ascending: false }],
+      ["range", 0, 999],
     ]);
   });
 
@@ -288,5 +291,23 @@ describe("interviews-store unavailability", () => {
   it("throws InterviewsUnavailableError when no data comes back", async () => {
     const empty = { from: () => ({ select: () => ({ order: () => ({ order: () => ({ order: () => ({ returns: async () => ({ data: null, error: null }) }) }) }) }) }) };
     await expect(storeFor(empty as unknown as SupabaseClient).listFor(admin)).rejects.toBeInstanceOf(InterviewsUnavailableError);
+  });
+});
+
+describe("interviews-store paging (Story 8.2)", () => {
+  const rowAt = (i: number) => row("BS-1001", `row-${i}`);
+
+  it("reads 1000-row pages until a short page, using every row", async () => {
+    const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
+    const all = await storeFor(client).listFor(admin);
+    expect(all).toHaveLength(2003);
+    expect(all[2002].id).toBe("row-2002");
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("throws the unavailable error when a later page fails", async () => {
+    const { client, requests } = pagedClient([many(1000, rowAt), "error", many(3, rowAt)]);
+    await expect(storeFor(client).listFor(admin)).rejects.toBeInstanceOf(InterviewsUnavailableError);
+    expect(requests()).toBe(2);
   });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TimesheetValidationError, type TimesheetEntry } from "@/domain/timesheet";
 import { AttendanceUnavailableError, createAttendanceStore, toEntry, toRow, type AttendanceRow } from "@/server/attendance-store";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
+import { many, pagedClient } from "./support/paged-client";
 
 type Mode = "ok" | "error" | "throw" | "duplicate";
 type Call = { table: string; method: string; args: unknown[] };
@@ -26,6 +27,7 @@ function fakeClient(rows: AttendanceRow[], mode: Mode = "ok") {
         select: (...args: unknown[]) => { record("select", args); return builder; },
         eq: (...args: unknown[]) => { record("eq", args); return builder; },
         order: (...args: unknown[]) => { record("order", args); return builder; },
+        range: (...args: unknown[]) => { record("range", args); return builder; },
         returns: () => builder,
         upsert: (...args: unknown[]) => { record("upsert", args); return builder; },
         delete: (...args: unknown[]) => { record("delete", args); return builder; },
@@ -80,6 +82,8 @@ describe("attendance-store queries", () => {
       ["eq", "employee_id", "BS-1001"],
       ["order", "work_date", { ascending: false }],
       ["order", "clock_in", { ascending: false }],
+      ["order", "id", { ascending: false }],
+      ["range", 0, 999],
     ]);
   });
 
@@ -87,7 +91,7 @@ describe("attendance-store queries", () => {
     const other = { ...row, id: "other", employee_id: "BS-1002" };
     const { client, calls } = fakeClient([row, other]);
     expect((await storeFor(client).listAll()).map(e => e.employeeId)).toEqual(["BS-1001", "BS-1002"]);
-    expect(calls[0].map(c => c.method)).toEqual(["select", "order", "order"]);
+    expect(calls[0].map(c => c.method)).toEqual(["select", "order", "order", "order", "range"]);
   });
 
   it("saves by upserting the row on id, with a fresh updated_at", async () => {
@@ -140,7 +144,7 @@ describe("attendance-store unavailability", () => {
   });
 
   it("treats a list with no data as unavailable, never as empty", async () => {
-    const empty = { from: () => { const b = { select: () => b, eq: () => b, order: () => b, returns: async () => ({ data: null, error: null }) }; return b; } };
+    const empty = { from: () => { const b = { select: () => b, eq: () => b, order: () => b, range: () => b, returns: async () => ({ data: null, error: null }) }; return b; } };
     await expect(storeFor(empty as unknown as SupabaseClient).listAll()).rejects.toBeInstanceOf(AttendanceUnavailableError);
   });
 });
@@ -199,5 +203,29 @@ describe("attendance-store listFor (Story 4.3: session-aware reads)", () => {
     const store = storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope);
     await expect(store.listFor(manager, "BS-1001")).rejects.toBeInstanceOf(AttendanceUnavailableError);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("attendance-store paging (Story 8.2)", () => {
+  const rowAt = (i: number): AttendanceRow => ({ ...row, id: `row-${i}` });
+
+  it("reads 1000-row pages until a short page, using every row", async () => {
+    const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
+    const all = await storeFor(client).listAll();
+    expect(all).toHaveLength(2003);
+    expect(all[2002].id).toBe("row-2002");
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("pages one employee's entries the same way", async () => {
+    const { client, ranges } = pagedClient([many(1000, rowAt), []]);
+    expect(await storeFor(client).listForEmployee("BS-1001")).toHaveLength(1000);
+    expect(ranges).toEqual([[0, 999], [1000, 1999]]);
+  });
+
+  it("throws the unavailable error when a later page fails, never returning the rows read so far", async () => {
+    const { client, requests } = pagedClient([many(1000, rowAt), "error", many(3, rowAt)]);
+    await expect(storeFor(client).listAll()).rejects.toBeInstanceOf(AttendanceUnavailableError);
+    expect(requests()).toBe(2);
   });
 });

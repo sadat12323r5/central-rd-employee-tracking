@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { employees as fixture } from "@/data/employees";
 import { createEmployeesStore, EmployeesUnavailableError, type EmployeeRow } from "@/server/employees-store";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
+import { many, pagedClient } from "./support/paged-client";
 import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
 import type { SessionIdentity } from "@/server/session";
 import { TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "@/server/training-store";
@@ -20,23 +21,28 @@ type Mode = "ok" | "error" | "throw";
 
 /** Minimal stand-in for the supabase-js query builder: applies eq filters to in-memory rows. */
 function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
-  const queries: { table: string; filters: [string, string][]; columns?: string; within?: [string, string[]] }[] = [];
+  const queries: { table: string; filters: [string, string][]; columns?: string; within?: [string, string[]]; range?: [number, number] }[] = [];
   const client = {
     from(table: string) {
       if (mode === "throw") throw new TypeError("fetch failed");
-      const query = { table, filters: [] as [string, string][], columns: undefined as string | undefined, within: undefined as [string, string[]] | undefined };
+      const query = {
+        table, filters: [] as [string, string][], columns: undefined as string | undefined,
+        within: undefined as [string, string[]] | undefined, range: undefined as [number, number] | undefined,
+      };
       queries.push(query);
       const result = () => {
         if (mode === "error") return { data: null, error: { message: "connection refused" } };
         const matched = rows.filter(r => query.filters.every(([col, val]) => (r as Record<string, string>)[col] === val)
           && (!query.within || query.within[1].includes((r as Record<string, string>)[query.within[0]])));
-        return { data: [...matched].sort((a, b) => a.employee_id.localeCompare(b.employee_id)), error: null };
+        const sorted = [...matched].sort((a, b) => a.employee_id.localeCompare(b.employee_id));
+        return { data: query.range ? sorted.slice(query.range[0], query.range[1] + 1) : sorted, error: null };
       };
       const builder = {
         select: (columns: string) => { query.columns = columns; return builder; },
         eq: (col: string, val: string) => { query.filters.push([col, val]); return builder; },
         in: (col: string, vals: string[]) => { query.within = [col, vals]; return builder; },
         order: () => builder,
+        range: (from: number, to: number) => { query.range = [from, to]; return builder; },
         returns: () => builder,
         maybeSingle: async () => {
           const r = result();
@@ -522,5 +528,45 @@ describe("employees-store.isActive", () => {
   it.each(["error", "throw"] as const)("throws EmployeesUnavailableError when the read fails (%s)", async mode => {
     const { client } = fakeClient(seeded, mode);
     await expect(createEmployeesStore(both(client)).isActive(staff)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+});
+
+describe("employees-store paging (Story 8.2)", () => {
+  const rowAt = (i: number): EmployeeRow => ({ ...rowFor("BS-1001"), employee_id: `BS-${String(i).padStart(4, "0")}` });
+
+  it("reads the employees in 1000-row pages until a short page, using every row", async () => {
+    const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
+    const all = await createEmployeesStore(both(client)).listFor(admin);
+    expect(all).toHaveLength(2003);
+    expect(all[2002].id).toBe("BS-2002");
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("throws the unavailable error when a later page fails", async () => {
+    const { client, requests } = pagedClient([many(1000, rowAt), "error", many(3, rowAt)]);
+    await expect(createEmployeesStore(both(client)).listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    expect(requests()).toBe(2);
+  });
+});
+
+describe("employees-store manager paging (Story 4.3 with Story 8.2)", () => {
+  const manager = { role: "manager", employeeId: "BS-1099", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const rowAt = (i: number): EmployeeRow => ({ ...rowFor("BS-1001"), employee_id: `BS-${String(i).padStart(4, "0")}`, department_id: "d", archived_at: null });
+  const scopeOf = (ids: string[]): ManagerScope => ({ forManager: async () => ({ departmentIds: new Set(["d"]), employeeIds: new Set(ids) }) });
+  const noTraining: Pick<TrainingStore, "listFor"> = { listFor: async () => [] };
+
+  it("pages a manager's subtree past 1000 rows, never truncating it", async () => {
+    const ids = many(2003, i => `BS-${String(i).padStart(4, "0")}`);
+    const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
+    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, scope: scopeOf(ids) });
+    const list = await store.listFor(manager);
+    expect(list).toHaveLength(2003);
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("throws the unavailable error when a later manager page fails", async () => {
+    const { client } = pagedClient([many(1000, rowAt), "error"]);
+    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, scope: scopeOf(["BS-0001"]) });
+    await expect(store.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });

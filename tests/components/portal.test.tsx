@@ -17,6 +17,10 @@ vi.mock("@/server/department-actions", () => ({
   updateDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
   setDepartmentManagerAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
+vi.mock("@/server/activity-actions", () => ({
+  exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
+  exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 
 import Portal from "@/components/portal";
 import { employees } from "@/data/employees";
@@ -153,6 +157,26 @@ describe("Portal employee profile", () => {
     expect(screen.getByRole("heading", { name: "Sign-in account" })).toBeInTheDocument();
     expect(screen.getByLabelText("Initial password")).toHaveAttribute("type", "password");
     expect(screen.getByRole("button", { name: "Create Staff account" })).toBeInTheDocument();
+  });
+
+  it("offers Download activity on the Overview tab of an employee's profile", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Meera Das's profile" }));
+    expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Period" })).toBeInTheDocument();
+  });
+
+  it("offers Download activity (all employees) on the directory, below the directory panel", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} />);
+    expect(screen.queryByRole("heading", { name: "Download activity (all employees)" })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: /Employees/ }));
+    const heading = screen.getByRole("heading", { name: "Download activity (all employees)" });
+    expect(screen.getByRole("heading", { name: /Employee directory/ }).compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Include archived" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download activity (all employees)" })).toBeInTheDocument();
   });
 
   it("shows that an employee already has an account, with no form", async () => {
