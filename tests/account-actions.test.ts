@@ -1,10 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getSession, getActor, create, archive, restore, createAccountsStore, revalidatePath, getServiceClient } = vi.hoisted(() => {
+const {
+  getSession, getActor, create, archive, restore, createAccountsStore, revalidatePath, getServiceClient,
+  managerArchive, managerRestore, createManagerAccessStore, getUserClient, managerScope,
+} = vi.hoisted(() => {
   const create = vi.fn();
   const archive = vi.fn();
   const restore = vi.fn();
+  const managerArchive = vi.fn();
+  const managerRestore = vi.fn();
   return {
+    managerArchive,
+    managerRestore,
+    createManagerAccessStore: vi.fn(() => ({ archive: managerArchive, restore: managerRestore })),
+    getUserClient: vi.fn(),
+    managerScope: { forManager: vi.fn() },
     getSession: vi.fn(),
     getActor: vi.fn(),
     create,
@@ -18,15 +28,18 @@ const { getSession, getActor, create, archive, restore, createAccountsStore, rev
 
 vi.mock("next/cache", () => ({ revalidatePath }));
 vi.mock("../src/server/auth", () => ({ getSession, getActor }));
-vi.mock("../src/server/supabase", () => ({ getServiceClient, getUserClient: vi.fn() }));
+vi.mock("../src/server/supabase", () => ({ getServiceClient, getUserClient }));
+vi.mock("../src/server/manager-scope", () => ({ managerScope }));
 vi.mock("../src/server/accounts-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/accounts-store")>()),
   createAccountsStore,
+  createManagerAccessStore,
 }));
 
 const { archiveEmployeeAction, provisionStaffAccountAction, restoreEmployeeAction } = await import("../src/server/account-actions");
 const {
-  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveSelfError,
+  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveNotAuthorizedError, ArchiveRankError,
+  ArchiveSelfError,
 } = await import("../src/server/accounts-store");
 
 const blank = { error: "", message: "" };
@@ -128,8 +141,11 @@ describe("archiveEmployeeAction and restoreEmployeeAction", () => {
   ] as const))("%s rejects session %j without touching the store", async (_label, action, actor) => {
     getActor.mockResolvedValue(actor);
     const result = await action(blank, form({ employeeId: "BS-1003" }));
-    expect(result).toEqual({ error: "Only an Administrator can archive or restore accounts.", message: "" });
+    expect(result).toEqual({ error: "Only an Administrator or a department manager can archive or restore accounts.", message: "" });
     expect(createAccountsStore).not.toHaveBeenCalled();
+    expect(createManagerAccessStore).not.toHaveBeenCalled();
+    expect(managerArchive).not.toHaveBeenCalled();
+    expect(managerRestore).not.toHaveBeenCalled();
     expect(archive).not.toHaveBeenCalled();
     expect(restore).not.toHaveBeenCalled();
     expect(getServiceClient).not.toHaveBeenCalled();
@@ -140,6 +156,7 @@ describe("archiveEmployeeAction and restoreEmployeeAction", () => {
     const result = await archiveEmployeeAction(blank, form({ employeeId: " BS-1003 ", actorId: "7a2e3d4f-0000-4000-8000-000000000002", actor: "x" }));
     expect(result).toEqual({ error: "", message: "Meera Das was archived. Their sign-in access has ended." });
     expect(createAccountsStore).toHaveBeenCalledWith(getServiceClient);
+    expect(createManagerAccessStore).not.toHaveBeenCalled();
     expect(archive).toHaveBeenCalledWith({ employeeId: "BS-1003", actorId: ADMIN_ID });
     expect(restore).not.toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledWith("/");
@@ -178,4 +195,55 @@ describe("archiveEmployeeAction and restoreEmployeeAction", () => {
       expect(restore).not.toHaveBeenCalled();
     },
   );
+
+  describe("for a department manager", () => {
+    const MANAGER = { role: "manager", employeeId: "BS-2001", userId: "8b3f4e5a-0000-4000-8000-000000000003" } as const;
+    beforeEach(() => {
+      getActor.mockResolvedValue({ identity: MANAGER, userId: MANAGER.userId });
+      managerArchive.mockResolvedValue({ employeeId: "BS-1003", name: "Meera Das", archived: true });
+      managerRestore.mockResolvedValue({ employeeId: "BS-1003", name: "Meera Das", archived: false });
+    });
+
+    it("archives through the manager store with the user client and manager scope, never the service role", async () => {
+      const result = await archiveEmployeeAction(blank, form({ employeeId: " BS-1003 ", actorId: "7a2e3d4f-0000-4000-8000-000000000002" }));
+      expect(result).toEqual({ error: "", message: "Meera Das was archived. Their sign-in access has ended." });
+      expect(createManagerAccessStore).toHaveBeenCalledWith({ userClient: getUserClient, scope: managerScope });
+      expect(managerArchive).toHaveBeenCalledWith(MANAGER, "BS-1003");
+      expect(managerRestore).not.toHaveBeenCalled();
+      expect(createAccountsStore).not.toHaveBeenCalled();
+      expect(getServiceClient).not.toHaveBeenCalled();
+      expect(revalidatePath).toHaveBeenCalledWith("/");
+    });
+
+    it("restores through the manager store and revalidates", async () => {
+      const result = await restoreEmployeeAction(blank, form({ employeeId: "BS-1003" }));
+      expect(result).toEqual({ error: "", message: "Meera Das was restored." });
+      expect(managerRestore).toHaveBeenCalledWith(MANAGER, "BS-1003");
+      expect(managerArchive).not.toHaveBeenCalled();
+      expect(createAccountsStore).not.toHaveBeenCalled();
+      expect(revalidatePath).toHaveBeenCalledWith("/");
+    });
+
+    it.each([
+      ["archive", archiveEmployeeAction, managerArchive, new ArchiveNotAuthorizedError(), "You can only archive or restore accounts in your own department or its sub-departments."],
+      ["restore", restoreEmployeeAction, managerRestore, new ArchiveNotAuthorizedError(), "You can only archive or restore accounts in your own department or its sub-departments."],
+      ["archive", archiveEmployeeAction, managerArchive, new ArchiveRankError(), "You cannot archive or restore an account with equal or higher authority than yours."],
+      ["restore", restoreEmployeeAction, managerRestore, new ArchiveRankError(), "You cannot archive or restore an account with equal or higher authority than yours."],
+      ["archive", archiveEmployeeAction, managerArchive, new ArchiveSelfError(), "You cannot archive your own account."],
+      ["archive", archiveEmployeeAction, managerArchive, new AccountStateError("archived", "Meera Das"), "Meera Das is already archived."],
+      ["restore", restoreEmployeeAction, managerRestore, new AccountStateError("active", "Meera Das"), "Meera Das is not archived."],
+      ["archive", archiveEmployeeAction, managerArchive, new AccountValidationError(["employeeId"]), "Choose an existing employee."],
+      ["archive", archiveEmployeeAction, managerArchive, new AccountsUnavailableError(), "Accounts are temporarily unavailable. Nothing was changed."],
+      ["restore", restoreEmployeeAction, managerRestore, new Error("boom"), "Accounts are temporarily unavailable. Nothing was changed."],
+    ] as const)("%s maps %s to its message as an error state", async (_label, action, method, error, message) => {
+      method.mockRejectedValue(error);
+      expect(await action(blank, form({ employeeId: "BS-1003" }))).toEqual({ error: message, message: "" });
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+
+    it("validates the Employee ID before creating the store", async () => {
+      expect(await archiveEmployeeAction(blank, form({ employeeId: "../BS-1003" }))).toEqual({ error: "Choose an existing employee.", message: "" });
+      expect(createManagerAccessStore).not.toHaveBeenCalled();
+    });
+  });
 });

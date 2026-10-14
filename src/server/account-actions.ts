@@ -3,11 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
-  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveSelfError, createAccountsStore,
+  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveNotAuthorizedError, ArchiveRankError,
+  ArchiveSelfError, createAccountsStore, createManagerAccessStore, type ArchiveResult,
 } from "./accounts-store";
 import type { ActionState } from "./attendance-actions";
 import { getActor, getSession } from "./auth";
-import { getServiceClient } from "./supabase";
+import { managerScope } from "./manager-scope";
+import { getServiceClient, getUserClient } from "./supabase";
 
 // Administrator-only Staff provisioning (Story 1.3). The admin session is checked here, at the
 // server, before anything else: a Staff session or no session never reaches accounts-store.
@@ -58,28 +60,39 @@ export async function provisionStaffAccountAction(_previous: ActionState, form: 
   }
 }
 
-// Administrator-only archive and restore (Story 1.4). As above, the admin session is checked first,
-// and a Staff session or no session never reaches accounts-store. The acting Administrator recorded in
-// audit_events is the validated Supabase user from the session, never anything in the form.
+// Archive and restore (Story 1.4; department managers since Story 4.9). The session is checked first:
+// a Staff session or no session never reaches a store. The Administrator path is unchanged (service-role
+// accounts-store, actor = the validated Supabase user from the session). A manager session goes through
+// the manager access store: the manager's own JWT client and the manager scope, never the service role;
+// the database function takes the actor from auth.uid(). The employee id comes only from the form.
 
-const NOT_ADMIN_ARCHIVE = "Only an Administrator can archive or restore accounts.";
+const NOT_ADMIN_ARCHIVE = "Only an Administrator or a department manager can archive or restore accounts.";
 const UNAVAILABLE_ARCHIVE = "Accounts are temporarily unavailable. Nothing was changed.";
 const SELF = "You cannot archive your own account.";
+const NOT_IN_DEPARTMENT = "You can only archive or restore accounts in your own department or its sub-departments.";
+const RANK = "You cannot archive or restore an account with equal or higher authority than yours.";
 
 const archiveForm = z.object({ employeeId: z.string().trim().regex(/^BS-\d{4}$/) });
 
 async function setArchived(form: FormData, archive: boolean): Promise<ActionState> {
   const actor = await getActor();
-  if (actor?.identity.role !== "admin") return failure(NOT_ADMIN_ARCHIVE);
+  const role = actor?.identity.role;
+  if (!actor || (role !== "admin" && role !== "manager")) return failure(NOT_ADMIN_ARCHIVE);
 
   const parsed = archiveForm.safeParse({ employeeId: form.get("employeeId") ?? "" });
   if (!parsed.success) return failure(UNKNOWN_EMPLOYEE);
   const { employeeId } = parsed.data;
 
   try {
-    const store = createAccountsStore(getServiceClient);
-    const input = { employeeId, actorId: actor.userId };
-    const result = archive ? await store.archive(input) : await store.restore(input);
+    let result: ArchiveResult;
+    if (actor.identity.role === "manager") {
+      const store = createManagerAccessStore({ userClient: getUserClient, scope: managerScope });
+      result = archive ? await store.archive(actor.identity, employeeId) : await store.restore(actor.identity, employeeId);
+    } else {
+      const store = createAccountsStore(getServiceClient);
+      const input = { employeeId, actorId: actor.userId };
+      result = archive ? await store.archive(input) : await store.restore(input);
+    }
     revalidatePath("/");
     return {
       error: "",
@@ -91,6 +104,8 @@ async function setArchived(form: FormData, archive: boolean): Promise<ActionStat
       return failure(error.state === "archived" ? `${name} is already archived.` : `${name} is not archived.`);
     }
     if (error instanceof ArchiveSelfError) return failure(SELF);
+    if (error instanceof ArchiveNotAuthorizedError) return failure(NOT_IN_DEPARTMENT);
+    if (error instanceof ArchiveRankError) return failure(RANK);
     if (error instanceof AccountValidationError && error.fields.includes("employeeId")) return failure(UNKNOWN_EMPLOYEE);
     console.error(`Account ${archive ? "archive" : "restore"} failed.`, error instanceof Error ? error.name : "unknown error");
     return failure(UNAVAILABLE_ARCHIVE);
