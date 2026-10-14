@@ -5,7 +5,7 @@ import {
   type EmployeeDetailsInput, type NewEmployeeField, type NewEmployeeInput,
 } from "@/domain/employee-input";
 import {
-  assessmentsStore, AssessmentsUnavailableError, type Assessments, type AssessmentsStore,
+  assessmentsStore, AssessmentsUnavailableError, createAssessmentsStore, type Assessments, type AssessmentsStore,
 } from "./assessments-store";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
@@ -237,14 +237,14 @@ export type EmployeesStoreClients = {
   interviews: Pick<InterviewsStore, "listFor">;
   /** Where profile training comes from (RLS-scoped through the same per-request JWT). */
   training: Pick<TrainingStore, "listFor">;
-  /** Story 7.4: where profile skills and the evaluation come from (default: the real assessments-store). */
+  /** Story 7.4: where profile skills and the evaluation come from (default: an assessments-store on the same `userClient` and `scope`). */
   assessments?: Pick<AssessmentsStore, "listFor">;
   /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
   scope?: ManagerScope;
 };
 
 export function createEmployeesStore({
-  userClient, interviews, training, assessments = assessmentsStore, scope = managerScope,
+  userClient, interviews, training, scope = managerScope, assessments = createAssessmentsStore({ userClient, scope }),
 }: EmployeesStoreClients): EmployeesStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T | null> {
     let result: Result<T>;

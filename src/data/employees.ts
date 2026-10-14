@@ -108,6 +108,18 @@ export function skillSeedRows(list: Employee[]) {
 }
 
 /**
+ * The seed skill rows not already stored: a row is skipped when the same employee already has a skill with
+ * the same name in any case (the table's identifier, `(employee_id, lower(name))`).
+ */
+export function missingSkillSeedRows<R extends { employee_id: string; name: string }>(
+  existing: { employee_id: string; name: string }[], rows: R[],
+): R[] {
+  const key = (employeeId: string, name: string) => `${employeeId}\u0000${name.toLowerCase()}`;
+  const known = new Set(existing.map(s => key(s.employee_id, s.name)));
+  return rows.filter(r => !known.has(key(r.employee_id, r.name)));
+}
+
+/**
  * The `employee_evaluations` rows `npm run db:seed` inserts (Story 7.4): one per fixture employee, with the
  * fixture's reviewer and review date, unsaved by any account (`updated_by` null).
  */

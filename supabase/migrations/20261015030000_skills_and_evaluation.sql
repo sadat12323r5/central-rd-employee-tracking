@@ -52,6 +52,9 @@ create table public.employee_evaluations (
   updated_at              timestamptz not null default now()
 );
 
+-- No direct writes from API roles (RLS does not govern TRUNCATE): only the functions below and the service role write.
+revoke insert, update, delete, truncate on public.employee_skills, public.employee_evaluations from anon, authenticated;
+
 alter table public.employee_skills enable row level security;
 alter table public.employee_evaluations enable row level security;
 

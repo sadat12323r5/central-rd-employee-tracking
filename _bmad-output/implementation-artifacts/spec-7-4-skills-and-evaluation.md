@@ -2,7 +2,7 @@
 title: "Story 7.4: Record skills assessments and the manager evaluation"
 type: 'feature'
 created: '2026-10-14'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'bac1e0c1d3cfa287242c0c5c10193980a8b0f2ea'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -105,6 +105,30 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 20 findings — high 0, medium 1, low 13, false 6, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind: a manager can assess their own record when it sits in a department they manage — the epic defines "authorized manager" by subtree only, the same rule Story 7.2 kept for basic details; a self-assessment guard needs a System Owner decision, recorded in deferred-work.md.
+  - `[low]` `[reject]` Blind: the re-rate confirmation echoes the typed case ("REACT") while the list keeps "React" — cosmetic; the fix changes the function's return shape.
+  - `[false]` `[reject]` Blind: a misspelled skill can never be renamed or removed — the story asks only to rate skills; no removal is in scope (recorded in deferred-work.md).
+  - `[low]` `[reject]` Blind: picking an existing skill does not prefill its level and evidence — UX nicety; the current values are shown in the list right above the form.
+  - `[low]` `[reject]` Blind: evaluation saves are last-write-wins — same call as Story 7.2's free-text fields; a conflict token adds a parameter and state for a rare case (recorded in deferred-work.md).
+  - `[low]` `[patch]` Blind: the default assessments store ignored the injected `scope`/`userClient` — `createEmployeesStore` now defaults to `createAssessmentsStore({ userClient, scope })`. The double scope read for managers is rejected: training-store does the same, and it costs one extra query.
+  - `[low]` `[reject]` Blind: archived employees' assessments stay editable — same decision as Story 7.2 (records are kept, correcting them is harmless).
+  - `[false]` `[reject]` Blind: no manager or Staff e2e — the manager path and Staff refusals run against the database in tests/assessments-rls.test.ts (CI supplies the secrets); the Staff read-only view is covered by component tests.
+  - `[low]` `[patch]` Blind: new tables keep default write grants (TRUNCATE is not governed by RLS) — migration now revokes insert, update, delete, truncate from anon and authenticated, as audit_events does.
+  - `[low]` `[patch]` Blind: the defence-in-depth filter is quadratic, and employees with no skills show an empty "Core skills" cell — filter now uses a Set; the empty cell is rejected as cosmetic (it was already empty for fixture-less employees).
+  - `[low]` `[reject]` Blind: seeded reviewer labels ("Ayesha Karim · L&D Manager") differ from saved ones — demo data; rewriting it would break the insert-only seed rule.
+  - `[low]` `[reject]` Blind: the skill form does not clear after a save that changes nothing — the inputs keep the values just saved and the success message shows; cosmetic.
+  - `[low]` `[reject]` EdgeCase: stale evaluation form overwrites a newer one — duplicate of the last-write-wins row.
+  - `[low]` `[reject]` EdgeCase: manager self-assessment — duplicate of the first row.
+  - `[low]` `[reject]` EdgeCase: archived targets writable — duplicate of the archived row.
+  - `[false]` `[reject]` EdgeCase: zero-width-only names/evidence — exotic input with no realistic caller; Story 7.2 rejected the same class.
+  - `[false]` `[reject]` EdgeCase: confirmation names the typed case — duplicate of the second row (cosmetic).
+  - `[medium]` `[patch]` VerificationGap: the seed's skip-existing filter was only checked by source-text regexes — moved into the pure helper `missingSkillSeedRows` in src/data/employees.ts, used by the seed, with three unit tests (different case skipped, new kept, other employee's same name not suppressing).
+  - `[false]` `[reject]` Intent: evaluation history (R1b) not implemented — the story says "update the evaluation summary"; one current summary is the direct reading.
+  - `[false]` `[reject]` Intent: the staff-portal read-only section goes beyond the named tab — AC2 says "employees see these read-only", and the staff portal is where employees see their record.
+
 ## Design Notes
 
 Functions instead of insert/update policies (as in 7.2): the author (`updated_by`, `reviewer`) and date must come from the session, not the client, and RLS cannot stop a caller forging them or re-pointing `employee_id`. Skill names are unique per employee case-insensitively, so "rate a skill" is an upsert. Ordering skills strongest first is a display choice; the epic does not fix an order for this tab.
@@ -118,3 +142,36 @@ Functions instead of insert/update policies (as in 7.2): the author (`updated_by
 - `npm run build` -- success.
 - `npm run test:e2e` with Chromium via a temporary config (`channel: undefined`, `launchOptions.executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`; delete it afterwards) -- pass, or fail only with schema-missing errors.
 - Optional: apply all migrations to a throwaway local Postgres (as 7.2 did) and exercise both functions.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Skills ratings and the manager evaluation now live in the database. The Administrator (anyone) and department managers (their subtree) rate a skill (1–5 with evidence; same name in any case updates it) and edit the evaluation summary on the profile's Skills & evaluation tab. Writes go only through two SECURITY DEFINER functions, which take the author and the date from the session. Staff are refused at the action, the store and the database, and see their own skills and evaluation read-only in the staff portal. `npm run db:seed` moves the demo data in; runtime code no longer reads skills or the review from `src/data/employees.ts`.
+
+**Files changed:**
+- `supabase/migrations/20261015030000_skills_and_evaluation.sql`: two tables, select-only RLS, write grants revoked, two functions (ADDITIVE).
+- `src/domain/assessment-input.ts`: limits, normalisation, validation.
+- `src/server/assessments-store.ts`, `src/server/assessment-actions.ts`: role-scoped reads, writes, refusal mapping, actions.
+- `src/server/employees-store.ts`: skills and review merged from assessments-store.
+- `src/components/skill-rating-panel.tsx`, `evaluation-panel.tsx`, `assessment-summary.tsx`, `portal.tsx`, `staff-attendance.tsx`, `src/app/styles.css`: forms for admin/manager, empty states, staff read-only section.
+- `src/data/employees.ts`, `scripts/seed-employees.ts`: seed rows and the insert-only seed step.
+- Tests: new input, store, action, fixture, panel, live RLS (BS-86xx) and e2e (`tests/e2e/skills-evaluation.spec.ts`) tests; extended employees-store, portal and staff-attendance tests; three live suites wired to a real assessments store.
+- `docs/DEPLOYMENT.md`, `docs/ARCHITECTURE.md`.
+
+**Review:** 20 findings: 1 medium, 13 low, 6 false.
+- **Patched (4):** medium: seed filter moved to a tested pure helper; low: write grants revoked on the new tables; low: default assessments store uses the injected scope; low: Set-based read filter.
+- **Deferred:** none in frontmatter. Two decisions recorded in deferred-work.md: manager self-assessment, and skill rename/removal and evaluation history.
+- **Rejected:** all others, with reasons in the triage log.
+
+Follow-up review recommended: false (patched: high 0, medium 1).
+
+**Verification:**
+- `npm run typecheck`: pass. `npm run build`: pass.
+- `npm test`: 1278 passed, 52 skipped. Five live files fail only with PGRST205 (`public.departments` missing): departments-rls, manager-scope-rls, employee-create-rls, employee-details-rls, assessments-rls.
+- `npm run test:e2e` (Chromium): 8 passed, 21 failed, all schema-missing: PGRST205 for `employee_skills`, `employee_evaluations` and `departments`, and 42703 for `employees.department_id`.
+- Local Postgres 16 with all migrations (by the implementer, before the grant revoke was added): both functions' authority, validation, case-insensitive re-rate, reviewer labels, Dhaka date, RLS reads and refused direct writes behaved as specified.
+
+**Residual risks:**
+- Until migration 20261015030000 is applied, every employee read fails ("Employee records are unavailable"), so the PR must merge only together with the migration (after the 4.1–4.3, 7.1 and 7.2 migrations).
+- The revoke line was not run against Postgres.

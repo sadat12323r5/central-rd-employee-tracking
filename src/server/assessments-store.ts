@@ -177,7 +177,8 @@ export function createAssessmentsStore({ userClient, scope = managerScope }: Ass
       })),
     ]);
     // Defence in depth: only rows of the employees asked for, whatever the query returned.
-    const allowed = ids === undefined ? () => true : (id: string) => ids.includes(id);
+    const wanted = ids === undefined ? undefined : new Set(ids);
+    const allowed = (id: string) => wanted === undefined || wanted.has(id);
     return {
       skills: skills.filter(r => allowed(r.employee_id)).map(toSkill),
       evaluations: evaluations.filter(r => allowed(r.employee_id)).map(toEvaluation),

@@ -20,7 +20,7 @@ import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
   Employee, evaluationSeedRows as EvaluationSeedRows, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows,
-  skillSeedRows as SkillSeedRows, trainingSeedRows as TrainingSeedRows,
+  missingSkillSeedRows as MissingSkillSeedRows, skillSeedRows as SkillSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
 import type {
   departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
@@ -36,9 +36,11 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees, evaluationSeedRows, interviewSeedRows, lmsStubSeedRows, skillSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+const {
+  employees, evaluationSeedRows, interviewSeedRows, lmsStubSeedRows, missingSkillSeedRows, skillSeedRows, trainingSeedRows,
+} = (await import(fixtureUrl)) as {
   employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
-  trainingSeedRows: typeof TrainingSeedRows; skillSeedRows: typeof SkillSeedRows; evaluationSeedRows: typeof EvaluationSeedRows;
+  trainingSeedRows: typeof TrainingSeedRows; skillSeedRows: typeof SkillSeedRows; missingSkillSeedRows: typeof MissingSkillSeedRows; evaluationSeedRows: typeof EvaluationSeedRows;
 };
 
 // Loaded the same way: the seed departments and the default department for fixture employees.
@@ -164,9 +166,7 @@ for (let from = 0; ; from += 1000) {
   existingSkills.push(...(page.data ?? []) as { employee_id: string; name: string }[]);
   if ((page.data ?? []).length < 1000) break;
 }
-const skillKey = (employeeId: string, name: string) => `${employeeId}\u0000${name.toLowerCase()}`;
-const knownSkills = new Set(existingSkills.map(s => skillKey(s.employee_id, s.name)));
-const newSkills = skillSeedRows(employees).filter(r => !knownSkills.has(skillKey(r.employee_id, r.name)));
+const newSkills = missingSkillSeedRows(existingSkills, skillSeedRows(employees));
 if (newSkills.length > 0) {
   const skills = await supabase.from("employee_skills").insert(newSkills, { defaultToNull: false }).select("id");
   if (skills.error) {

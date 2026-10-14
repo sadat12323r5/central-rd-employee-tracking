@@ -70,6 +70,13 @@
   summary: Store paging (src/server/paging.ts) is offset-based without a snapshot, so a row written or deleted between page requests can be duplicated or skipped in an export larger than 1000 rows per source.
   evidence: Separate .range() requests; attendance orders by work_date desc, so a clock-in during a multi-page read shifts later pages. Keyset paging on the total order (or a snapshot RPC) would remove it.
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-4-skills-and-evaluation.md`
+  summary: Decide whether a department manager may assess themselves (rate their own skills, write their own evaluation) when their own record sits inside the department they manage; today the Epic 4 authority rule allows it, as it does for Story 7.2's basic details.
+  evidence: rate_employee_skill / update_employee_evaluation and assessments-store check only Administrator or manages_employee(target). Needs a System Owner decision; a guard would be a small additive function change.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-4-skills-and-evaluation.md`
+  summary: Skills cannot be renamed or removed, and evaluations keep no history (last write wins, no conflict check). A mistyped skill name stays on the profile.
+  evidence: Story 7.4 asks only to rate skills and update the summary; removal/history were not requested.
+
 ## Blocked: Stories 5.2, 5.3, 5.4 (recorded 2026-10-14 by the unattended story loop)
 
 Story 5.2 counts working days "against the calendar (weekends and holidays excluded)" and rejects "a year outside the calendar". That calendar is Story 5.1, which is blocked on the System Owner-approved holiday calendar (sprint-status action item). Stories 5.3 and 5.4 build on 5.2's leave records. All three stay `backlog` with a `# blocked` note until 5.1 is unblocked.

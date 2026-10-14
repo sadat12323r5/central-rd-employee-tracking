@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { employees, evaluationSeedRows, skillSeedRows } from "@/data/employees";
+import { employees, evaluationSeedRows, missingSkillSeedRows, skillSeedRows } from "@/data/employees";
 import { EVALUATION_TEXT_MAX, READINESS_MAX, SKILL_EVIDENCE_MAX, SKILL_LEVELS, SKILL_NAME_MAX } from "@/domain/assessment-input";
 import { isCalendarDate } from "@/domain/dates";
 
@@ -34,6 +34,23 @@ describe("fixture skills as seed rows", () => {
   it("are unique per employee by case-insensitive name (the skill identifier)", () => {
     const keys = rows.map(r => `${r.employee_id}|${r.name.toLowerCase()}`);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("missingSkillSeedRows (insert-only skill seeding)", () => {
+  const row = (employee_id: string, name: string) => ({ employee_id, name, level: 3, evidence: "e", updated_by: null });
+
+  it("skips a skill the employee already has under a differently-cased name", () => {
+    expect(missingSkillSeedRows([{ employee_id: "BS-1001", name: "react" }], [row("BS-1001", "React")])).toEqual([]);
+  });
+
+  it("keeps a skill not yet stored", () => {
+    expect(missingSkillSeedRows([{ employee_id: "BS-1001", name: "React" }], [row("BS-1001", "React"), row("BS-1001", "TypeScript")]))
+      .toEqual([row("BS-1001", "TypeScript")]);
+  });
+
+  it("is not suppressed by another employee's skill of the same name", () => {
+    expect(missingSkillSeedRows([{ employee_id: "BS-1002", name: "React" }], [row("BS-1001", "React")])).toEqual([row("BS-1001", "React")]);
   });
 });
 
