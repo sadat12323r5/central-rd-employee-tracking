@@ -2,9 +2,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { employees as fixture } from "@/data/employees";
 import {
-  createEmployeesStore, EmployeeExistsError, EmployeeForbiddenError, EmployeesUnavailableError, EmployeeValidationError, type EmployeeRow,
+  createEmployeesStore, EmployeeExistsError, EmployeeForbiddenError, EmployeeNotFoundError, EmployeesUnavailableError, EmployeeValidationError,
+  type EmployeeRow,
 } from "@/server/employees-store";
-import { todayInDhaka, type NewEmployeeInput } from "@/domain/employee-input";
+import { todayInDhaka, type EmployeeDetailsInput, type NewEmployeeInput } from "@/domain/employee-input";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { many, pagedClient } from "./support/paged-client";
 import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
@@ -730,5 +731,125 @@ describe("employees-store.create (Story 7.1)", () => {
   it("maps a thrown client error to EmployeesUnavailableError", async () => {
     const { client } = insertClient(null, true);
     await expect(storeWith(client).create(admin, input)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+});
+
+describe("employees-store.updateDetails (Story 7.2)", () => {
+  const manager = { role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const input: EmployeeDetailsInput = {
+    title: "  Senior   QA Engineer ", team: "Quality", manager: "Meera Das", office: " Dhaka  HQ ", employmentType: "Permanent",
+  };
+
+  type Rpc = { fn: string; args: Record<string, unknown> };
+  /** A client whose rpc answers with `data`/`error` (or throws), recording every call. No table access. */
+  function rpcClient(answer: { data?: unknown; error?: { code?: string; message?: string } | null } = { data: "Tanvir Hasan" }, throws = false) {
+    const rpcs: Rpc[] = [];
+    let tables = 0;
+    const client = {
+      from() { tables++; throw new Error("updateDetails must not touch a table directly"); },
+      async rpc(fn: string, args: Record<string, unknown>) {
+        rpcs.push({ fn, args });
+        if (throws) throw new TypeError("fetch failed");
+        return { data: answer.data ?? null, error: answer.error ?? null };
+      },
+    } as unknown as SupabaseClient;
+    return { client, rpcs, tables: () => tables };
+  }
+
+  function fakeScope(employeeIds: string[], fail?: Error) {
+    const calls: SessionIdentity[] = [];
+    const scope: ManagerScope = {
+      async forManager(session) {
+        calls.push(session);
+        if (fail) throw fail;
+        return { departmentIds: new Set(), employeeIds: new Set(employeeIds) };
+      },
+    };
+    return { scope, calls };
+  }
+
+  const storeWith = (client: SupabaseClient, scope = fakeScope(["BS-4321"]).scope) =>
+    createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: fakeTraining().store, scope });
+
+  it("lets an admin save the five fields, normalised, through the rpc only", async () => {
+    const { client, rpcs, tables } = rpcClient();
+    const scope = fakeScope([]);
+    expect(await storeWith(client, scope.scope).updateDetails(admin, "BS-4321", input)).toEqual({ employeeId: "BS-4321", name: "Tanvir Hasan" });
+    expect(rpcs).toEqual([{ fn: "update_employee_details", args: {
+      p_employee_id: "BS-4321", p_title: "Senior QA Engineer", p_team: "Quality", p_manager: "Meera Das", p_office: "Dhaka HQ",
+      p_employment_type: "Permanent",
+    } }]);
+    expect(tables()).toBe(0);
+    expect(scope.calls).toEqual([]);
+  });
+
+  it("never sends a department or any other column, even when smuggled into the input", async () => {
+    const { client, rpcs } = rpcClient();
+    const forged = { ...input, departmentId: "de9a0000-0000-4000-8000-0000000000d1", name: "X", archived_at: "2026-01-01" };
+    await storeWith(client).updateDetails(admin, "BS-4321", forged as EmployeeDetailsInput);
+    expect(Object.keys(rpcs[0].args).sort()).toEqual(
+      ["p_employee_id", "p_employment_type", "p_manager", "p_office", "p_team", "p_title"],
+    );
+  });
+
+  it("lets a manager edit an employee in their subtree, working the scope out fresh", async () => {
+    const { client, rpcs } = rpcClient();
+    const scope = fakeScope(["BS-4321"]);
+    await storeWith(client, scope.scope).updateDetails(manager, "BS-4321", input);
+    expect(rpcs).toHaveLength(1);
+    expect(scope.calls).toEqual([manager]);
+  });
+
+  it("refuses a manager outside their subtree without calling the rpc", async () => {
+    const { client, rpcs } = rpcClient();
+    await expect(storeWith(client, fakeScope(["BS-4321"]).scope).updateDetails(manager, "BS-9999", input))
+      .rejects.toBeInstanceOf(EmployeeForbiddenError);
+    expect(rpcs).toHaveLength(0);
+  });
+
+  it("reports unavailable, without the rpc, when a manager's scope cannot be read", async () => {
+    const { client, rpcs } = rpcClient();
+    await expect(storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope).updateDetails(manager, "BS-4321", input))
+      .rejects.toBeInstanceOf(EmployeesUnavailableError);
+    expect(rpcs).toHaveLength(0);
+  });
+
+  it("refuses Staff, even on their own record, without any query", async () => {
+    const { client, rpcs, tables } = rpcClient();
+    const scope = fakeScope([staff.employeeId]);
+    await expect(storeWith(client, scope.scope).updateDetails(staff, staff.employeeId, input)).rejects.toBeInstanceOf(EmployeeForbiddenError);
+    expect(rpcs).toHaveLength(0);
+    expect(tables()).toBe(0);
+    expect(scope.calls).toEqual([]);
+  });
+
+  it("refuses blank, over-long and unknown values without the rpc", async () => {
+    const { client, rpcs } = rpcClient();
+    const store = storeWith(client);
+    await expect(store.updateDetails(admin, "BS-4321", { ...input, title: "   " })).rejects.toMatchObject({ fields: ["title"] });
+    await expect(store.updateDetails(admin, "BS-4321", { ...input, office: "x".repeat(121), team: "" }))
+      .rejects.toMatchObject({ fields: ["team", "office"] });
+    await expect(store.updateDetails(admin, "BS-4321", { ...input, employmentType: "Contractor" }))
+      .rejects.toMatchObject({ name: "EmployeeValidationError", fields: ["employmentType"] });
+    expect(rpcs).toHaveLength(0);
+  });
+
+  it.each([
+    ["not_authorized", EmployeeForbiddenError],
+    ["invalid_input", EmployeeValidationError],
+    ["employee_not_found", EmployeeNotFoundError],
+    ["something_else", EmployeesUnavailableError],
+  ] as const)("maps the function error %s", async (message, type) => {
+    const { client } = rpcClient({ error: { code: "P0001", message } });
+    const refused = await storeWith(client).updateDetails(admin, "BS-4321", input).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(type);
+    if (refused instanceof EmployeeValidationError) expect(refused.fields).toEqual(["details"]);
+  });
+
+  it("maps a missing function (PGRST202), a thrown client error and a missing name to unavailable", async () => {
+    await expect(storeWith(rpcClient({ error: { code: "PGRST202", message: "Could not find the function" } }).client)
+      .updateDetails(admin, "BS-4321", input)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(storeWith(rpcClient({}, true).client).updateDetails(admin, "BS-4321", input)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(storeWith(rpcClient({ data: null }).client).updateDetails(admin, "BS-4321", input)).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });

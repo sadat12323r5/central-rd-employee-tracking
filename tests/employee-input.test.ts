@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  AVATAR_COLORS, avatarColorFor, derivedFields, initialsFor, invalidNewEmployeeFields, normalizeEmail, normalizeNewEmployee, normalizeText,
+  AVATAR_COLORS, avatarColorFor, derivedFields, initialsFor, invalidEmployeeDetailsFields, invalidNewEmployeeFields,
+  normalizeEmployeeDetails, normalizeEmail, normalizeNewEmployee, normalizeText,
   todayInDhaka, type NewEmployeeInput,
 } from "@/domain/employee-input";
 
@@ -112,5 +113,32 @@ describe("derivedFields", () => {
     expect(derivedFields({ employeeId: "BS-0001", name: "Nadia Rahman" })).toEqual({
       status: "Available", initials: "NR", avatarColor: "mint", summary: "",
     });
+  });
+});
+
+describe("employee details (Story 7.2)", () => {
+  const details = { title: "  Senior \t QA  Engineer ", team: " Quality ", manager: "Meera   Das", office: "Dhaka HQ", employmentType: " Intern " };
+
+  it("normalises every field", () => {
+    expect(normalizeEmployeeDetails(details)).toEqual({
+      title: "Senior QA Engineer", team: "Quality", manager: "Meera Das", office: "Dhaka HQ", employmentType: "Intern",
+    });
+  });
+
+  it("only ever returns the five fields", () => {
+    const forged = { ...details, departmentId: "x", name: "y" };
+    expect(Object.keys(normalizeEmployeeDetails(forged)).sort()).toEqual(["employmentType", "manager", "office", "team", "title"]);
+  });
+
+  it("accepts valid details, including 120-character values", () => {
+    expect(invalidEmployeeDetailsFields(normalizeEmployeeDetails(details))).toEqual([]);
+    expect(invalidEmployeeDetailsFields({ ...normalizeEmployeeDetails(details), title: "x".repeat(120) })).toEqual([]);
+  });
+
+  it("names blank, over-long and unknown fields in form order", () => {
+    const normal = normalizeEmployeeDetails(details);
+    expect(invalidEmployeeDetailsFields({ ...normal, title: "", office: "x".repeat(121), employmentType: "Contractor" }))
+      .toEqual(["title", "office", "employmentType"]);
+    expect(invalidEmployeeDetailsFields(normalizeEmployeeDetails({ ...details, team: "   ", manager: " " }))).toEqual(["team", "manager"]);
   });
 });

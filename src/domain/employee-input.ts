@@ -110,3 +110,38 @@ export function derivedFields(employee: Pick<NewEmployee, "employeeId" | "name">
     summary: "",
   };
 }
+
+// Story 7.2: editing an existing employee's basic details. Only these five fields; the department (and
+// every other column) never changes here; a department changes only through a transfer.
+
+/** What the person edits on an existing employee. */
+export type EmployeeDetailsInput = {
+  title: string; team: string;
+  /** The reporting manager, free text (the existing `manager` column). */
+  manager: string;
+  office: string; employmentType: string;
+};
+
+export type EmployeeDetailsField = keyof EmployeeDetailsInput;
+
+/** Trims and collapses inner whitespace in every field. */
+export function normalizeEmployeeDetails(input: EmployeeDetailsInput): EmployeeDetailsInput {
+  return {
+    title: normalizeText(input.title),
+    team: normalizeText(input.team),
+    manager: normalizeText(input.manager),
+    office: normalizeText(input.office),
+    employmentType: normalizeText(input.employmentType),
+  };
+}
+
+/** The fields of normalised details that break the rules, in form order; empty when valid. */
+export function invalidEmployeeDetailsFields(details: EmployeeDetailsInput): EmployeeDetailsField[] {
+  const invalid: EmployeeDetailsField[] = [];
+  for (const field of ["title", "team", "manager", "office"] as const) {
+    const value = details[field];
+    if (typeof value !== "string" || value.length < 1 || value.length > TEXT_FIELD_MAX) invalid.push(field);
+  }
+  if (!(EMPLOYMENT_TYPES as readonly string[]).includes(details.employmentType)) invalid.push("employmentType");
+  return invalid;
+}

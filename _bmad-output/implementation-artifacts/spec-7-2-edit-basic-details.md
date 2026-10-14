@@ -2,7 +2,7 @@
 title: "Story 7.2: Edit an employee's basic details"
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '6dec410dfd264ee85e8d5dc7a9fb3dcb7b897fc4'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -105,6 +105,36 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 26 findings — high 0, medium 1, low 13, false 12, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` VerificationGap: the panel's legacy employment-type branch is untested; removing it would silently save "Permanent" — component test added for a "Contract" value.
+  - `[low]` `[reject]` EdgeCase: archived target employees are editable — the intent does not forbid it; archived records are kept, and correcting them is harmless.
+  - `[low]` `[reject]` EdgeCase: panel offered on archived profiles — same as above.
+  - `[false]` `[reject]` EdgeCase: a manager can edit their own record inside their subtree — the recorded decision in Design Notes (the Epic 4 authority rule; the story only restricts Staff).
+  - `[low]` `[reject]` EdgeCase: revalidatePath throwing after commit shows "Nothing was changed" — the same pattern as every existing action; no realistic trigger.
+  - `[low]` `[reject]` EdgeCase: UTF-16 vs code-point length for emoji-heavy values — the app is stricter than the DB; only exotic input is affected, and nothing invalid is stored.
+  - `[low]` `[reject]` EdgeCase: Postgres `\s` may not match NBSP — exotic input; the app normalises first.
+  - `[low]` `[patch]` EdgeCase: the panel keyed only by employee keeps stale values after a refresh — the key now includes the five current values.
+  - `[false]` `[reject]` Blind: no audit row for detail edits — audit is decided only for archive/restore, transfer and exports; the story does not ask for it.
+  - `[low]` `[reject]` Blind: archived employees editable — duplicate of the EdgeCase row.
+  - `[false]` `[reject]` Blind: manager self-edit unaddressed — addressed in Design Notes.
+  - `[low]` `[patch]` Blind: ARCHITECTURE.md says 7.1 is "the only" write path — reworded.
+  - `[low]` `[patch]` Blind: concurrent or stale edits resubmit old values — same patch as the panel key row; last-write-wins is acceptable for these free-text fields.
+  - `[low]` `[reject]` Blind: DB-level invalid_input gives a generic message — the action's zod messages name the field first; the DB path is reached only by direct calls.
+  - `[low]` `[reject]` Blind: app/DB whitespace and length disagreement — duplicate of the EdgeCase rows.
+  - `[false]` `[reject]` Blind: legacy type branch contradicts the migration comment — the column has no check constraint, so rows created outside the app can hold other values; the branch is a safeguard.
+  - `[low]` `[reject]` Blind: the success message stays while editing — cosmetic; same as the other panels.
+  - `[low]` `[patch]` Blind: missing tests (Staff absence in portal, manager department refusal, manager e2e, keyboard) — added the Staff-absence test; the others repeat covered paths (the action's department refusal runs before the role-specific code).
+  - `[low]` `[reject]` Blind: test id slots can collide across concurrent runs — BS-87xx is used only by this story's files; the same per-slot pattern as the existing live tests.
+  - `[false]` `[reject]` Blind: refusals matched on the message without the P0001 code — the function names are unique, and the pattern matches Story 1.4's mapping.
+  - `[false]` `[reject]` Intent: the manager path is not driven end to end — covered by the live function test and unit tests; the Administrator e2e covers AC1's user surface.
+  - `[false]` `[reject]` Intent: other forged department keys are silently dropped — R2b: the department cannot change through this feature at any layer.
+  - `[false]` `[reject]` Intent: DB coverage depends on env vars — CI passes the secrets; descriptive.
+  - `[false]` `[reject]` Intent: a function instead of an RLS policy — the deliberate choice in Design Notes; the intent is met by both layers.
+  - `[false]` `[reject]` Intent: the panel is shown to managers on any open profile — managers can only open in-scope profiles (Story 4.3).
+  - `[false]` `[reject]` Intent: no audit (R5) — not in the story.
+
 ## Design Notes
 
 Why a function instead of an update policy: RLS cannot limit which columns an UPDATE touches, and Supabase grants `authenticated` update on every column, so an update policy would let a manager change `department_id`, `archived_at` or `auth_user_id` through the data API. A SECURITY DEFINER function that names only the five columns makes "department changes only through a transfer" true at the database, and the authority check runs before any lookup.
@@ -119,3 +149,49 @@ A manager may edit their own record only when it sits inside their own subtree (
 - `npm run build` -- success.
 - `npm run test:e2e` with Chromium via a temporary config (`channel: undefined`, `launchOptions.executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`; the repo config uses msedge; delete the temp config afterwards) -- pass, or fail only with schema-missing errors.
 - Optional: apply all migrations to a throwaway local Postgres (as Stories 4.3, 4.9 and 7.1 did) to exercise the function.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** The Administrator (anyone) and department managers (their subtree) can edit an employee's title, team, reporting manager, office and employment type from an "Edit details" form on the profile. The save goes through `employeesStore.updateDetails()` and a new SECURITY DEFINER function, `update_employee_details`, which updates only those five columns. A department change is refused at the action and is impossible at the database. `employees` still has no update policy.
+
+**Files changed:**
+- `supabase/migrations/20261015010000_employee_details_update.sql`: the function and its grants (ADDITIVE).
+- `src/domain/employee-input.ts`: details normalisation and validation.
+- `src/server/employees-store.ts`: `updateDetails`, `EmployeeNotFoundError`, refusal mapping.
+- `src/server/employee-actions.ts`: `updateEmployeeDetailsAction`.
+- `src/components/employee-details-panel.tsx`, `src/components/portal.tsx`, `src/app/styles.css`: the panel for admin and manager. The open profile now re-reads refreshed data.
+- Tests:
+  - new: `tests/components/employee-details-panel.test.tsx`, `tests/employee-details-rls.test.ts` (live, BS-87xx), `tests/e2e/edit-employee.spec.ts`;
+  - extended: the input, store, action, portal and staff-attendance tests;
+  - de-flaked: two Story 7.1 tests in `tests/components/add-employee-panel.test.tsx`, which now wait for the success text instead of the always-present status region.
+- `docs/DEPLOYMENT.md`, `docs/ARCHITECTURE.md`.
+
+**Review:** 26 findings: 1 medium, 13 low, 12 false.
+- **Patched (4 distinct fixes across 5 rows):**
+  - medium: the legacy employment-type safeguard had no test;
+  - low: the panel key now includes the current values (stale form after a refresh);
+  - low: a test that Staff get no edit form;
+  - low: ARCHITECTURE wording.
+- **Deferred:** none.
+- **Rejected:** all others, with the reasons in the triage log (main ones: no audit row, which the story does not ask for; archived targets stay editable; a manager editing their own in-subtree record, as decided in Design Notes).
+
+Follow-up review recommended: false (patched: high 0, medium 1).
+
+**Verification:**
+- `npm run typecheck`: pass.
+- `npm run build`: pass.
+- `npm test`: 1159 passed, 41 skipped. Four live files fail only with PGRST205: `departments-rls`, `manager-scope-rls`, `employee-create-rls` and `employee-details-rls`.
+- `npm run test:e2e` (Chromium): 11 passed, 17 failed, all schema-missing (13× 42703, 4× PGRST205).
+- Local Postgres 16 with all migrations applied (by the implementer):
+  - the Administrator and an in-subtree manager save the five fields, and the other columns (department included) are unchanged;
+  - `not_authorized` for: a manager outside the subtree, a missing id from a manager, Staff on their own record, an archived caller, and no user;
+  - `invalid_input` for: a blank value, an unknown employment type, and 121 characters;
+  - `employee_not_found` for an unknown id from the Administrator;
+  - anon is denied;
+  - a direct UPDATE with a manager or admin JWT changes 0 rows.
+
+**Residual risks:**
+- The live and e2e tests must be re-run after the 4.1–4.3, 7.1 and 7.2 migrations are applied.
+- Until the 7.2 migration is applied, saving details shows "temporarily unavailable".

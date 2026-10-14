@@ -1,6 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { employees as fixture, type Employee } from "@/data/employees";
-import { derivedFields, invalidNewEmployeeFields, normalizeNewEmployee, type NewEmployeeField, type NewEmployeeInput } from "@/domain/employee-input";
+import {
+  derivedFields, invalidEmployeeDetailsFields, invalidNewEmployeeFields, normalizeEmployeeDetails, normalizeNewEmployee,
+  type EmployeeDetailsInput, type NewEmployeeField, type NewEmployeeInput,
+} from "@/domain/employee-input";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { ManagerIdentity, SessionIdentity, StaffIdentity } from "./session";
@@ -31,6 +34,13 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // department is required. Status, initials, avatar colour and summary are derived, never taken from the
 // input, and the row never carries an account link or an archived flag: accounts come only from
 // accounts-store (Story 1.3).
+//
+// Story 7.2: `updateDetails` edits an existing employee's title, team, reporting manager, office and
+// employment type through the per-request client's rpc to public.update_employee_details (a SECURITY
+// DEFINER function that names only those five columns; there is no update policy on employees). The
+// Administrator may edit anyone, a manager only employees in their subtree (checked here against
+// manager-scope before the rpc, and again by the function); Staff never, not even their own record.
+// The department never changes here: only through a transfer.
 export interface EmployeesStore {
   /** Every employee for an admin; the department subtree's employees for a manager; only the caller's own record for staff. */
   listFor(session: SessionIdentity): Promise<Employee[]>;
@@ -47,20 +57,29 @@ export interface EmployeesStore {
    * (duplicate Employee ID or email) or EmployeesUnavailableError. Never creates a sign-in account.
    */
   create(session: SessionIdentity, input: NewEmployeeInput): Promise<{ employeeId: string; name: string }>;
+  /**
+   * Story 7.2: saves an employee's title, team, reporting manager, office and employment type (nothing
+   * else). Throws EmployeeForbiddenError (Staff, or an employee outside a manager's subtree),
+   * EmployeeValidationError (bad input), EmployeeNotFoundError (no such employee) or EmployeesUnavailableError.
+   */
+  updateDetails(session: SessionIdentity, employeeId: string, input: EmployeeDetailsInput): Promise<{ employeeId: string; name: string }>;
 }
 
-/** The caller may not add this employee: a Staff session, or a department outside a manager's subtree. */
+/** The caller may not add or edit this employee: a Staff session, or outside a manager's subtree. */
 export class EmployeeForbiddenError extends Error {
   constructor() {
-    super("Only an Administrator, or a manager for their own department subtree, can add employees.");
+    super("Only an Administrator, or a manager for their own department subtree, can add or edit employees.");
     this.name = "EmployeeForbiddenError";
   }
 }
 
-/** The input failed validation. `fields` names the offending inputs; values are never included. */
+/**
+ * The input failed validation. `fields` names the offending inputs; values are never included.
+ * `"details"` means the database function refused the basic details without naming a field (Story 7.2).
+ */
 export class EmployeeValidationError extends Error {
-  readonly fields: NewEmployeeField[];
-  constructor(fields: NewEmployeeField[]) {
+  readonly fields: (NewEmployeeField | "details")[];
+  constructor(fields: (NewEmployeeField | "details")[]) {
     super(`Invalid employee details: ${fields.join(", ")}.`);
     this.name = "EmployeeValidationError";
     this.fields = fields;
@@ -74,6 +93,14 @@ export class EmployeeExistsError extends Error {
     super(field === "employeeId" ? "An employee with this Employee ID already exists." : "An employee with this email already exists.");
     this.name = "EmployeeExistsError";
     this.field = field;
+  }
+}
+
+/** Story 7.2: there is no employee with this Employee ID. */
+export class EmployeeNotFoundError extends Error {
+  constructor() {
+    super("No employee has this Employee ID.");
+    this.name = "EmployeeNotFoundError";
   }
 }
 
@@ -169,6 +196,16 @@ function insertRefusal(error: DbError): Error {
   if (error.code === "23503" || error.code === "22P02") return new EmployeeValidationError(["departmentId"]);
   if (error.code === "42501") return new EmployeeForbiddenError();
   return new EmployeesUnavailableError({ cause: error });
+}
+
+/** Story 7.2: maps an update_employee_details refusal to the store's typed errors; anything else is "unavailable". */
+function detailsRefusal(error: DbError): Error {
+  switch (error.message) {
+    case "not_authorized": return new EmployeeForbiddenError();
+    case "invalid_input": return new EmployeeValidationError(["details"]);
+    case "employee_not_found": return new EmployeeNotFoundError();
+    default: return new EmployeesUnavailableError({ cause: error });
+  }
 }
 
 export type EmployeesStoreClients = {
@@ -288,6 +325,30 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
       }
       if (result.error) throw insertRefusal(result.error);
       return { employeeId: employee.employeeId, name: employee.name };
+    },
+    async updateDetails(session, employeeId, input) {
+      // Staff never edit basic details, not even their own: refused before any query.
+      if (session.role !== "admin" && session.role !== "manager") throw new EmployeeForbiddenError();
+      // Outside a manager's subtree: refused without calling the function.
+      if (session.role === "manager" && !(await managedEmployeeIds(session)).has(employeeId)) {
+        throw new EmployeeForbiddenError();
+      }
+      const details = normalizeEmployeeDetails(input);
+      const invalid = invalidEmployeeDetailsFields(details);
+      if (invalid.length > 0) throw new EmployeeValidationError(invalid);
+      let result: { data: unknown; error: DbError | null };
+      try {
+        // Only the five basic-details fields are sent; the function updates nothing else.
+        result = await (await userClient()).rpc("update_employee_details", {
+          p_employee_id: employeeId, p_title: details.title, p_team: details.team, p_manager: details.manager,
+          p_office: details.office, p_employment_type: details.employmentType,
+        });
+      } catch (cause) {
+        throw new EmployeesUnavailableError({ cause });
+      }
+      if (result.error) throw detailsRefusal(result.error);
+      if (typeof result.data !== "string") throw new EmployeesUnavailableError({ cause: "no employee name returned" });
+      return { employeeId, name: result.data };
     },
     async listFor(session) {
       if (session.role === "manager") return listForManager(session);

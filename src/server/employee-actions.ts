@@ -7,7 +7,7 @@ import { EMAIL_MAX, EMPLOYMENT_TYPES, normalizeEmail, normalizeText, TEXT_FIELD_
 import type { ActionState } from "./attendance-actions";
 import { getActor } from "./auth";
 import {
-  EmployeeExistsError, EmployeeForbiddenError, employeesStore, EmployeesUnavailableError, EmployeeValidationError,
+  EmployeeExistsError, EmployeeForbiddenError, EmployeeNotFoundError, employeesStore, EmployeesUnavailableError, EmployeeValidationError,
 } from "./employees-store";
 
 // Story 7.1: the Administrator (any department) and department managers (departments in their subtree)
@@ -96,5 +96,61 @@ export async function createEmployeeAction(_previous: ActionState, form: FormDat
     }
     console.error("Adding an employee failed.", error instanceof Error ? error.name : "unknown error");
     return failure(UNAVAILABLE);
+  }
+}
+
+// Story 7.2: the Administrator (anyone) and department managers (employees in their subtree) edit an
+// employee's title, team, reporting manager, office and employment type. The role is checked here first:
+// Staff (even on their own record) and no session never reach employees-store. A form that carries a
+// department at all is refused: an employee's department changes only through a transfer.
+
+const DETAILS_NOT_ALLOWED = "Only an Administrator or a department manager can edit employee details.";
+const DEPARTMENT_VIA_TRANSFER = "An employee's department can only change through a transfer.";
+const DETAILS_FORBIDDEN = "You can only edit employees in your own department or its sub-departments.";
+const NO_SUCH_EMPLOYEE = "Choose an existing employee.";
+const DETAILS_UNAVAILABLE = "Employee records are temporarily unavailable. Nothing was changed.";
+
+const employeeDetails = z.object({
+  employeeId: z.string({ error: NO_SUCH_EMPLOYEE }).trim().regex(/^BS-\d{4}$/, NO_SUCH_EMPLOYEE),
+  title: text("job title"),
+  team: text("team"),
+  manager: text("reporting manager"),
+  office: text("office"),
+  employmentType: z.enum(EMPLOYMENT_TYPES, { error: `Choose an employment type: ${EMPLOYMENT_TYPES.join(", ")}.` }),
+});
+
+const DETAIL_FIELDS = ["employeeId", "title", "team", "manager", "office", "employmentType"] as const;
+
+export async function updateEmployeeDetailsAction(_previous: ActionState, form: FormData): Promise<ActionState> {
+  const actor = await getActor();
+  const session = actor?.identity;
+  if (session?.role !== "admin" && session?.role !== "manager") return failure(DETAILS_NOT_ALLOWED);
+  if (form.has("departmentId") || form.has("department")) return failure(DEPARTMENT_VIA_TRANSFER);
+
+  const parsed = employeeDetails.safeParse(Object.fromEntries(DETAIL_FIELDS.map(key => {
+    const value = form.get(key);
+    return [key, typeof value === "string" ? value : undefined];
+  })));
+  if (!parsed.success) return failure(parsed.error.issues[0]?.message ?? "Check the employee details.");
+
+  const { employeeId, ...details } = parsed.data;
+  try {
+    const saved = await employeesStore.updateDetails(session, employeeId, details);
+    revalidatePath("/");
+    return { error: "", message: `${saved.name}'s details were saved.` };
+  } catch (error) {
+    if (error instanceof EmployeeForbiddenError) {
+      // The Administrator has authority over everyone: a refusal (e.g. the function not applied, or a
+      // stale JWT role) is not about scope, so never show the manager-only message.
+      if (session.role === "admin") {
+        console.error("Editing employee details failed: refused for an Administrator.", error.name);
+        return failure(DETAILS_UNAVAILABLE);
+      }
+      return failure(DETAILS_FORBIDDEN);
+    }
+    if (error instanceof EmployeeNotFoundError) return failure(NO_SUCH_EMPLOYEE);
+    if (error instanceof EmployeeValidationError) return failure("Check the employee details.");
+    console.error("Editing employee details failed.", error instanceof Error ? error.name : "unknown error");
+    return failure(DETAILS_UNAVAILABLE);
   }
 }

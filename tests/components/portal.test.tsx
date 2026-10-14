@@ -19,6 +19,7 @@ vi.mock("@/server/department-actions", () => ({
 }));
 vi.mock("@/server/employee-actions", () => ({
   createEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
+  updateEmployeeDetailsAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -752,5 +753,69 @@ describe("Portal add-employee form (Story 7.1)", () => {
   it("is not on the Overview", async () => {
     await show(<Portal employees={employees} departments={departments} current={none()} />);
     expect(screen.queryByRole("form", { name: "Add an employee" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Portal edit-details form (Story 7.2)", () => {
+  const QA = "de9a0000-0000-4000-8000-0000000000c2";
+  const departments = [{ id: QA, name: "QA Lab", parentId: null, managerUserId: null, managerEmployeeId: null }];
+  const people = employees.slice(0, 2).map(e => ({ ...e, archived: false, departmentId: QA }));
+  const openProfile = async (name: string) => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: `View ${name}'s profile` }));
+    return user;
+  };
+  const detailsForm = () => within(screen.getByRole("form", { name: "Edit employee details" }));
+
+  it.each([["the Administrator", "admin"], ["a department manager", "manager"]] as const)(
+    "shows %s the form on the profile Overview, prefilled, with the department read-only", async (_label, role) => {
+      await show(<Portal role={role} employees={people} departments={departments} current={none()} />);
+      expect(screen.queryByRole("form", { name: "Edit employee details" })).not.toBeInTheDocument();
+      await openProfile(people[0].name);
+      expect(detailsForm().getByLabelText("Job title")).toHaveValue(people[0].title);
+      expect(detailsForm().getByLabelText("Team")).toHaveValue(people[0].team);
+      expect(detailsForm().getByLabelText("Reporting manager")).toHaveValue(people[0].manager);
+      expect(detailsForm().getByLabelText("Office")).toHaveValue(people[0].location);
+      expect(detailsForm().getByLabelText("Employment type")).toHaveValue(people[0].type);
+      expect(detailsForm().queryByLabelText(/department/i)).not.toBeInTheDocument();
+      expect(detailsForm().getByText("QA Lab")).toBeInTheDocument();
+      expect(detailsForm().getByText("Changes through a transfer.")).toBeInTheDocument();
+    });
+
+  it("is only on the Overview tab", async () => {
+    await show(<Portal employees={people} departments={departments} current={none()} />);
+    const user = await openProfile(people[0].name);
+    await user.click(screen.getByRole("tab", { name: "Employment" }));
+    expect(screen.queryByRole("form", { name: "Edit employee details" })).not.toBeInTheDocument();
+  });
+
+  it("refills for each selected employee", async () => {
+    await show(<Portal employees={people} departments={departments} current={none()} />);
+    const user = await openProfile(people[0].name);
+    await user.clear(detailsForm().getByLabelText("Job title"));
+    await user.type(detailsForm().getByLabelText("Job title"), "Draft");
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /^Employees/ }));
+    await openProfile(people[1].name);
+    expect(detailsForm().getByLabelText("Job title")).toHaveValue(people[1].title);
+  });
+
+  it("refills the form when refreshed props bring changed details", async () => {
+    const view = await show(<Portal employees={people} departments={departments} current={none()} />);
+    await openProfile(people[0].name);
+    const updated = people.map((e, i) => (i === 0 ? { ...e, title: "Principal Engineer", location: "Chattogram" } : e));
+    await act(async () => { view.rerender(<Portal employees={updated} departments={departments} current={none()} />); });
+    expect(detailsForm().getByLabelText("Job title")).toHaveValue("Principal Engineer");
+    expect(detailsForm().getByLabelText("Office")).toHaveValue("Chattogram");
+  });
+
+  // Staff never get this portal (page.tsx renders StaffAttendance for them); the Staff own-record view is
+  // asserted to have no edit form in staff-attendance.test.tsx.
+
+  it("shows refreshed details in the profile header after the props change", async () => {
+    const view = await show(<Portal employees={people} departments={departments} current={none()} />);
+    await openProfile(people[0].name);
+    const updated = people.map((e, i) => (i === 0 ? { ...e, title: "Principal Engineer" } : e));
+    await act(async () => { view.rerender(<Portal employees={updated} departments={departments} current={none()} />); });
+    expect(screen.getByRole("heading", { level: 1, name: people[0].name }).parentElement).toHaveTextContent("Principal Engineer");
   });
 });

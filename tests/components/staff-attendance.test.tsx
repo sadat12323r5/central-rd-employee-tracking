@@ -49,6 +49,12 @@ describe("StaffAttendance", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("offers no Edit employee details form on the Staff member's own record (Story 7.2)", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Edit employee details" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
+  });
+
   it("shows the running day, clock-out and the log once clocked in", async () => {
     const { container } = await show(<StaffAttendance employee={employee} entries={[open, stale]} serverNow={now} current={none()} />);
     expect(screen.getByText(/Clocked in at 09:00/)).toBeInTheDocument();

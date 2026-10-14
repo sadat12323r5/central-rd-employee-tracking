@@ -63,7 +63,9 @@ describe("AddEmployeePanel", () => {
     render(<AddEmployeePanel departments={departments} />);
     await fill(user);
     await user.click(screen.getByRole("button", { name: "Add employee" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Tanvir Hasan was added.");
+    // The status region is always present (empty until the action answers): wait for the text, not the role.
+    await screen.findByText("Tanvir Hasan was added.");
+    expect(screen.getByRole("status")).toHaveTextContent("Tanvir Hasan was added.");
     const sent = createMock.mock.calls[0][1] as FormData;
     expect(Object.fromEntries(sent.entries())).toEqual({
       employeeId: "BS-4321", name: "Tanvir Hasan", title: "QA Engineer", team: "Quality", email: "tanvir@example.com",
@@ -96,7 +98,8 @@ describe("AddEmployeePanel", () => {
     await user.tab();
     expect(screen.getByRole("button", { name: "Add employee" })).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(await screen.findByRole("status")).toHaveTextContent("Tanvir Hasan was added.");
+    await screen.findByText("Tanvir Hasan was added.");
+    expect(screen.getByRole("status")).toHaveTextContent("Tanvir Hasan was added.");
   });
 
   it("has no accessibility violations", async () => {
