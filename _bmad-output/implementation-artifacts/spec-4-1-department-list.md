@@ -2,7 +2,7 @@
 title: 'Story 4.1: Administrator manages the department list'
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '5411f91d578845d490ef1f692639aaa1f26b3f65'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -93,6 +93,36 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 26 findings — high 0, medium 3, low 17, false 6, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` (verification-gap) Seed placement unverified; e2e directory test checks only the header — e2e now asserts a seeded fixture employee row shows Central R&D.
+  - `[low]` `[patch]` (verification-gap other) docs/DEPLOYMENT.md seed description omits departments — documented.
+  - `[false]` `[reject]` (intent-alignment) `employees.department_id` nullable / fixture-only placement diverges from "exactly one department" — a NOT NULL constraint is a DESTRUCTIVE tightening forbidden by the run rules; FK gives at most one, seed gives every existing (fixture) employee one; recorded in Design Notes.
+  - `[false]` `[reject]` (intent-alignment) L&D not seeded as managed by the Administrator — that is Story 4.2's acceptance criterion, not 4.1's.
+  - `[low]` `[patch]` (blind) Edit parent select offers descendants the server always rejects — filtered with `wouldCreateCycle`.
+  - `[false]` `[reject]` (blind) No way to assign/move an employee's department — transfers are Story 4.8 and employee creation Epic 7; out of 4.1's intent.
+  - `[low]` `[reject]` (blind) Panel text "every employee belongs to one department" vs nullable column — states the product rule the seeded data satisfies; not misleading in use.
+  - `[low]` `[patch]` (blind) Departments failure shows "Employee records are unavailable" — now a departments-specific alert (whole page still withheld: never partial data).
+  - `[low]` `[reject]` (blind) Seed fails if "L&D"/"Central R&D" already exist under another id — the PR instructs running the seed right after the migration, before any admin can create them; guarding adds lookup branches for an unlikely case.
+  - `[low]` `[reject]` (blind) DB unique index weaker than app normalisation (inner whitespace/tabs) — only reachable by service-role/direct inserts; every app path normalises first.
+  - `[false]` `[reject]` (blind) Name check 23514 mapped to unavailable — the store normalises and length-checks before any write, so the DB name check cannot fire from the app path.
+  - `[low]` `[reject]` (blind) Cycle trigger relies on READ COMMITTED — PostgREST runs statements at READ COMMITTED; no other writer exists.
+  - `[low]` `[reject]` (blind) Hierarchy shown as a flat list with no path/depth — presentation enhancement beyond the ACs.
+  - `[low]` `[reject]` (blind) No department filter/search/CSV/profile display — beyond the AC ("directory shows each person's department"); CSV left unchanged to avoid colliding with Epic 8 export work.
+  - `[false]` `[reject]` (blind) No history/updated_by for department changes — the architecture spine limits audit events to archive/restore and transfer.
+  - `[medium]` `[patch]` (blind) e2e directory test checks almost nothing — same root cause as the verification-gap finding; same patch.
+  - `[low]` `[patch]` (blind) updateDepartmentAction test gaps — tests added (no session, invalid/forbidden mapping, rethrow, no revalidate on refusal).
+  - `[low]` `[reject]` (blind) RLS tests don't cover staff read/update of `employees.department_id` — staff reading their own row's id is harmless and employees has no update policy (pre-existing).
+  - `[low]` `[reject]` (blind) ActionState imported from attendance-actions; messages duplicated in store and actions — the established pattern of interviews-actions; refactor out of scope.
+  - `[low]` `[reject]` (edge) Seed name clash — same as the blind finding above.
+  - `[low]` `[patch]` (edge) Seed log hard-codes "Central R&D" — reworded.
+  - `[medium]` `[patch]` (edge) Add form loses typed values on refusal (React 19 reset) — submitted values kept on refusal.
+  - `[low]` `[patch]` (edge) Edit parent select includes descendants — same as blind finding; same patch.
+  - `[false]` `[reject]` (edge) Saved parent missing from options falls back to Top level — the parent FK guarantees the parent exists and admins see every department.
+  - `[low]` `[reject]` (edge) Astral characters counted as UTF-16 units by zod max — only stricter than the DB for emoji names; unlikely for department names.
+  - `[low]` `[patch]` (edge) Departments-only failure misreported — same as the blind finding; same patch.
+
 ## Design Notes
 
 `employees.department_id` stays nullable: making it `NOT NULL` is a tightening (DESTRUCTIVE) and existing test fixtures insert employees without it. The "exactly one department" rule is met by the FK (at most one) plus the seed (at least one); the NOT NULL constraint is deferred until Epic 7 adds employee creation. All fixture employees go to Central R&D because the workspace tracks Central R&D staff; L&D is the managing department (AD-5 seed). Department names are read separately (`departments-store.list`) and joined in the portal by id, so the employees query never embeds another table.
@@ -104,3 +134,30 @@ deferred: []
 - `npm test` -- expected: all pass except live-DB tests that need the new schema, failing only with 42P01/42703/PGRST204/PGRST205
 - `npm run build` -- expected: success
 - `npm run test:e2e` -- expected: pass, or fail only with schema-missing errors until the migration is applied
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Administrator-only department list (add, rename, set parent; no delete), with cycle and case-insensitive duplicate-name rejection at `departments-store` and a DB trigger/unique index as backstops; `employees.department_id` (nullable FK); a Departments section and a Department directory column in the management portal; seed adds L&D → Central R&D and places fixture employees in Central R&D.
+
+**Files changed:**
+- `supabase/migrations/20261014000000_departments.sql` — ADDITIVE: departments table, cycle trigger, unique `lower(name)` index, admin-only RLS (no delete), `employees.department_id`.
+- `src/domain/departments.ts` — name normalisation, ancestor walk with visited-set guard, `wouldCreateCycle`.
+- `src/server/departments-store.ts` — list/create/update with typed errors; admin only.
+- `src/server/department-actions.ts` — create/update server actions (admin check, zod).
+- `src/data/departments.ts` — seed ids and rows.
+- `scripts/seed-employees.ts` — inserts departments, places fixture employees with no department in Central R&D.
+- `src/server/employees-store.ts`, `src/data/employees.ts` — admin reads carry `departmentId`.
+- `src/app/page.tsx` — loads departments for admins; departments-specific unavailable alert.
+- `src/components/departments-panel.tsx`, `src/components/portal.tsx`, `src/app/styles.css` — Departments section, Department column.
+- `docs/DEPLOYMENT.md` — seed and migration order.
+- Tests: domain, store, actions, panel, RLS (live), e2e; updated employees-store, portal, page tests.
+
+**Review findings:** 26 — 9 patched (3 medium, 6 low), 0 deferred, 17 rejected (reasons in the Review Triage Log).
+
+**Follow-up review recommended:** false. The pass patched no high findings; the three medium entries were test coverage, a misleading error message, and form value retention, all re-verified.
+
+**Verification:** `npm run typecheck` passes; `npm run build` passes; `npm test`: 739 passed, 8 skipped, with failures only in `tests/departments-rls.test.ts` (PGRST205, table not yet created) and one run of `tests/seed-demo-staff.test.ts`, which passes when re-run alone and does not touch this change. E2E (local Chromium): 11 passed; 10 admin-portal specs fail only with 42703 (`employees.department_id`) or PGRST205 (`departments`) until the migration is applied.
+
+**Residual risks:** the admin portal shows an unavailable page until the migration is applied, so apply it before deploying. `employees.department_id` stays nullable until Epic 7. The seed fails if an Administrator creates "L&D" or "Central R&D" under another id before the seed first runs.

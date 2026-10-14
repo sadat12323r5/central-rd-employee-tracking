@@ -22,3 +22,7 @@
 .withdrawn{background:var(--surface-count);color:var(--ink-soft)}.staff-interview-editor summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:12px;padding:4px 0}.staff-interview-editor[open]{white-space:normal;min-width:280px}.staff-interview-editor form{margin-top:12px}.staff-interview-history ul{list-style:none;padding:0;margin:0}.staff-interview-history li{padding:10px 0;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}.staff-interview-history li .badge{margin-right:6px}
 /* Training (Story 3.2): LMS-backed current enrolments */
 .training-row h4{font-size:15px;line-height:1.5;margin:0 0 6px}.lms-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;margin:0 0 12px}.lms-stale small{font-size:11px}
+.staff-field select{border:1px solid var(--field-border);border-radius:7px;padding:11px 12px;font:inherit;font-size:12px;color:var(--ink);background:var(--surface);width:100%}
+.staff-field select:focus-visible{outline:3px solid var(--focus-ring);outline-offset:1px}
+.departments-add{margin-top:24px;border-top:1px solid var(--line-divider);padding-top:20px}
+.departments-add h3{margin:0}

@@ -3,6 +3,7 @@ import Portal from "@/components/portal";
 import StaffAttendance from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
 import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
+import { departmentsStore, DepartmentsUnavailableError } from "@/server/departments-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
 import type { SessionIdentity } from "@/server/session";
 import { trainingStore, type CurrentTraining } from "@/server/training-store";
@@ -22,13 +23,18 @@ export default async function Home() {
       const entries = await attendanceStore.listForEmployee(employee.id);
       return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current} />;
     }
-    const employees = await employeesStore.listFor(session);
-    return <Portal employees={employees} current={currentTraining(session, employees.map(e => e.id))} />;
+    // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
+    const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.list(session)]);
+    return <Portal employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
   } catch (error) {
     // Never fall back to an empty or partial list: say plainly that records could not be loaded.
     if (error instanceof EmployeesUnavailableError) {
       console.error("Employee records unavailable.", error, { cause: error.cause });
       return <EmployeesUnavailable />;
+    }
+    if (error instanceof DepartmentsUnavailableError) {
+      console.error("Departments unavailable.", error, { cause: error.cause });
+      return <DepartmentsUnavailable />;
     }
     if (error instanceof AttendanceUnavailableError) {
       console.error("Attendance unavailable.", error, { cause: error.cause });
@@ -57,6 +63,17 @@ function EmployeesUnavailable() {
       <div className="panel empty" role="alert">
         <h1>Employee records are unavailable</h1>
         <p>The employee database could not be reached, so no records are shown. Please refresh the page in a moment.</p>
+      </div>
+    </main>
+  );
+}
+
+function DepartmentsUnavailable() {
+  return (
+    <main className="content">
+      <div className="panel empty" role="alert">
+        <h1>Departments are unavailable</h1>
+        <p>The department list could not be reached, so no records are shown. Please refresh the page in a moment.</p>
       </div>
     </main>
   );

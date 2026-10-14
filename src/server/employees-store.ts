@@ -45,11 +45,16 @@ export type EmployeeRow = {
   auth_user_id?: string | null;
   /** Selected on Administrator reads only; mapped to `archived`. */
   archived_at?: string | null;
+  /** Selected on Administrator reads only; mapped to `departmentId` (Story 4.1). */
+  department_id?: string | null;
 };
 
 const COLUMNS = "employee_id,name,title,team,employment_type,email,joined_on,manager,office,status,initials,avatar_color,summary";
-/** Administrators also see whether each employee has a linked sign-in account and whether it is archived. */
-const ADMIN_COLUMNS = `${COLUMNS},auth_user_id,archived_at`;
+/**
+ * Administrators also see whether each employee has a linked sign-in account, whether it is archived,
+ * and its department (Story 4.1; names are read separately through departments-store, never embedded).
+ */
+const ADMIN_COLUMNS = `${COLUMNS},auth_user_id,archived_at,department_id`;
 
 type NestedProfile = Pick<Employee, "skills" | "history" | "work" | "attendance" | "review">;
 
@@ -69,8 +74,8 @@ function nestedFor(id: string): NestedProfile {
 
 /**
  * Maps a row to an Employee with the given interviews (from interviews-store) and training (from
- * training-store); `withAccount` (Administrator reads only) adds `hasAccount` from `auth_user_id` and
- * `archived` from `archived_at`.
+ * training-store); `withAccount` (Administrator reads only) adds `hasAccount` from `auth_user_id`,
+ * `archived` from `archived_at` and `departmentId` from `department_id`.
  */
 export function toEmployee(
   row: EmployeeRow, withAccount = false, interviews: Employee["interviews"] = [], training: Employee["training"] = [],
@@ -79,7 +84,7 @@ export function toEmployee(
     id: row.employee_id, name: row.name, title: row.title, team: row.team, type: row.employment_type, email: row.email,
     joined: row.joined_on, manager: row.manager, location: row.office, status: row.status, initials: row.initials,
     color: row.avatar_color, summary: row.summary,
-    ...(withAccount ? { hasAccount: Boolean(row.auth_user_id), archived: Boolean(row.archived_at) } : {}),
+    ...(withAccount ? { hasAccount: Boolean(row.auth_user_id), archived: Boolean(row.archived_at), departmentId: row.department_id ?? null } : {}),
     ...nestedFor(row.employee_id),
     training,
     interviews,

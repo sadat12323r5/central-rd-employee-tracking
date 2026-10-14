@@ -4,7 +4,9 @@
 // ids are the fixture's deterministic ids (interviewSeedId, trainingSeedId), so re-running never adds
 // copies. In-progress training is never copied into `training_history`: it is inserted into the LMS
 // stub table `lms_stub_enrolments` (Story 3.2, ids from lmsStubSeedId), which the LMS adapter stub
-// reads. Other nested profile data stays in the fixture (read by employees-store); the fixture's
+// reads. Departments (Story 4.1) are inserted before the employees are touched (L&D, then Central R&D
+// under it, fixed ids, insert-only); afterwards every fixture employee whose department_id is still
+// null is placed in Central R&D. Other nested profile data stays in the fixture (read by employees-store); the fixture's
 // interviews and training are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
@@ -12,6 +14,7 @@ import { createClient } from "@supabase/supabase-js";
 import type {
   Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
+import type { departmentSeedRows as DepartmentSeedRows } from "../src/data/departments";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -28,6 +31,12 @@ const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (awa
   trainingSeedRows: typeof TrainingSeedRows;
 };
 
+// Loaded the same way: the seed departments and the default department for fixture employees.
+const departmentsUrl = new URL("../src/data/departments.ts", import.meta.url).href;
+const { departmentSeedRows, DEFAULT_EMPLOYEE_DEPARTMENT_ID } = (await import(departmentsUrl)) as {
+  departmentSeedRows: typeof DepartmentSeedRows; DEFAULT_EMPLOYEE_DEPARTMENT_ID: string;
+};
+
 const rows = employees.map(e => ({
   employee_id: e.id, name: e.name, title: e.title, team: e.team, employment_type: e.type,
   email: e.email.toLowerCase(), joined_on: e.joined, manager: e.manager, office: e.location,
@@ -35,12 +44,35 @@ const rows = employees.map(e => ({
 }));
 
 const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+// Departments first: employees.department_id references departments. Rows are inserted parent first
+// (one statement, in order), and insert-only, so an Administrator's later rename or re-parent survives.
+const departments = await supabase.from("departments")
+  .upsert(departmentSeedRows(), { onConflict: "id", ignoreDuplicates: true }).select("id");
+if (departments.error) {
+  console.error(`Seeding departments failed: ${departments.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${departments.data?.length ?? 0} new departments (existing ones left unchanged).`);
+
 const { data, error } = await supabase.from("employees").upsert(rows, { onConflict: "employee_id" }).select("employee_id");
 if (error) {
   console.error(`Seeding failed: ${error.message}`);
   process.exit(1);
 }
 console.log(`Upserted ${data?.length ?? 0} employees.`);
+
+// Fixture employees without a department go to Central R&D. Never overwrites an existing department
+// (an Administrator's or a later transfer's choice), and never touches non-fixture employees.
+const placed = await supabase.from("employees")
+  .update({ department_id: DEFAULT_EMPLOYEE_DEPARTMENT_ID })
+  .in("employee_id", employees.map(e => e.id))
+  .is("department_id", null)
+  .select("employee_id");
+if (placed.error) {
+  console.error(`Seeding employee departments failed: ${placed.error.message}`);
+  process.exit(1);
+}
+console.log(`Placed ${placed.data?.length ?? 0} fixture employees in the default department ${DEFAULT_EMPLOYEE_DEPARTMENT_ID} (employees with a department left unchanged).`);
 
 // After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
 const interviewRows = interviewSeedRows(employees);

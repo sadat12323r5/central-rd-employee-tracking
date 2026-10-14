@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor, loginProps, listForEmployee, currentFor, portalProps, staffProps } = vi.hoisted(() => ({
+const { getSession, listFor, getFor, loginProps, listForEmployee, currentFor, portalProps, staffProps, listDepartments } = vi.hoisted(() => ({
   getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), listForEmployee: vi.fn(async () => [] as unknown[]),
-  currentFor: vi.fn(), portalProps: vi.fn(), staffProps: vi.fn(),
+  currentFor: vi.fn(), portalProps: vi.fn(), staffProps: vi.fn(), listDepartments: vi.fn(async () => [] as unknown[]),
 }));
 
 vi.mock("@/server/auth", () => ({ getSession }));
@@ -15,6 +15,10 @@ vi.mock("@/server/attendance-store", async importOriginal => ({
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
   employeesStore: { listFor, getFor, isActive: vi.fn(async () => true) },
+}));
+vi.mock("@/server/departments-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/server/departments-store")>()),
+  departmentsStore: { list: listDepartments, create: vi.fn(), update: vi.fn() },
 }));
 vi.mock("@/server/training-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/training-store")>()),
@@ -42,6 +46,7 @@ vi.mock("@/components/staff-attendance", () => ({
 const { default: Home } = await import("@/app/page");
 const { EmployeesUnavailableError } = await import("@/server/employees-store");
 const { AttendanceUnavailableError } = await import("@/server/attendance-store");
+const { DepartmentsUnavailableError } = await import("@/server/departments-store");
 
 describe("Home when employee records are unavailable", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -183,5 +188,51 @@ describe("Home streams current LMS enrolments (Story 3.2)", () => {
     currentFor.mockImplementation(() => { throw new TypeError("bug"); });
     render(await Home());
     await expect(portalProps.mock.calls[0][0].current).resolves.toEqual({ status: "unavailable" });
+  });
+});
+
+describe("Home loads the department list for the Administrator (Story 4.1)", () => {
+  const departments = [
+    { id: "de9a0000-0000-4000-8000-000000000001", name: "L&D", parentId: null },
+    { id: "de9a0000-0000-4000-8000-000000000002", name: "Central R&D", parentId: "de9a0000-0000-4000-8000-000000000001" },
+  ];
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listFor.mockReset(); getFor.mockReset(); portalProps.mockReset(); listDepartments.mockReset();
+    currentFor.mockResolvedValue({ status: "unavailable" });
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    listDepartments.mockReset();
+    listDepartments.mockResolvedValue([]);
+  });
+
+  it("passes the departments to the portal, read with the admin session", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    listDepartments.mockResolvedValue(departments);
+    render(await Home());
+    expect(listDepartments).toHaveBeenCalledWith({ role: "admin" });
+    expect(portalProps.mock.calls[0][0].departments).toEqual(departments);
+  });
+
+  it("never reads departments for a staff session", async () => {
+    const { employees } = await import("@/data/employees");
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
+    render(await Home());
+    expect(listDepartments).not.toHaveBeenCalled();
+  });
+
+  it("shows the departments-unavailable alert, not a partial directory, when departments are unavailable", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    listDepartments.mockRejectedValue(new DepartmentsUnavailableError());
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/departments are unavailable/i);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/employee records/i);
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+    expect(errorSpy).toHaveBeenCalled();
   });
 });

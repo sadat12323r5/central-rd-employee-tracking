@@ -12,6 +12,10 @@ vi.mock("@/server/account-actions", () => ({
   archiveEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
   restoreEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
+vi.mock("@/server/department-actions", () => ({
+  createDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
+  updateDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 
 import Portal from "@/components/portal";
 import { employees } from "@/data/employees";
@@ -171,6 +175,63 @@ describe("Portal employee profile", () => {
     expect(screen.getByRole("heading", { name: "Bare Employee" })).toBeInTheDocument();
     expect(screen.getByText(/Reviewed Not recorded/)).toBeInTheDocument();
     expect(screen.getByLabelText("Initial password")).toBeInTheDocument();
+  });
+});
+
+describe("Portal departments (Story 4.1)", () => {
+  const LND = "de9a0000-0000-4000-8000-000000000001";
+  const CRD = "de9a0000-0000-4000-8000-000000000002";
+  const departments = [{ id: CRD, name: "Central R&D", parentId: LND }, { id: LND, name: "L&D", parentId: null }];
+  const placed = employees.map(e => ({ ...e, hasAccount: false, archived: false, departmentId: e.id === "BS-1008" ? null : CRD }));
+
+  it("shows each employee's department in the directory, and \"No department\" when unset", async () => {
+    await show(<Portal employees={placed} departments={departments} current={none()} />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByRole("columnheader", { name: "Department" })).toBeInTheDocument();
+    const nadia = within(table).getByText("Nadia Rahman").closest("tr")!;
+    expect(nadia).toHaveTextContent("Central R&D");
+    const fahim = within(table).getByText("Fahim Noor").closest("tr")!;
+    expect(fahim).toHaveTextContent("No department");
+  });
+
+  it("shows \"No department\" when the department id is not in the list", async () => {
+    await show(<Portal employees={placed.map(e => ({ ...e, departmentId: "de9a0000-0000-4000-8000-0000000000ff" }))} departments={departments} current={none()} />);
+    expect(within(screen.getByRole("table")).getAllByText("No department")).toHaveLength(employees.length);
+  });
+
+  it("has a Departments section listing the departments with no delete control", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={placed} departments={departments} current={none()} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Departments" }));
+    expect(screen.getByRole("heading", { name: "Departments", level: 1 })).toBeInTheDocument();
+    const list = screen.getByRole("table", { name: "Departments" });
+    const cells = within(list).getAllByRole("row").slice(1).map(r => [...(r as HTMLTableRowElement).cells].slice(0, 2).map(c => c.textContent));
+    expect(cells).toEqual([["Central R&D", "L&D"], ["L&D", "Top level"]]);
+    expect(screen.getByRole("button", { name: "Add department" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+  });
+
+  it("does not add a Department column to the CSV export", async () => {
+    let csvText = "";
+    class InspectableBlob extends Blob {
+      constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+        super(parts, options);
+        csvText = parts.join("");
+      }
+    }
+    vi.stubGlobal("Blob", InspectableBlob);
+    URL.createObjectURL = vi.fn(() => "blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const user = userEvent.setup();
+    await show(<Portal employees={placed} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /Export directory/ }));
+    expect(csvText.split(/\r?\n/)[0]).toBe('"Employee ID","Name","Designation","Team","Status","Email"');
+    expect(csvText).not.toContain("Central R&D");
+    vi.restoreAllMocks();
+    delete (URL as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+    vi.unstubAllGlobals();
   });
 });
 

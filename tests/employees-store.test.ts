@@ -127,7 +127,7 @@ describe("employees-store data", () => {
     const { client } = fakeClient(seeded);
     const employee = await createEmployeesStore(both(client)).getFor(admin, "BS-1001");
     expect(employee).toEqual({
-      ...fixture.find(e => e.id === "BS-1001"), hasAccount: false, archived: false,
+      ...fixture.find(e => e.id === "BS-1001"), hasAccount: false, archived: false, departmentId: null,
       interviews: [withoutEmployee(stored[0]), withoutEmployee(stored[2])],
     });
   });
@@ -325,6 +325,24 @@ describe("employees-store client and columns", () => {
     expect(list.map(e => [e.id, e.hasAccount])).toEqual([["BS-1001", true], ["BS-1002", false]]);
     expect(queries[0].columns).toContain("auth_user_id");
     expect(list[0]).not.toHaveProperty("auth_user_id");
+  });
+
+  it("maps department_id to departmentId on admin reads, null when unset (Story 4.1)", async () => {
+    const placed = { ...rowFor("BS-1001"), department_id: "de9a0000-0000-4000-8000-000000000002" };
+    const unplaced = { ...rowFor("BS-1002"), department_id: null };
+    const { client, queries } = fakeClient([placed, unplaced]);
+    const list = await createEmployeesStore(both(client)).listFor(admin);
+    expect(list.map(e => [e.id, e.departmentId])).toEqual([["BS-1001", "de9a0000-0000-4000-8000-000000000002"], ["BS-1002", null]]);
+    expect(queries[0].columns).toContain("department_id");
+    expect(list[0]).not.toHaveProperty("department_id");
+  });
+
+  it("never selects department_id or sets departmentId on staff reads (Story 4.1)", async () => {
+    const { client, queries } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client));
+    const own = await store.getFor(staff, "BS-1002");
+    expect(own).not.toHaveProperty("departmentId");
+    for (const q of queries) expect(q.columns).not.toContain("department_id");
   });
 
   it("never selects auth_user_id or archived_at, or sets hasAccount or archived, on staff reads", async () => {

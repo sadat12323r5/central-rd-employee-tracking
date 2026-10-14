@@ -58,7 +58,7 @@ development_status:
   8-2-administrator-bulk-exports-every-employee-s-activity: backlog
 
   epic-4: in-progress
-  4-1-administrator-manages-the-department-list: in-progress
+  4-1-administrator-manages-the-department-list: review
   4-2-administrator-assigns-a-department-manager: backlog
   4-3-managers-see-only-their-own-department: backlog
   4-4-interview-privacy-holds-for-managers: backlog

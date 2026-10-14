@@ -6,6 +6,8 @@
   hasAccount?: boolean;
   /** Administrator reads only: true when the employee is archived (`archived_at` set, Story 1.4). */
   archived?: boolean;
+  /** Administrator reads only: the employee's department (`department_id`, Story 4.1); null when unset. */
+  departmentId?: string | null;
   skills: { name: string; level: number; evidence: string }[];
   history: { role: string; company: string; period: string; detail: string }[];
   /**
