@@ -108,6 +108,8 @@ deferred: []
 
 ## Spec Change Log
 
+- 2026-10-14: resumed by a later unattended run; the original run stopped after the spec (claim branch idle >4h, no PR).
+
 ## Review Triage Log
 
 ## Design Notes
