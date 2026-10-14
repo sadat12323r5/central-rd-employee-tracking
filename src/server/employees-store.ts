@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { employees as fixture, type Employee } from "@/data/employees";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import type { SessionIdentity, StaffIdentity } from "./session";
+import { readAllPages } from "./paging";
 import { getUserClient } from "./supabase";
 import { trainingStore, TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "./training-store";
 
@@ -143,14 +144,20 @@ export function createEmployeesStore({ userClient, interviews, training }: Emplo
     async listFor(session) {
       // One interviews and one training read for the whole list: everyone's for an admin, the caller's own for staff.
       const [rows, all, allTraining] = await Promise.all([
-        run<EmployeeRow[]>(t => {
-          const query = t.select(columnsFor(session));
-          return (session.role === "admin" ? query : query.eq("employee_id", session.employeeId)).order("employee_id").returns<EmployeeRow[]>();
+        // Paged (Story 8.2): one request is capped at PostgREST's max_rows. employee_id is the primary
+        // key, so ordering by it alone is total.
+        readAllPages(async (from, to) => {
+          const page = await run<EmployeeRow[]>(t => {
+            const query = t.select(columnsFor(session));
+            return (session.role === "admin" ? query : query.eq("employee_id", session.employeeId))
+              .order("employee_id").range(from, to).returns<EmployeeRow[]>();
+          });
+          if (!page) throw new EmployeesUnavailableError({ cause: "no data returned" });
+          return page;
         }),
         interviewsFor(session),
         trainingFor(session),
       ]);
-      if (!rows) throw new EmployeesUnavailableError({ cause: "no data returned" });
       return rows.map(row => toEmployee(
         row, session.role === "admin", interviewsOf(all, row.employee_id), trainingOf(allTraining, row.employee_id),
       ));

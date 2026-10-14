@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { employees as fixture } from "@/data/employees";
 import { createEmployeesStore, EmployeesUnavailableError, type EmployeeRow } from "@/server/employees-store";
+import { many, pagedClient } from "./support/paged-client";
 import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
 import type { SessionIdentity } from "@/server/session";
 import { TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "@/server/training-store";
@@ -19,21 +20,23 @@ type Mode = "ok" | "error" | "throw";
 
 /** Minimal stand-in for the supabase-js query builder: applies eq filters to in-memory rows. */
 function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
-  const queries: { table: string; filters: [string, string][]; columns?: string }[] = [];
+  const queries: { table: string; filters: [string, string][]; columns?: string; range?: [number, number] }[] = [];
   const client = {
     from(table: string) {
       if (mode === "throw") throw new TypeError("fetch failed");
-      const query = { table, filters: [] as [string, string][], columns: undefined as string | undefined };
+      const query = { table, filters: [] as [string, string][], columns: undefined as string | undefined, range: undefined as [number, number] | undefined };
       queries.push(query);
       const result = () => {
         if (mode === "error") return { data: null, error: { message: "connection refused" } };
         const matched = rows.filter(r => query.filters.every(([col, val]) => (r as Record<string, string>)[col] === val));
-        return { data: [...matched].sort((a, b) => a.employee_id.localeCompare(b.employee_id)), error: null };
+        const sorted = [...matched].sort((a, b) => a.employee_id.localeCompare(b.employee_id));
+        return { data: query.range ? sorted.slice(query.range[0], query.range[1] + 1) : sorted, error: null };
       };
       const builder = {
         select: (columns: string) => { query.columns = columns; return builder; },
         eq: (col: string, val: string) => { query.filters.push([col, val]); return builder; },
         order: () => builder,
+        range: (from: number, to: number) => { query.range = [from, to]; return builder; },
         returns: () => builder,
         maybeSingle: async () => {
           const r = result();
@@ -379,5 +382,23 @@ describe("employees-store.isActive", () => {
   it.each(["error", "throw"] as const)("throws EmployeesUnavailableError when the read fails (%s)", async mode => {
     const { client } = fakeClient(seeded, mode);
     await expect(createEmployeesStore(both(client)).isActive(staff)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+});
+
+describe("employees-store paging (Story 8.2)", () => {
+  const rowAt = (i: number): EmployeeRow => ({ ...rowFor("BS-1001"), employee_id: `BS-${String(i).padStart(4, "0")}` });
+
+  it("reads the employees in 1000-row pages until a short page, using every row", async () => {
+    const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
+    const all = await createEmployeesStore(both(client)).listFor(admin);
+    expect(all).toHaveLength(2003);
+    expect(all[2002].id).toBe("BS-2002");
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("throws the unavailable error when a later page fails", async () => {
+    const { client, requests } = pagedClient([many(1000, rowAt), "error", many(3, rowAt)]);
+    await expect(createEmployeesStore(both(client)).listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    expect(requests()).toBe(2);
   });
 });

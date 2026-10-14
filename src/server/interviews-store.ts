@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Employee } from "@/data/employees";
 import type { SessionIdentity } from "./session";
+import { readAllPages } from "./paging";
 import { getUserClient } from "./supabase";
 
 // The only way the app reads and writes external interviews (Story 2.1). Interviews live in the
@@ -147,14 +148,16 @@ export function createInterviewsStore({ userClient }: InterviewsStoreClients): I
       // Staff only ever see their own interviews; asking for anyone else's returns nothing, without a query.
       const scope = session.role === "admin" ? employeeId : session.employeeId;
       if (session.role !== "admin" && employeeId !== undefined && employeeId !== session.employeeId) return [];
-      const rows = await run<InterviewRow[]>(t => {
+      // Paged (Story 8.2): one request is capped at PostgREST's max_rows; the order is total (id last).
+      const rows = await readAllPages((from, to) => run<InterviewRow[]>(t => {
         const query = t.select(COLUMNS);
         return (scope === undefined ? query : query.eq("employee_id", scope))
           .order("interview_date", { ascending: false })
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
+          .range(from, to)
           .returns<InterviewRow[]>();
-      });
+      }));
       return rows.map(toInterview);
     },
     async add(session, input) {

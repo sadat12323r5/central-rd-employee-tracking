@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { TimesheetValidationError, type DailyLog, type TimesheetEntry, type WorkMode } from "@/domain/timesheet";
+import { readAllPages } from "./paging";
 import { getUserClient } from "./supabase";
 
 // The only way the app reads and writes staff attendance (Story 1.5). Entries live in the Supabase
@@ -79,14 +80,20 @@ export function createAttendanceStore({ userClient }: AttendanceStoreClients): A
   }
 
   async function list(employeeId?: string): Promise<TimesheetEntry[]> {
-    const rows = await run<AttendanceRow[]>(t => {
-      const query = t.select(COLUMNS);
-      return (employeeId === undefined ? query : query.eq("employee_id", employeeId))
-        .order("work_date", { ascending: false })
-        .order("clock_in", { ascending: false })
-        .returns<AttendanceRow[]>();
+    // Paged (Story 8.2): one request is capped at PostgREST's max_rows. `id` makes the order total.
+    const rows = await readAllPages(async (from, to) => {
+      const page = await run<AttendanceRow[]>(t => {
+        const query = t.select(COLUMNS);
+        return (employeeId === undefined ? query : query.eq("employee_id", employeeId))
+          .order("work_date", { ascending: false })
+          .order("clock_in", { ascending: false })
+          .order("id", { ascending: false })
+          .range(from, to)
+          .returns<AttendanceRow[]>();
+      });
+      if (!page) throw new AttendanceUnavailableError({ cause: "no data returned" });
+      return page;
     });
-    if (!rows) throw new AttendanceUnavailableError({ cause: "no data returned" });
     return rows.map(toEntry);
   }
 
