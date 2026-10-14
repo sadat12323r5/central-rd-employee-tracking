@@ -5,6 +5,7 @@ import {
   DepartmentsForbiddenError, DepartmentsUnavailableError, ManagerArchivedError, ManagerEmployeeNotFoundError, ManagerHasNoAccountError,
   toDepartment, type DepartmentRow, type DepartmentsStore,
 } from "@/server/departments-store";
+import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 
 type DbError = { code: string; message: string };
 type Call = { table: string; method: string; args: unknown[] };
@@ -84,14 +85,14 @@ const seeded = (): DepartmentRow[] => [
 const storeFor = (client: SupabaseClient) => createDepartmentsStore({ userClient: async () => client });
 const admin = { role: "admin" } as const;
 const staff = { role: "staff", employeeId: "BS-1001" } as const;
-const manager = { role: "manager", employeeId: "BS-1002" } as const;
+const manager = { role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
 const none = { managerUserId: null, managerEmployeeId: null };
 const writes = (calls: Call[][]) => calls.flat().filter(c => c.method === "insert" || c.method === "update" || c.method === "delete");
 
 describe("departments-store shape", () => {
   it("has no delete method", () => {
     const store = storeFor(fakeClient([]).client);
-    expect(Object.keys(store).sort()).toEqual(["create", "list", "managesAny", "setManager", "update"]);
+    expect(Object.keys(store).sort()).toEqual(["create", "list", "listFor", "managesAny", "setManager", "update"]);
     expect((store as DepartmentsStore & { delete?: unknown }).delete).toBeUndefined();
   });
 
@@ -400,5 +401,72 @@ describe("departments-store after a committed write (Story 4.2)", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("departments-store listFor (Story 4.3)", () => {
+  /** A stand-in manager-scope that records each call and returns the given departments. */
+  function fakeScope(departmentIds: string[], fail?: Error) {
+    const calls: unknown[] = [];
+    const scope: ManagerScope = {
+      async forManager(session) {
+        calls.push(session);
+        if (fail) throw fail;
+        return { departmentIds: new Set(departmentIds), employeeIds: new Set() };
+      },
+    };
+    return { scope, calls };
+  }
+
+  it("gives an Administrator every department, exactly like list, without a scope read", async () => {
+    const { client } = fakeClient(seeded());
+    const { scope, calls } = fakeScope([]);
+    const store = createDepartmentsStore({ userClient: async () => client, scope });
+    expect(await store.listFor(admin)).toEqual(await store.list(admin));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("gives a manager only the departments in scope, by name, with manager fields resolved", async () => {
+    const rows = seeded();
+    rows[1].manager_user_id = MANAGER_USER;
+    const { client, calls } = fakeClient(rows, { employees: people() });
+    const scope = fakeScope([CRD, QA]);
+    const list = await createDepartmentsStore({ userClient: async () => client, scope: scope.scope }).listFor(manager);
+    expect(list).toEqual([
+      { id: CRD, name: "Central R&D", parentId: LND, managerUserId: MANAGER_USER, managerEmployeeId: "BS-1002" },
+      { id: QA, name: "QA Lab", parentId: CRD, ...none },
+    ]);
+    expect(scope.calls).toEqual([manager]);
+    expect(calls[0].find(c => c.method === "in")?.args).toEqual(["id", [CRD, QA]]);
+  });
+
+  it("drops a returned department outside the scope (defence in depth)", async () => {
+    const { client } = fakeClient(seeded());
+    // A client whose `in` filter is ignored, so the query returns every department.
+    const leaky = { from: (t: string) => { const b = client.from(t); return Object.assign(b, { in: () => b }); } } as unknown as SupabaseClient;
+    const list = await createDepartmentsStore({ userClient: async () => leaky, scope: fakeScope([QA]).scope }).listFor(manager);
+    expect(list.map(d => d.id)).toEqual([QA]);
+  });
+
+  it("returns no departments, without a query, when nothing is in scope", async () => {
+    const { client, calls } = fakeClient(seeded());
+    expect(await createDepartmentsStore({ userClient: async () => client, scope: fakeScope([]).scope }).listFor(manager)).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reports unavailable when the scope cannot be read", async () => {
+    const { client } = fakeClient(seeded());
+    const scope = fakeScope([], new ManagerScopeUnavailableError()).scope;
+    await expect(createDepartmentsStore({ userClient: async () => client, scope }).listFor(manager)).rejects.toBeInstanceOf(DepartmentsUnavailableError);
+  });
+
+  it("refuses staff and no session before any query", async () => {
+    const { client, calls } = fakeClient(seeded());
+    const scope = fakeScope([LND]);
+    const store = createDepartmentsStore({ userClient: async () => client, scope: scope.scope });
+    await expect(store.listFor(staff)).rejects.toBeInstanceOf(DepartmentsForbiddenError);
+    await expect(store.listFor(null as unknown as typeof admin)).rejects.toBeInstanceOf(DepartmentsForbiddenError);
+    expect(calls).toHaveLength(0);
+    expect(scope.calls).toHaveLength(0);
   });
 });

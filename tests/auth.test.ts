@@ -313,11 +313,11 @@ describe("department managers (Story 4.2)", () => {
     vi.useRealTimers();
   });
 
-  it("derives `manager` for a staff account that manages a department, checked with the validated user id", async () => {
+  it("derives `manager` (carrying the validated user id, Story 4.3) for a staff account that manages a department, checked with that user id", async () => {
     managers.add("staff-1");
     await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
-    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId });
-    expect(await getActor()).toEqual({ identity: { role: "manager", employeeId: STAFF.employeeId }, userId: "staff-1" });
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
+    expect(await getActor()).toEqual({ identity: { role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" }, userId: "staff-1" });
     expect(managesAny).toHaveBeenCalledWith("staff-1");
     expect(await isSignedIn()).toBe(false);
   });
@@ -325,11 +325,11 @@ describe("department managers (Story 4.2)", () => {
   it("re-derives the role on every request: removing the manager makes the next request `staff`", async () => {
     managers.add("staff-1");
     await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
-    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId });
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
     managers.delete("staff-1");
     expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
     managers.add("staff-1");
-    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId });
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
     expect(supabase.signOuts).toBe(0);
   });
 
@@ -371,7 +371,7 @@ describe("department managers (Story 4.2)", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const start = Date.now();
     vi.setSystemTime(start + 11 * 60 * 60 * 1000);
-    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId });
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
     vi.setSystemTime(start + 12 * 60 * 60 * 1000 + 60 * 1000);
     expect(await getSession()).toBeNull();
   });

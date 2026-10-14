@@ -7,7 +7,14 @@ const newestFirst = (a: TimesheetEntry, b: TimesheetEntry) => b.date.localeCompa
 
 export function createMemoryAttendanceStore(): AttendanceStore {
   const records = new Map<string, TimesheetEntry>();
+  const forEmployee = (employeeId: string) =>
+    [...records.values()].filter(e => e.employeeId === employeeId).sort(newestFirst).map(e => structuredClone(e));
   return {
+    // Admin and staff rules only; manager scoping is covered against the real store (attendance-store.test.ts).
+    async listFor(session, employeeId) {
+      if (session.role === "admin" || (session.role === "staff" && session.employeeId === employeeId)) return forEmployee(employeeId);
+      return [];
+    },
     async listForEmployee(employeeId) {
       return [...records.values()].filter(e => e.employeeId === employeeId).sort(newestFirst).map(e => structuredClone(e));
     },

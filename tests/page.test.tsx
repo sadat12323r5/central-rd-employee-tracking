@@ -2,15 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor, loginProps, listForEmployee, currentFor, portalProps, staffProps, listDepartments } = vi.hoisted(() => ({
-  getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), listForEmployee: vi.fn(async () => [] as unknown[]),
+const { getSession, listFor, getFor, loginProps, attendanceListFor, currentFor, portalProps, staffProps, listDepartments } = vi.hoisted(() => ({
+  getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), attendanceListFor: vi.fn(async (..._args: unknown[]) => [] as unknown[]),
   currentFor: vi.fn(), portalProps: vi.fn(), staffProps: vi.fn(), listDepartments: vi.fn(async () => [] as unknown[]),
 }));
 
 vi.mock("@/server/auth", () => ({ getSession }));
 vi.mock("@/server/attendance-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/attendance-store")>()),
-  attendanceStore: { listForEmployee },
+  // Story 4.3: the page reads attendance through the session-aware listFor.
+  attendanceStore: { listFor: attendanceListFor },
 }));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
@@ -18,7 +19,8 @@ vi.mock("@/server/employees-store", async importOriginal => ({
 }));
 vi.mock("@/server/departments-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/departments-store")>()),
-  departmentsStore: { list: listDepartments, create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: vi.fn() },
+  // Story 4.3: the page reads department names through the session-aware listFor.
+  departmentsStore: { list: vi.fn(), listFor: listDepartments, create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: vi.fn() },
 }));
 vi.mock("@/server/training-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/training-store")>()),
@@ -116,25 +118,28 @@ describe("Home routing by role", () => {
     expect(screen.getByText("Employee directory")).toBeInTheDocument();
   });
 
-  it("renders the management portal as `manager` for a manager session, without reading departments (Story 4.2)", async () => {
+  it("renders the management portal as `manager` with the scoped employees and department names (Stories 4.2, 4.3)", async () => {
     const { employees } = await import("@/data/employees");
-    const own = employees.find(e => e.id === "BS-1003");
-    const manager = { role: "manager", employeeId: "BS-1003" };
+    const scoped = employees.filter(e => e.id === "BS-1003" || e.id === "BS-1004");
+    const departments = [{ id: "de9a0000-0000-4000-8000-000000000002", name: "Central R&D", parentId: null, managerUserId: "u-1", managerEmployeeId: "BS-1003" }];
+    const manager = { role: "manager", employeeId: "BS-1003", userId: "u-1" };
     getSession.mockResolvedValue(manager);
-    listFor.mockResolvedValue([own]);
+    listFor.mockResolvedValue(scoped);
     currentFor.mockResolvedValue({ status: "unavailable" });
     portalProps.mockClear();
     listDepartments.mockClear();
+    listDepartments.mockResolvedValueOnce(departments);
     render(await Home());
     expect(screen.getByText("Employee directory")).toBeInTheDocument();
     expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
     expect(listFor).toHaveBeenCalledWith(manager);
     expect(getFor).not.toHaveBeenCalled();
-    expect(listDepartments).not.toHaveBeenCalled();
+    expect(listDepartments).toHaveBeenCalledWith(manager);
+    expect(currentFor).toHaveBeenCalledWith(manager, scoped.map(e => e.id));
     const props = portalProps.mock.calls.at(-1)?.[0] as { role: string; employees: unknown[]; departments?: unknown };
     expect(props.role).toBe("manager");
-    expect(props.employees).toEqual([own]);
-    expect(props.departments).toBeUndefined();
+    expect(props.employees).toEqual(scoped);
+    expect(props.departments).toEqual(departments);
   });
 
   it("passes no role (the Administrator portal) for an admin", async () => {
@@ -153,12 +158,12 @@ describe("Home when attendance is unavailable", () => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
     getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
-    listForEmployee.mockRejectedValue(new AttendanceUnavailableError());
+    attendanceListFor.mockRejectedValue(new AttendanceUnavailableError());
   });
   afterEach(() => {
     errorSpy.mockRestore();
-    listForEmployee.mockReset();
-    listForEmployee.mockResolvedValue([]);
+    attendanceListFor.mockReset();
+    attendanceListFor.mockResolvedValue([]);
   });
 
   it("shows the attendance alert instead of the staff portal and no entries table", async () => {
@@ -167,7 +172,7 @@ describe("Home when attendance is unavailable", () => {
     expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText(/Sign-in form/)).not.toBeInTheDocument();
-    expect(listForEmployee).toHaveBeenCalledWith("BS-1003");
+    expect(attendanceListFor).toHaveBeenCalledWith({ role: "staff", employeeId: "BS-1003" }, "BS-1003");
     expect(errorSpy).toHaveBeenCalled();
   });
 });

@@ -115,7 +115,7 @@ describe("interviews-store reads", () => {
 });
 
 describe("interviews-store and manager sessions (Story 4.2)", () => {
-  const manager = { role: "manager", employeeId: "BS-1001" } as const;
+  const manager = { role: "manager", employeeId: "BS-1001", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
 
   it("returns nothing for a manager session, without a query, even for its own employee", async () => {
     const { client, calls } = fakeClient(rows);

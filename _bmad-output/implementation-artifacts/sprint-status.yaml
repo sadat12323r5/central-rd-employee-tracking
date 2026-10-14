@@ -60,7 +60,7 @@ development_status:
   epic-4: in-progress
   4-1-administrator-manages-the-department-list: review
   4-2-administrator-assigns-a-department-manager: review
-  4-3-managers-see-only-their-own-department: in-progress
+  4-3-managers-see-only-their-own-department: review
   4-4-interview-privacy-holds-for-managers: backlog
   4-5-managers-create-and-close-assignments: backlog
   4-6-manager-evaluates-a-closed-assignment-employee-sees-it: backlog

@@ -234,7 +234,7 @@ describe.skipIf(!configured)("departments RLS (shared Supabase project)", () => 
       expect(data).toEqual(expect.arrayContaining([
         { id: parentId, manager_user_id: null }, { id: childId, manager_user_id: managerUserId },
       ]));
-      await expect(createDepartmentsStore({ userClient: async () => manager }).setManager({ role: "manager", employeeId: managerEmployeeId }, childId, null))
+      await expect(createDepartmentsStore({ userClient: async () => manager }).setManager({ role: "manager", employeeId: managerEmployeeId, userId: managerUserId }, childId, null))
         .rejects.toBeInstanceOf(DepartmentsForbiddenError);
     } finally {
       await service.from("departments").update({ manager_user_id: null }).eq("id", childId);

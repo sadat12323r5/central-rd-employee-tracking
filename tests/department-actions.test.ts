@@ -27,7 +27,7 @@ const {
 
 const blank = { error: "", message: "" };
 const ADMIN = { role: "admin" } as const;
-const MANAGER = { role: "manager", employeeId: "BS-1002" } as const;
+const MANAGER = { role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
 const STAFF = { role: "staff", employeeId: "BS-1001" } as const;
 const NON_ADMINS: [string, SessionIdentity | null][] = [["a staff session", STAFF], ["a manager session", MANAGER], ["no session", null]];
 const noManager = { managerUserId: null, managerEmployeeId: null };

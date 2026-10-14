@@ -617,3 +617,79 @@ describe("Portal for a department manager (Story 4.2)", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 });
+
+describe("Portal scoped to a manager's departments (Story 4.3)", () => {
+  const PARENT = "de9a0000-0000-4000-8000-0000000000a1";
+  const CHILD = "de9a0000-0000-4000-8000-0000000000a2";
+  const departments = [
+    { id: CHILD, name: "Child Team", parentId: PARENT, managerUserId: null, managerEmployeeId: null },
+    { id: PARENT, name: "Parent Team", parentId: null, managerUserId: "u-1", managerEmployeeId: "BS-1001" },
+  ];
+  // What employees-store returns for a manager: archived and departmentId, never hasAccount.
+  const scoped = employees.filter(e => e.id === "BS-1001" || e.id === "BS-1002")
+    .map(e => ({ ...e, archived: false, departmentId: e.id === "BS-1001" ? PARENT : CHILD }));
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (URL as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  it("lists only the scoped employees in the directory, each with their department name", async () => {
+    await show(<Portal role="manager" employees={scoped} departments={departments} current={none()} />);
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByRole("row")).toHaveLength(scoped.length + 1);
+    expect(within(table).getByText(scoped[0].name).closest("tr")).toHaveTextContent("Parent Team");
+    expect(within(table).getByText(scoped[1].name).closest("tr")).toHaveTextContent("Child Team");
+    expect(within(table).queryByText("Meera Das")).not.toBeInTheDocument();
+  });
+
+  it("replaces the org-wide team note with a neutral department count", async () => {
+    await show(<Portal role="manager" employees={scoped} departments={departments} current={none()} />);
+    expect(screen.queryByText("Across 5 specialist teams")).not.toBeInTheDocument();
+    expect(screen.getByText("Across 2 departments")).toBeInTheDocument();
+  });
+
+  it("uses the singular for a manager with a single department", async () => {
+    await show(<Portal role="manager" employees={scoped.slice(1)} departments={departments.slice(0, 1)} current={none()} />);
+    expect(screen.getByText("Across 1 department")).toBeInTheDocument();
+  });
+
+  it("keeps the Administrator's team note", async () => {
+    await show(<Portal employees={scoped} departments={departments} current={none()} />);
+    expect(screen.getByText("Across 5 specialist teams")).toBeInTheDocument();
+  });
+
+  it("shows only scoped employees in Attendance & leave and Learning & development", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={scoped} departments={departments} current={none()} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    const attendance = screen.getByRole("table");
+    expect(within(attendance).getAllByRole("row")).toHaveLength(scoped.length + 1);
+    expect(within(attendance).queryByText("Meera Das")).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Learning & development" }));
+    expect(screen.queryByText("Meera Das")).not.toBeInTheDocument();
+  });
+
+  it("exports only the scoped employees", async () => {
+    let csvText = "";
+    class InspectableBlob extends Blob {
+      constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+        super(parts, options);
+        csvText = parts.join("");
+      }
+    }
+    vi.stubGlobal("Blob", InspectableBlob);
+    URL.createObjectURL = vi.fn(() => "blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={scoped} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /Export directory/ }));
+    const lines = csvText.trim().split(/\r?\n/);
+    expect(lines).toHaveLength(scoped.length + 1);
+    for (const e of scoped) expect(csvText).toContain(e.id);
+    expect(csvText).not.toContain("Meera Das");
+  });
+});

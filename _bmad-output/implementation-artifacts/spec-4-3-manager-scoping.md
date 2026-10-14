@@ -2,15 +2,22 @@
 title: 'Story 4.3: Managers see only their own department'
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
-baseline_revision: 'aae50655b29136d8ad357c6785372b0bf8b3a29b'
+status: 'done'
+baseline_revision: 'fab4f106d3dddc2c2e4d5afc38f65ed8c04a2d4a'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-4-2-department-manager.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      RLS live tests clean up departments by a per-run name prefix, so departments left by an aborted earlier run are never removed.
+    evidence: |-
+      tests/manager-scope-rls.test.ts PREFIX includes randomBytes run id; same pattern in tests/departments-rls.test.ts.
+    location: >-
+      tests/manager-scope-rls.test.ts:33
+    severity: low
 ---
 
 <intent-contract>
@@ -112,6 +119,40 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 30 findings — high 0, medium 0, low 22, false 8, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind: scope recomputed ~3-4 times per page load and could disagree mid-request — fresh-per-request is the contract; a per-request memo adds plumbing for a race that needs an admin reassignment during one render.
+  - `[low]` `[reject]` Blind: RLS exposes all employee columns (incl. auth_user_id) of in-scope rows to a manager JWT via raw PostgREST — the intent bans auth_user_id at the store only; an auth uuid is not a credential; column grants/view is a schema redesign. Noted in the PR.
+  - `[false]` `[reject]` Blind: manager attendance store branch unused by the app — the intent says the manager views come from the scoped employee list and only the Staff branch uses listFor.
+  - `[false]` `[reject]` Blind: e2e finally sets department_id null instead of restoring — the members are throwaway employees created by global-setup with no department and deleted in teardown.
+  - `[low]` `[defer]` Blind: RLS test cleanup by per-run name prefix cannot remove departments from earlier aborted runs — same pattern pre-exists in tests/departments-rls.test.ts.
+  - `[low]` `[patch]` Blind: DEPLOYMENT.md checklist names `*_select_managed` for departments (real: departments_select_managed_subtree) — listed the five real policy names.
+  - `[low]` `[patch]` Blind: DEPLOYMENT.md misdescribes the pre-migration fallback — reworded to match the store scope.
+  - `[low]` `[reject]` Blind: per-row recursive CTE in policies and auth.uid() not wrapped — department trees are a handful of rows; no measured cost.
+  - `[low]` `[reject]` Blind: whole manager page fails when departments are unavailable — consistent with the other unavailable paths; graceful degradation is not asked for.
+  - `[low]` `[reject]` Blind: toEmployee boolean overload — cosmetic; no caller harmed.
+  - `[low]` `[patch]` Blind: singular "Across 1 department" untested — added a portal test.
+  - `[low]` `[reject]` Blind: no portal tests for empty scope / archived in-scope rows — covered at the store; empty list rendering is pre-existing.
+  - `[low]` `[reject]` Blind: memory attendance store listFor returns [] for managers — test support only; the real store branch is unit-tested.
+  - `[low]` `[patch]` Blind: page.test mock named listForEmployee wired to listFor — renamed to attendanceListFor.
+  - `[low]` `[reject]` Blind: memory store forEmployee duplicates listForEmployee — test-support cosmetic.
+  - `[low]` `[reject]` Blind: userId stored on both identity and Actor — both come from the same validated user id in one function.
+  - `[low]` `[patch]` VerificationGap: singular note never asserted — same patch as above.
+  - `[low]` `[reject]` VerificationGap other: Promise.all picks whichever unavailable error rejects first — both messages are correct; no user harm.
+  - `[low]` `[reject]` VerificationGap other: scope computed three times per load — duplicate of the first row's reasoning.
+  - `[low]` `[reject]` EdgeCase: separate scope reads per request can diverge — as above.
+  - `[low]` `[reject]` EdgeCase: PostgREST max-rows truncation of scope — L&D has tens of employees, far below 1000.
+  - `[low]` `[reject]` EdgeCase: .in() URL length for large subtrees (scope) — same scale argument.
+  - `[low]` `[reject]` EdgeCase: .in() URL length in employees-store — same.
+  - `[low]` `[reject]` EdgeCase: .in() URL length in training-store — same.
+  - `[false]` `[reject]` EdgeCase: departments-store withManagers reads employees.auth_user_id under the manager JWT — it only resolves manager ids already present on departments the manager can read, as the Code Map says ("as far as RLS allows"); no new link is revealed.
+  - `[low]` `[reject]` EdgeCase: per-row helper cost on Admin/Staff reads — policies OR together; admin/staff policies short-circuit is not guaranteed but tables are small.
+  - `[false]` `[reject]` EdgeCase: e2e department_id null restore — duplicate of the Blind row; throwaway employees.
+  - `[low]` `[patch]` EdgeCase claim: DEPLOYMENT.md own-record fallback claim — same patch as above.
+  - `[false]` `[reject]` Intent: attendance view uses fixture summaries not attendance_entries (R3) — the intent states the views come from the scoped employee list; real attendance views are Story 5.4.
+  - `[false]` `[reject]` Intent: currentFor resolves {status:"unavailable"} instead of throwing; title says "department" not subtree; direct-profile tested at store not page; portal tests use props; departments carry managerUserId (R5b) — each matches the intent's letter (currentFor's contract returns a value; profiles open from the scoped list); descriptive only.
+
 ## Design Notes
 
 Scope runs downward: a department is in scope when the manager is on its authority chain. That is the same rule as AD-4's authority set, read from the other end, so scope and later write checks cannot disagree. The SQL helpers are SECURITY DEFINER because a manager must not be able to read the department and employee rows the walk passes through. They expose only a boolean about `auth.uid()`. `UNION` in the recursive CTE de-duplicates rows, so a cyclic parent chain still terminates. The store re-derives scope with the domain walker instead of trusting RLS alone (defence in depth, AD-1). A manager's own record appears only when it sits in their subtree; "My record" is Story 4.10.
@@ -123,3 +164,25 @@ Scope runs downward: a department is in scope when the manager is on its authori
 - `npm test`: all pass, except live DB tests that need the 4.1, 4.2 and 4.3 migrations. Those may fail only with schema-missing errors (42P01, 42703, 42883, PGRST202, PGRST204, PGRST205).
 - `npm run build`: expect success.
 - `npm run test:e2e`, using Chromium via `launchOptions.executablePath: "/opt/pw-browsers/chromium"`: pass, or fail only with schema-missing errors until the migrations are applied.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Department managers now see only their department subtree (managed departments plus every sub-department) in the directory, profiles, L&D, attendance and CSV export, enforced by new ADDITIVE RLS select policies (SECURITY DEFINER helpers walking up the tree) and re-derived at the store on every request.
+
+**Files changed:**
+- `supabase/migrations/20261014020000_manager_scope.sql` — ADDITIVE helpers `manages_department`/`manages_employee` and five select-only policies.
+- `src/domain/departments.ts` — `managedDepartmentIds`.
+- `src/server/session.ts`, `src/server/auth.ts` — manager identity carries `userId`.
+- `src/server/manager-scope.ts` — scope helper and `ManagerScopeUnavailableError`.
+- `src/server/employees-store.ts`, `training-store.ts`, `attendance-store.ts`, `departments-store.ts` — manager branches; admin/staff unchanged.
+- `src/app/page.tsx`, `src/components/portal.tsx` — scoped data, department names, manager overview note.
+- `docs/DEPLOYMENT.md` — migration note and checklist item 10.
+- Tests: new `tests/manager-scope.test.ts`, `tests/manager-scope-rls.test.ts` (live); extended domain, store, page, portal and e2e tests.
+
+**Review:** 30 findings; 4 entries patched (all low: DEPLOYMENT policy names, DEPLOYMENT fallback wording, singular-note test, mock rename), 1 deferred (RLS test cleanup of aborted-run departments), the rest rejected with reasons in the triage log. Follow-up review recommended: false (patched: high 0, medium 0, low 4).
+
+**Verification:** `npm run typecheck` pass; `npm run build` pass; `npm test` 861 passed / 24 skipped, only `tests/departments-rls.test.ts` and `tests/manager-scope-rls.test.ts` fail, with PGRST205 (`public.departments` missing — 4.1 migration not applied). `npm run test:e2e` (Chromium via executablePath): 11 passed, 13 failed, all from missing schema (`column employees.department_id does not exist` 42703 on the admin page, PGRST205 creating the throwaway department). The implementer also applied all migrations to a throwaway local Postgres 16 and confirmed subtree/child-only scoping, loop termination, no manager writes, and anon cannot execute the helpers.
+
+**Residual risks:** live RLS and e2e tests have not run against the real schema; re-run after applying 4.1, 4.2, 4.3 migrations. A manager's JWT can read all columns of in-scope employee rows via raw PostgREST (store hides auth_user_id).

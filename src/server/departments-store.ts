@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   DEPARTMENT_NAME_MAX, DepartmentHierarchyError, normalizeDepartmentName, sameDepartmentName, wouldCreateCycle, type Department,
 } from "@/domain/departments";
+import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { SessionIdentity } from "./session";
 import { getUserClient } from "./supabase";
 
@@ -22,6 +23,10 @@ import { getUserClient } from "./supabase";
 // employee's existing, non-archived sign-in account (or clears it), and `managesAny` is the per-request
 // check auth.ts uses to derive the `manager` role (RLS: a user reads only the departments they manage).
 // Assigning a manager never creates an account.
+//
+// Story 4.3 adds `listFor`, the read the management portal uses for department names: every department
+// for an Administrator, only the departments in a manager's subtree (manager-scope, computed fresh;
+// RLS: departments_select_managed_subtree) for a manager. Staff are refused like everywhere else.
 export type { Department } from "@/domain/departments";
 
 /** What the Administrator sends when adding or changing a department. `parentId` null = top level. */
@@ -30,6 +35,12 @@ export type DepartmentInput = { name: string; parentId: string | null };
 export interface DepartmentsStore {
   /** Every department, by name. Administrators only. */
   list(session: SessionIdentity): Promise<Department[]>;
+  /**
+   * The departments the session may see, by name: every one for an Administrator (same as `list`), the
+   * departments in a manager's subtree for a manager (manager fields resolved as far as RLS allows).
+   * Staff are refused with DepartmentsForbiddenError.
+   */
+  listFor(session: SessionIdentity): Promise<Department[]>;
   /** Adds a department. Administrators only. */
   create(session: SessionIdentity, input: DepartmentInput): Promise<Department>;
   /** Renames and/or re-parents a department. Administrators only. */
@@ -151,9 +162,11 @@ function refusal(error: DbError): Error {
 export type DepartmentsStoreClients = {
   /** Per-request client carrying the signed-in user's JWT (RLS enforced). Used for every query. */
   userClient: () => Promise<SupabaseClient>;
+  /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
+  scope?: ManagerScope;
 };
 
-export function createDepartmentsStore({ userClient }: DepartmentsStoreClients): DepartmentsStore {
+export function createDepartmentsStore({ userClient, scope = managerScope }: DepartmentsStoreClients): DepartmentsStore {
   type Query<T> = (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>;
 
   /** Runs a query whose "no row" is a legitimate answer (maybeSingle): null means not found. */
@@ -235,6 +248,22 @@ export function createDepartmentsStore({ userClient }: DepartmentsStoreClients):
     async list(session) {
       requireAdmin(session);
       return readAll();
+    },
+    async listFor(session) {
+      if (session?.role === "admin") return readAll();
+      if (session?.role !== "manager") throw new DepartmentsForbiddenError();
+      let ids: Set<string>;
+      try {
+        ids = (await scope.forManager(session)).departmentIds;
+      } catch (cause) {
+        if (cause instanceof ManagerScopeUnavailableError) throw new DepartmentsUnavailableError({ cause });
+        throw cause;
+      }
+      // Nothing in scope (e.g. just unassigned): no departments, never everything.
+      if (ids.size === 0) return [];
+      const rows = await run<DepartmentRow[]>(t => t.select(COLUMNS).in("id", [...ids]).order("name").order("id").returns<DepartmentRow[]>());
+      // Defence in depth: only departments in scope.
+      return withManagers(rows.filter(r => ids.has(r.id)));
     },
     async create(session, input) {
       requireAdmin(session);

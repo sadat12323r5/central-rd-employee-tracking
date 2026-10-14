@@ -20,17 +20,17 @@ export default async function Home() {
       if (!employee) return login;
       // Started before the attendance read and never awaited here: the page streams it (Story 3.2).
       const current = currentTraining(session, [employee.id]);
-      const entries = await attendanceStore.listForEmployee(employee.id);
+      const entries = await attendanceStore.listFor(session, employee.id);
       return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current} />;
     }
     if (session.role === "manager") {
-      // Story 4.2: the management portal without Departments, interviews or account controls. Managers
-      // read through the non-admin paths (their own record until Story 4.3) and never read departments.
-      const employees = await employeesStore.listFor(session);
-      return <Portal role="manager" employees={employees} current={currentTraining(session, employees.map(e => e.id))} />;
+      // Story 4.2: the management portal without Departments, interviews or account controls.
+      // Story 4.3: everything is scoped to the manager's department subtree, worked out fresh by the stores.
+      const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
+      return <Portal role="manager" employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
     }
     // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
-    const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.list(session)]);
+    const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
     return <Portal employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
   } catch (error) {
     // Never fall back to an empty or partial list: say plainly that records could not be loaded.

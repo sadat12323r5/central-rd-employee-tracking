@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { signInAsAdmin } from "./admin";
-import { e2eManagerStaff, e2eNoAccountEmployee, signIn } from "./staff";
+import { e2eManagerStaff, e2eNoAccountEmployee, e2eUnlinkedEmployee, signIn } from "./staff";
 import { serviceClient } from "./supabase-admin";
 
 // Story 4.2: the Administrator makes a throwaway Staff account the manager of a throwaway department;
@@ -10,7 +10,9 @@ import { serviceClient } from "./supabase-admin";
 // without a sign-in account is refused with the provision-first message.
 // Two browser contexts: A is the Administrator, B the Staff member being made a manager. The department
 // carries this run's id and is deleted in afterAll through the service role (its manager goes with it).
-// Needs the departments and department_managers migrations applied to the shared project.
+// Story 4.3: a manager of a throwaway department sees only that department's throwaway employees in the
+// directory, with the department's name, and none of the seeded demo employees.
+// Needs the departments, department_managers and manager_scope migrations applied to the shared project.
 const run = randomBytes(4).toString("hex");
 const PREFIX = `E2E Mgr ${run}`;
 
@@ -116,4 +118,39 @@ test("an employee without a sign-in account is refused as manager with the provi
   await setManager(page, department, employee.id);
   await expect(row.getByRole("alert")).toHaveText(`${employee.name} has no sign-in account yet. Provision their account first, then make them a manager.`);
   await expect(row.getByRole("cell").nth(2)).toHaveText("No manager");
+});
+
+test("a manager sees only their department's employees, with the department name (Story 4.3)", async ({ page }) => {
+  const manager = e2eManagerStaff();
+  const members = [e2eUnlinkedEmployee(), e2eNoAccountEmployee()];
+  const department = `${PREFIX} Scoped`;
+  const service = serviceClient();
+  const account = await service.from("employees").select("auth_user_id").eq("employee_id", manager.id).single();
+  if (account.error || !account.data?.auth_user_id) throw new Error(`Could not read the e2e manager's account: ${account.error?.message ?? "not linked"}`);
+  const created = await service.from("departments").insert({ name: department, manager_user_id: account.data.auth_user_id }).select("id").single();
+  if (created.error) throw new Error(`Could not create the throwaway department (${created.error.code}): ${created.error.message}`);
+  const departmentId = created.data.id as string;
+  const memberIds = members.map(m => m.id);
+  try {
+    const placed = await service.from("employees").update({ department_id: departmentId }).in("employee_id", memberIds);
+    if (placed.error) throw new Error(`Could not place the throwaway employees: ${placed.error.message}`);
+
+    await page.goto("/");
+    await signIn(page, manager.email, manager.password);
+    await expect(page.getByRole("heading", { name: "A clearer view of your people." })).toBeVisible();
+    const nav = page.getByRole("navigation", { name: "Main navigation" });
+    await nav.getByRole("button", { name: /Employees/ }).click();
+    const table = page.getByRole("table");
+    await expect(table.getByRole("row")).toHaveCount(members.length + 1);
+    for (const member of members) {
+      await expect(table.getByRole("row").filter({ hasText: member.name })).toContainText(department);
+    }
+    // None of the seeded demo employees, and not the manager's own record (outside the department).
+    await expect(table.getByText("Nadia Rahman")).toHaveCount(0);
+    await expect(table.getByText(manager.name)).toHaveCount(0);
+    await expect(nav.getByRole("button", { name: /Employees/ })).toContainText(String(members.length));
+  } finally {
+    await service.from("employees").update({ department_id: null }).in("employee_id", memberIds);
+    await service.from("departments").delete().eq("id", departmentId);
+  }
 });

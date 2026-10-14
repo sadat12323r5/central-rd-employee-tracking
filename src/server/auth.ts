@@ -101,7 +101,7 @@ async function supabaseSession(): Promise<Actor | null> {
       } catch (error) {
         console.error("Manager check failed: departments unavailable; continuing as Staff.", error instanceof Error ? error.name : "unknown error");
       }
-      if (manages) return { identity: { role: "manager", employeeId: identity.employeeId }, userId: data.user.id };
+      if (manages) return { identity: { role: "manager", employeeId: identity.employeeId, userId: data.user.id }, userId: data.user.id };
     }
     // An Administrator account stays `admin` even when it manages a department.
     return { identity, userId: data.user.id };

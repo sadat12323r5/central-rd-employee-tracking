@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { employees as fixture } from "@/data/employees";
 import { createEmployeesStore, EmployeesUnavailableError, type EmployeeRow } from "@/server/employees-store";
+import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
 import type { SessionIdentity } from "@/server/session";
 import { TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "@/server/training-store";
@@ -19,20 +20,22 @@ type Mode = "ok" | "error" | "throw";
 
 /** Minimal stand-in for the supabase-js query builder: applies eq filters to in-memory rows. */
 function fakeClient(rows: EmployeeRow[], mode: Mode = "ok") {
-  const queries: { table: string; filters: [string, string][]; columns?: string }[] = [];
+  const queries: { table: string; filters: [string, string][]; columns?: string; within?: [string, string[]] }[] = [];
   const client = {
     from(table: string) {
       if (mode === "throw") throw new TypeError("fetch failed");
-      const query = { table, filters: [] as [string, string][], columns: undefined as string | undefined };
+      const query = { table, filters: [] as [string, string][], columns: undefined as string | undefined, within: undefined as [string, string[]] | undefined };
       queries.push(query);
       const result = () => {
         if (mode === "error") return { data: null, error: { message: "connection refused" } };
-        const matched = rows.filter(r => query.filters.every(([col, val]) => (r as Record<string, string>)[col] === val));
+        const matched = rows.filter(r => query.filters.every(([col, val]) => (r as Record<string, string>)[col] === val)
+          && (!query.within || query.within[1].includes((r as Record<string, string>)[query.within[0]])));
         return { data: [...matched].sort((a, b) => a.employee_id.localeCompare(b.employee_id)), error: null };
       };
       const builder = {
         select: (columns: string) => { query.columns = columns; return builder; },
         eq: (col: string, val: string) => { query.filters.push([col, val]); return builder; },
+        in: (col: string, vals: string[]) => { query.within = [col, vals]; return builder; },
         order: () => builder,
         returns: () => builder,
         maybeSingle: async () => {
@@ -122,23 +125,125 @@ describe("employees-store role scoping", () => {
   });
 });
 
-describe("employees-store and manager sessions (Story 4.2)", () => {
-  const manager = { role: "manager", employeeId: "BS-1002" } as const;
+describe("employees-store and manager sessions (Story 4.3: scoped to the department subtree)", () => {
+  const manager = { role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const DEPT = "de9a0000-0000-4000-8000-000000000002";
+  const rows = (): EmployeeRow[] => [
+    { ...rowFor("BS-1001"), department_id: DEPT, archived_at: null, auth_user_id: "6f1d2c1e-0000-4000-8000-000000000001" },
+    { ...rowFor("BS-1002"), department_id: DEPT, archived_at: "2026-10-08T09:00:00+00:00", auth_user_id: null },
+    { ...rowFor("BS-1003"), department_id: "de9a0000-0000-4000-8000-0000000000ff", archived_at: null, auth_user_id: null },
+  ];
 
-  it("takes the non-admin paths: only the manager's own record, no admin columns", async () => {
-    const { client, queries } = fakeClient(seeded);
-    const store = createEmployeesStore(both(client));
+  /** A stand-in manager-scope returning the given employee ids (or failing), recording each call. */
+  function fakeScope(employeeIds: string[], fail?: Error) {
+    const calls: unknown[] = [];
+    const scope: ManagerScope = {
+      async forManager(session) {
+        calls.push(session);
+        if (fail) throw fail;
+        return { departmentIds: new Set([DEPT]), employeeIds: new Set(employeeIds) };
+      },
+    };
+    return { scope, calls };
+  }
+  const managerTraining = (rowsIn: TrainingEntry[] = [entry("BS-1001", "t-1"), entry("BS-1003", "t-3")]) => {
+    const calls: [SessionIdentity, string | undefined][] = [];
+    const store: Pick<TrainingStore, "listFor"> = {
+      async listFor(session, employeeId) {
+        calls.push([session, employeeId]);
+        return rowsIn.filter(r => r.employeeId !== "BS-1003" && (employeeId === undefined || r.employeeId === employeeId));
+      },
+    };
+    return { store, calls };
+  };
+  const storeWith = (client: SupabaseClient, scope: ManagerScope, interviews = fakeInterviews(), training = managerTraining()) =>
+    createEmployeesStore({ userClient: async () => client, interviews: interviews.store, training: training.store, scope });
+
+  it("lists only in-scope employees, archived ones flagged, with their department and never the account link", async () => {
+    const { client, queries } = fakeClient(rows());
+    const list = await storeWith(client, fakeScope(["BS-1001", "BS-1002"]).scope).listFor(manager);
+    expect(list.map(e => [e.id, e.archived, e.departmentId])).toEqual([["BS-1001", false, DEPT], ["BS-1002", true, DEPT]]);
+    for (const e of list) expect(e).not.toHaveProperty("hasAccount");
+    expect(queries[0].within).toEqual(["employee_id", ["BS-1001", "BS-1002"]]);
+    expect(queries[0].columns).toContain("department_id");
+    expect(queries[0].columns).toContain("archived_at");
+    for (const q of queries) expect(q.columns).not.toContain("auth_user_id");
+  });
+
+  it("drops a returned row outside the scope (defence in depth)", async () => {
+    const { client } = fakeClient(rows());
+    const leaky = { from: (t: string) => { const b = client.from(t) as unknown as Record<string, unknown>; b.in = () => b; return b; } } as unknown as SupabaseClient;
+    const list = await storeWith(leaky, fakeScope(["BS-1001"]).scope).listFor(manager);
+    expect(list.map(e => e.id)).toEqual(["BS-1001"]);
+  });
+
+  it("returns an empty list, without an employees query, when nothing is in scope", async () => {
+    const { client, queries } = fakeClient(rows());
+    expect(await storeWith(client, fakeScope([]).scope).listFor(manager)).toEqual([]);
+    expect(queries).toHaveLength(0);
+  });
+
+  it("never reads interviews for a manager: interviews are always empty", async () => {
+    const { client } = fakeClient(rows());
+    const interviews = fakeInterviews();
+    const store = storeWith(client, fakeScope(["BS-1001", "BS-1002"]).scope, interviews);
+    expect((await store.listFor(manager)).flatMap(e => e.interviews)).toEqual([]);
+    expect((await store.getFor(manager, "BS-1001"))?.interviews).toEqual([]);
+    expect(interviews.calls).toEqual([]);
+  });
+
+  it("attaches each in-scope employee's training from the training store, read as the manager", async () => {
+    const { client } = fakeClient(rows());
+    const training = managerTraining();
+    const store = storeWith(client, fakeScope(["BS-1001", "BS-1002"]).scope, fakeInterviews(), training);
     const list = await store.listFor(manager);
-    expect(list.map(e => e.id)).toEqual(["BS-1002"]);
-    expect(queries[0].filters).toEqual([["employee_id", "BS-1002"]]);
-    expect(await store.getFor(manager, "BS-1001")).toBeNull();
-    const own = await store.getFor(manager, "BS-1002");
-    for (const employee of [own, list[0]]) {
-      expect(employee).not.toHaveProperty("hasAccount");
-      expect(employee).not.toHaveProperty("archived");
-      expect(employee).not.toHaveProperty("departmentId");
-    }
-    for (const q of queries) for (const column of ["auth_user_id", "archived_at", "department_id"]) expect(q.columns).not.toContain(column);
+    expect(list.map(e => [e.id, e.training.map(t => t.id)])).toEqual([["BS-1001", ["t-1"]], ["BS-1002", []]]);
+    expect(training.calls).toEqual([[manager, undefined]]);
+  });
+
+  it("gets an in-scope profile, and null for an out-of-scope id without querying the employee", async () => {
+    const { client, queries } = fakeClient(rows());
+    const training = managerTraining();
+    const store = storeWith(client, fakeScope(["BS-1001"]).scope, fakeInterviews(), training);
+    const own = await store.getFor(manager, "BS-1001");
+    expect(own).toMatchObject({ id: "BS-1001", archived: false, departmentId: DEPT });
+    expect(own).not.toHaveProperty("hasAccount");
+    expect(own?.training.map(t => t.id)).toEqual(["t-1"]);
+    queries.length = 0;
+    training.calls.length = 0;
+    expect(await store.getFor(manager, "BS-1003")).toBeNull();
+    // Out of scope even though it is the manager's own record: "My record" is Story 4.10.
+    expect(await store.getFor(manager, "BS-1002")).toBeNull();
+    expect(queries).toHaveLength(0);
+    expect(training.calls).toEqual([]);
+  });
+
+  it("works the scope out fresh on every call", async () => {
+    const { client } = fakeClient(rows());
+    const scope = fakeScope(["BS-1001"]);
+    const store = storeWith(client, scope.scope);
+    await store.listFor(manager);
+    await store.getFor(manager, "BS-1001");
+    expect(scope.calls).toEqual([manager, manager]);
+  });
+
+  it("reports the records unavailable, never a partial list, when the scope cannot be read", async () => {
+    const { client, queries } = fakeClient(rows());
+    const store = storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope);
+    await expect(store.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(store.getFor(manager, "BS-1001")).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    expect(queries).toHaveLength(0);
+  });
+
+  it("never asks the scope for Administrator or Staff reads", async () => {
+    const { client } = fakeClient(seeded);
+    const scope = fakeScope(["BS-1001"]);
+    const store = createEmployeesStore({ ...both(client), scope: scope.scope });
+    await store.listFor(admin);
+    await store.getFor(admin, "BS-1001");
+    await store.listFor(staff);
+    await store.getFor(staff, "BS-1002");
+    expect(scope.calls).toEqual([]);
   });
 });
 

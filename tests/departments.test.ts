@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ancestorIds, authorityChain, DepartmentHierarchyError, hasDepartmentAuthority, normalizeDepartmentName, sameDepartmentName, wouldCreateCycle, type Department,
+  ancestorIds, authorityChain, DepartmentHierarchyError, hasDepartmentAuthority, managedDepartmentIds, normalizeDepartmentName, sameDepartmentName, wouldCreateCycle, type Department,
 } from "@/domain/departments";
 import { ADMIN_MANAGED_DEPARTMENT_ID, CENTRAL_RD_DEPARTMENT_ID, pickSeedAdministrator, type SeedAuthUser, DEFAULT_EMPLOYEE_DEPARTMENT_ID, departmentSeedRows, LND_DEPARTMENT_ID, seedDepartments } from "@/data/departments";
 
@@ -148,6 +148,40 @@ describe("hasDepartmentAuthority", () => {
       { id: "b", name: "B", parentId: "a", managerUserId: null, managerEmployeeId: null },
     ];
     expect(() => hasDepartmentAuthority({ role: "manager", userId: "u" }, looped, "a")).toThrow(DepartmentHierarchyError);
+  });
+});
+
+describe("managedDepartmentIds (Story 4.3)", () => {
+  const managed: Department[] = [
+    { id: "lnd", name: "L&D", parentId: null, managerUserId: "u-lnd", managerEmployeeId: null },
+    { id: "crd", name: "Central R&D", parentId: "lnd", managerUserId: "u-crd", managerEmployeeId: null },
+    { id: "qa", name: "QA Lab", parentId: "crd", managerUserId: null, managerEmployeeId: null },
+    { id: "ops", name: "Operations", parentId: null, managerUserId: null, managerEmployeeId: null },
+  ];
+
+  it("returns the managed department and every descendant", () => {
+    expect(managedDepartmentIds(managed, "u-lnd")).toEqual(["lnd", "crd", "qa"]);
+  });
+
+  it("never reaches upwards: a child's manager gets the child subtree only", () => {
+    expect(managedDepartmentIds(managed, "u-crd")).toEqual(["crd", "qa"]);
+  });
+
+  it("is empty for a user who manages nothing", () => {
+    expect(managedDepartmentIds(managed, "u-other")).toEqual([]);
+    expect(managedDepartmentIds([], "u-lnd")).toEqual([]);
+  });
+
+  it("works on a partial list whose ancestors are missing (what a manager's RLS read returns)", () => {
+    expect(managedDepartmentIds(managed.slice(1), "u-crd")).toEqual(["crd", "qa"]);
+  });
+
+  it("throws on a looping list rather than guessing", () => {
+    const looped: Department[] = [
+      { id: "a", name: "A", parentId: "b", managerUserId: "u", managerEmployeeId: null },
+      { id: "b", name: "B", parentId: "a", managerUserId: null, managerEmployeeId: null },
+    ];
+    expect(() => managedDepartmentIds(looped, "u")).toThrow(DepartmentHierarchyError);
   });
 });
 

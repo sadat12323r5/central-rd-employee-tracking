@@ -1,5 +1,6 @@
 // Pure department rules (Story 4.1): name normalisation and comparison, and the hierarchy walker.
-// Story 4.2 adds the authority chain (the managers over a department) built on the same walker.
+// Story 4.2 adds the authority chain (the managers over a department) built on the same walker, and
+// Story 4.3 the managed departments (the chain read from the other end).
 // No framework or database imports. departments-store is the load-bearing check; these are its helpers.
 
 export type Department = {
@@ -91,4 +92,16 @@ export function hasDepartmentAuthority(
   if (actor.role === "admin") return true;
   if (actor.role !== "manager") return false;
   return authorityChain(list, departmentId).includes(actor.userId);
+}
+
+/**
+ * Story 4.3: the ids of every department whose authority chain includes `userId` (the departments the
+ * user manages, directly or through an ancestor), in list order. This is the authority rule read from
+ * the other end, so a manager's scope and their write authority cannot disagree. Ancestors missing from
+ * the list end the walk; a loop in the list throws DepartmentHierarchyError (from ancestorIds).
+ */
+export function managedDepartmentIds(
+  list: readonly Pick<Department, "id" | "parentId" | "managerUserId">[], userId: string,
+): string[] {
+  return list.filter(d => authorityChain(list, d.id).includes(userId)).map(d => d.id);
 }
