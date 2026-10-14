@@ -1,7 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { employees as fixture } from "@/data/employees";
-import { createEmployeesStore, EmployeesUnavailableError, type EmployeeRow } from "@/server/employees-store";
+import {
+  createEmployeesStore, EmployeeExistsError, EmployeeForbiddenError, EmployeesUnavailableError, EmployeeValidationError, type EmployeeRow,
+} from "@/server/employees-store";
+import { todayInDhaka, type NewEmployeeInput } from "@/domain/employee-input";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { many, pagedClient } from "./support/paged-client";
 import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
@@ -568,5 +571,164 @@ describe("employees-store manager paging (Story 4.3 with Story 8.2)", () => {
     const { client } = pagedClient([many(1000, rowAt), "error"]);
     const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, scope: scopeOf(["BS-0001"]) });
     await expect(store.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+});
+
+describe("employees-store.create (Story 7.1)", () => {
+  const DEPT = "de9a0000-0000-4000-8000-0000000000c1";
+  const OTHER = "de9a0000-0000-4000-8000-0000000000d1";
+  const manager = { role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const input: NewEmployeeInput = {
+    employeeId: "BS-4321", name: "  Tanvir   Hasan ", title: "QA Engineer", team: "Quality", email: " Tanvir.Hasan@Example.com ",
+    departmentId: DEPT, manager: "Meera Das", office: "Dhaka HQ", employmentType: "Trainee", joinedOn: "2026-10-01",
+  };
+
+  type Insert = { table: string; row: Record<string, unknown>; options?: unknown };
+  /** A client whose insert answers with `error` (or throws), recording what was inserted. */
+  function insertClient(error: { code?: string; message?: string; details?: string } | null = null, throws = false) {
+    const inserts: Insert[] = [];
+    let calls = 0;
+    const client = {
+      from(table: string) {
+        calls++;
+        if (throws) throw new TypeError("fetch failed");
+        return {
+          insert(row: Record<string, unknown>, options?: unknown) {
+            inserts.push({ table, row, options });
+            const result = { data: null, error };
+            // A thenable without .select(): the store never reads the row back.
+            return { then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => Promise.resolve(result).then(resolve, reject) };
+          },
+        };
+      },
+    } as unknown as SupabaseClient;
+    return { client, inserts, calls: () => calls };
+  }
+
+  function fakeScope(departmentIds: string[], fail?: Error) {
+    const calls: SessionIdentity[] = [];
+    const scope: ManagerScope = {
+      async forManager(session) {
+        calls.push(session);
+        if (fail) throw fail;
+        return { departmentIds: new Set(departmentIds), employeeIds: new Set() };
+      },
+    };
+    return { scope, calls };
+  }
+
+  const storeWith = (client: SupabaseClient, scope = fakeScope([DEPT]).scope) =>
+    createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: fakeTraining().store, scope });
+
+  it("lets an admin add an employee with normalised input and derived fields, never an account link or archive flag", async () => {
+    const { client, inserts } = insertClient();
+    const scope = fakeScope([]);
+    expect(await storeWith(client, scope.scope).create(admin, input)).toEqual({ employeeId: "BS-4321", name: "Tanvir Hasan" });
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].table).toBe("employees");
+    expect(inserts[0].row).toEqual({
+      employee_id: "BS-4321", name: "Tanvir Hasan", title: "QA Engineer", team: "Quality", email: "tanvir.hasan@example.com",
+      department_id: DEPT, manager: "Meera Das", office: "Dhaka HQ", employment_type: "Trainee", joined_on: "2026-10-01",
+      status: "Available", initials: "TH", avatar_color: "mint", summary: "",
+    });
+    expect(inserts[0].row).not.toHaveProperty("auth_user_id");
+    expect(inserts[0].row).not.toHaveProperty("archived_at");
+    // The Administrator's department authority is not limited by a scope.
+    expect(scope.calls).toEqual([]);
+  });
+
+  it("defaults the join date to today in Asia/Dhaka", async () => {
+    const { client, inserts } = insertClient();
+    await storeWith(client).create(admin, { ...input, joinedOn: undefined });
+    expect(inserts[0].row.joined_on).toBe(todayInDhaka());
+  });
+
+  it("ignores extra properties smuggled into the input", async () => {
+    const { client, inserts } = insertClient();
+    const forged = { ...input, auth_user_id: "aaaa0000-0000-4000-8000-0000000000ff", status: "On project", archived_at: "2026-01-01" };
+    await storeWith(client).create(admin, forged as NewEmployeeInput);
+    expect(inserts[0].row).not.toHaveProperty("auth_user_id");
+    expect(inserts[0].row).not.toHaveProperty("archived_at");
+    expect(inserts[0].row.status).toBe("Available");
+  });
+
+  it("lets a manager add to a department in their subtree, working the scope out fresh", async () => {
+    const { client, inserts } = insertClient();
+    const scope = fakeScope([DEPT]);
+    await storeWith(client, scope.scope).create(manager, input);
+    expect(inserts).toHaveLength(1);
+    expect(scope.calls).toEqual([manager]);
+  });
+
+  it("refuses a manager adding outside their subtree, without an insert", async () => {
+    const { client, inserts } = insertClient();
+    await expect(storeWith(client, fakeScope([DEPT]).scope).create(manager, { ...input, departmentId: OTHER }))
+      .rejects.toBeInstanceOf(EmployeeForbiddenError);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("reports unavailable, without an insert, when a manager's scope cannot be read", async () => {
+    const { client, inserts } = insertClient();
+    await expect(storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope).create(manager, input))
+      .rejects.toBeInstanceOf(EmployeesUnavailableError);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("refuses Staff without any query", async () => {
+    const { client, calls } = insertClient();
+    const scope = fakeScope([DEPT]);
+    await expect(storeWith(client, scope.scope).create(staff, input)).rejects.toBeInstanceOf(EmployeeForbiddenError);
+    expect(calls()).toBe(0);
+    expect(scope.calls).toEqual([]);
+  });
+
+  it("refuses a missing department and other bad input without an insert", async () => {
+    const { client, inserts } = insertClient();
+    const store = storeWith(client);
+    await expect(store.create(admin, { ...input, departmentId: "" })).rejects.toMatchObject({ fields: ["departmentId"] });
+    await expect(store.create(admin, { ...input, employeeId: "BS-12", email: "nope" })).rejects.toMatchObject({ fields: ["employeeId", "email"] });
+    await expect(store.create(admin, { ...input, employmentType: "Contractor" })).rejects.toBeInstanceOf(EmployeeValidationError);
+    await expect(store.create(admin, { ...input, joinedOn: "2026-02-30" })).rejects.toBeInstanceOf(EmployeeValidationError);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it.each([
+    [{ code: "23505", message: 'duplicate key value violates unique constraint "employees_pkey"', details: "Key (employee_id)=(BS-4321) already exists." }, "employeeId"],
+    [{ code: "23505", message: 'duplicate key value violates unique constraint "employees_email_key"', details: "Key (email)=(x@example.com) already exists." }, "email"],
+  ] as const)("maps a unique violation (%j) to EmployeeExistsError(%s)", async (error, field) => {
+    const { client } = insertClient(error);
+    const refused = await storeWith(client).create(admin, input).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(EmployeeExistsError);
+    expect((refused as InstanceType<typeof EmployeeExistsError>).field).toBe(field);
+  });
+
+  it("maps an unknown department (23503) to a department validation error", async () => {
+    const { client } = insertClient({ code: "23503", message: "insert or update on table \"employees\" violates foreign key constraint" });
+    await expect(storeWith(client).create(admin, input)).rejects.toMatchObject({ name: "EmployeeValidationError", fields: ["departmentId"] });
+  });
+
+  it("maps a malformed department id (22P02) to a department validation error", async () => {
+    const { client } = insertClient({ code: "22P02", message: 'invalid input syntax for type uuid: "not-a-uuid"' });
+    await expect(storeWith(client).create(admin, { ...input, departmentId: "not-a-uuid" }))
+      .rejects.toMatchObject({ name: "EmployeeValidationError", fields: ["departmentId"] });
+  });
+
+  it("maps an RLS refusal (42501) to EmployeeForbiddenError", async () => {
+    const { client } = insertClient({ code: "42501", message: "new row violates row-level security policy for table \"employees\"" });
+    await expect(storeWith(client).create(manager, input)).rejects.toBeInstanceOf(EmployeeForbiddenError);
+  });
+
+  it.each([
+    [{ code: "08006", message: "connection failure" }],
+    [{ code: "23505", message: 'duplicate key value violates unique constraint "employees_auth_user_id_key"' }],
+    [{ message: "Bad gateway" }],
+  ])("maps any other error (%j) to EmployeesUnavailableError", async error => {
+    const { client } = insertClient(error);
+    await expect(storeWith(client).create(admin, input)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+
+  it("maps a thrown client error to EmployeesUnavailableError", async () => {
+    const { client } = insertClient(null, true);
+    await expect(storeWith(client).create(admin, input)).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });

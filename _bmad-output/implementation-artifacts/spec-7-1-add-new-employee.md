@@ -2,7 +2,7 @@
 title: 'Story 7.1: Add a new employee'
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '0c39da18417ee81e7f6a0d88a317d6055f7d403b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -100,6 +100,41 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 31 findings — high 0, medium 1, low 15, false 15, maybe-false 0
+- findings:
+  - `[low]` `[patch]` VerificationGap other: non-UUID departmentId reaches Postgres (22P02) and is shown as "unavailable" — action validates a UUID; store maps 22P02 to a department validation error.
+  - `[low]` `[patch]` EdgeCase: 22P02 mapped to unavailable — same root cause and patch as above.
+  - `[low]` `[patch]` EdgeCase: departmentId only checked non-empty — same patch.
+  - `[low]` `[reject]` EdgeCase: a rejected server action (network drop) escapes useActionState — same pattern as every existing panel (staff-account, account-access, departments); not introduced here.
+  - `[low]` `[reject]` EdgeCase: join date has no range — the intent sets no bounds; inventing a window is a product decision; 7.2 can correct dates.
+  - `[false]` `[reject]` EdgeCase: employmentType with surrounding whitespace refused by the action — the field is a select with fixed values; no user path sends whitespace.
+  - `[low]` `[reject]` EdgeCase: client maxLength counts raw text — only affects >120-char input with runs of spaces; server decides.
+  - `[false]` `[reject]` EdgeCase claim: no manager e2e — the Administrator is an "authorized manager" (Epic 7 preamble); the e2e covers AC1 for it and the manager path is covered by store, action and live RLS tests.
+  - `[false]` `[reject]` Intent: manager-added employee appearing in the manager's directory not asserted — the manager directory read is Story 4.3's tested path; descriptive.
+  - `[false]` `[reject]` Intent: 1.3 provisioning not exercised on a new employee — AC says "can be given"; eligibility is asserted; provisioning itself is Story 1.3's e2e.
+  - `[false]` `[reject]` Intent: no table-level NOT NULL on department_id — a DESTRUCTIVE tightening; the intent's "rejected" is met at app and policy level (Design Notes).
+  - `[false]` `[reject]` Intent: duplicates not tested from UI to DB — each layer is tested; descriptive.
+  - `[low]` `[patch]` Intent: no insert into a grandchild department — live RLS case added (manager of C inserts into G).
+  - `[false]` `[reject]` Intent: fields beyond the literal list (join date, enum, defaults) — NOT NULL columns need values; recorded in Design Notes.
+  - `[false]` `[reject]` Intent: integration tests need a configured project — the hand-off for unapplied migrations; descriptive.
+  - `[false]` `[reject]` Intent: renamed employees-rls test narrows meaning — the assertion is unchanged and now states the real reason the admin insert fails.
+  - `[false]` `[reject]` Blind: no audit row for an added employee — audit is decided only for archive/restore, transfer and exports; the intent does not ask for it.
+  - `[false]` `[reject]` Blind: manager e2e missing — duplicate of the EdgeCase claim row.
+  - `[low]` `[patch]` Blind: no grandchild insert test — same patch as the Intent row.
+  - `[low]` `[patch]` Blind: an Administrator refused by RLS sees the manager-only message — admin sessions now get the unavailable message.
+  - `[false]` `[reject]` Blind: duplicate errors reveal IDs/emails outside a manager's scope — the intent matrix requires a duplicate ID to be rejected even outside scope; accepted and noted in the PR.
+  - `[low]` `[reject]` Blind: DB does not enforce derived fields on direct API inserts — cosmetic fields Story 7.2 makes editable; policy checks would add complexity for no user harm.
+  - `[low]` `[reject]` Blind: only the first validation issue is shown, no per-field aria — the existing panels use the same single-alert pattern; the alert names the field.
+  - `[low]` `[patch]` Blind: focus lost after every submit (form key changes on refusals) — the key now changes only on success.
+  - `[low]` `[reject]` Blind: submit enabled with an empty department list — the select is required, so the browser blocks submit; the panel states there are no departments.
+  - `[medium]` `[patch]` Blind: test ID ranges collide (BS-91xx is used by Stories 4.4 and 4.9 tests; BS-90..99 are taken) and cleanup can delete other runs' rows — live test moved to BS-89xx, e2e to BS-88xx.
+  - `[low]` `[reject]` Blind: join date sanity range — duplicate of the EdgeCase row.
+  - `[low]` `[reject]` Blind: validation rules duplicated across layers (ID regex, field list, email shape) — both layers reject what the DB would; no user-visible disagreement found.
+  - `[low]` `[reject]` Blind: unmatched 23505 shown as unavailable — only after a future constraint rename; adding a generic duplicate message is new surface.
+  - `[false]` `[reject]` Blind: email uniqueness case-sensitive — acknowledged in Design Notes; the app lower-cases input and seeded emails are lower case.
+  - `[low]` `[patch]` Blind: test department constant is not a valid UUID — replaced with a valid UUID.
+
 ## Design Notes
 
 Defaults: the story lists the fields the person enters; the remaining NOT NULL columns get neutral defaults (status "Available", empty summary, derived initials and colour) that Story 7.2 edits. Join date is optional and defaults to today because a new joiner's start date is usually today or known; it is not invented data.
@@ -116,3 +151,49 @@ Email uniqueness is the existing case-sensitive `unique`; the store lower-cases 
 - `npm run build` -- success.
 - `npm run test:e2e` (Chromium via `launchOptions.executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"` in a temporary config, since the repo config uses the msedge channel) -- pass, or fail only with schema-missing errors.
 - Optional: apply all migrations to a throwaway local Postgres (as Stories 4.3 and 4.9 did) to exercise the policies.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** The Administrator (any department) and department managers (their subtree) can add a new employee from an "Add employee" form in the Employees view. A server action validates the input, `employeesStore.create()` pre-checks department authority and inserts through the user's JWT, and two new ADDITIVE insert policies enforce the same rule in the database. The new employee appears in the directory, ready for Story 1.3 provisioning.
+
+**Files changed:**
+- `supabase/migrations/20261015000000_employee_create.sql`: `employees_insert_admin` and `employees_insert_managed` (ADDITIVE).
+- `src/domain/employee-input.ts`: normalisation, validation, derived fields (initials, colour, status, default join date).
+- `src/server/employees-store.ts`: `create()`, new errors, Postgres error mapping.
+- `src/server/employee-actions.ts`: `createEmployeeAction`.
+- `src/components/add-employee-panel.tsx`, `src/components/portal.tsx`, `src/app/styles.css`: the form for admin and manager.
+- Tests:
+  - new: `tests/employee-input.test.ts`, `tests/employee-actions.test.ts`, `tests/components/add-employee-panel.test.tsx`, `tests/employee-create-rls.test.ts` (live, BS-89xx), `tests/e2e/add-employee.spec.ts` (BS-88xx);
+  - extended: `tests/employees-store.test.ts`, `tests/components/portal.test.tsx`, `tests/employees-rls.test.ts` (one test renamed).
+- `docs/DEPLOYMENT.md`, `docs/ARCHITECTURE.md`.
+
+**Review:** 31 findings: 1 medium, 15 low, 15 false.
+- **Patched (6 fixes):**
+  - medium: the test ID range collided with Stories 4.4 and 4.9;
+  - low: department UUID validation and 22P02 mapping;
+  - low: an Administrator refused by RLS got the manager message;
+  - low: the grandchild-department insert test;
+  - low: the form remounted on refusal, losing focus;
+  - low: an invalid test UUID.
+- **Deferred:** none.
+- **Rejected:** all others, with the reasons in the triage log.
+
+Follow-up review recommended: false (patched: high 0, medium 1, low 5).
+
+**Verification:**
+- `npm run typecheck`: pass.
+- `npm run build`: pass.
+- `npm test`: 1106 passed, 32 skipped. Three live files fail only with PGRST205 (`public.departments` missing): `departments-rls`, `manager-scope-rls` and `employee-create-rls`. One 5-second timeout in `lms-rls` passed on re-run (11/11).
+- `npm run test:e2e` (Chromium via executablePath): 11 passed, 16 failed. Every failure is schema-missing (12× 42703, 4× PGRST205).
+- The implementer applied all migrations to a throwaway local Postgres 16 and confirmed:
+  - admin and in-subtree manager inserts succeed;
+  - parent, unrelated or null department, Staff, anon, and forged `auth_user_id`/`archived_at` are refused (42501);
+  - duplicate ID and email give 23505 on the expected constraints, and an unknown department gives 23503;
+  - no updates are possible.
+
+**Residual risks:**
+- The live RLS and e2e tests must be re-run after the 4.1, 4.2, 4.3 and 7.1 migrations are applied.
+- A duplicate-ID or duplicate-email error tells a manager that the value exists outside their scope (the intent requires the rejection).
+- Email uniqueness stays case-sensitive in the database.

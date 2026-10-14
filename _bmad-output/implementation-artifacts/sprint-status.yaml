@@ -72,9 +72,9 @@ development_status:
 
   epic-5: backlog
   5-1-administrator-loads-the-approved-holiday-calendar: backlog # blocked: needs the System Owner-approved holiday calendar (action item open)
-  5-2-record-a-leave-period: backlog
-  5-3-edit-or-cancel-a-leave-period: backlog
-  5-4-attendance-views-use-real-data: backlog
+  5-2-record-a-leave-period: backlog # blocked: counts working days against the holiday calendar from Story 5.1, which is blocked on the System Owner-approved calendar
+  5-3-edit-or-cancel-a-leave-period: backlog # blocked: needs Story 5.2 (leave records), which needs the 5.1 holiday calendar
+  5-4-attendance-views-use-real-data: backlog # blocked: needs Stories 5.1-5.3 (holiday calendar and leave records)
   epic-5-retrospective: optional
 
   epic-6: done
@@ -84,7 +84,7 @@ development_status:
   epic-6-retrospective: optional
 
   epic-7: backlog
-  7-1-add-a-new-employee: in-progress
+  7-1-add-a-new-employee: review
   7-2-edit-an-employee-s-basic-details: backlog
   7-3-maintain-employment-history: backlog
   7-4-record-skills-assessments-and-the-manager-evaluation: backlog

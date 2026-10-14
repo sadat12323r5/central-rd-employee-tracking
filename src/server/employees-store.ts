@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { employees as fixture, type Employee } from "@/data/employees";
+import { derivedFields, invalidNewEmployeeFields, normalizeNewEmployee, type NewEmployeeField, type NewEmployeeInput } from "@/domain/employee-input";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { ManagerIdentity, SessionIdentity, StaffIdentity } from "./session";
@@ -23,6 +24,13 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // Story 4.3: a department manager reads the employees in their department subtree (manager-scope,
 // computed fresh on each call), archived ones included and flagged, with their department; never
 // `auth_user_id` and never interviews. RLS (employees_select_managed) bounds the same rows.
+//
+// Story 7.1: `create` adds a new employee through the same per-request client (never the service role).
+// The Administrator may add to any department, a manager only to a department in their subtree (checked
+// here against manager-scope, and again by the employees_insert_* RLS policies); Staff never. The
+// department is required. Status, initials, avatar colour and summary are derived, never taken from the
+// input, and the row never carries an account link or an archived flag: accounts come only from
+// accounts-store (Story 1.3).
 export interface EmployeesStore {
   /** Every employee for an admin; the department subtree's employees for a manager; only the caller's own record for staff. */
   listFor(session: SessionIdentity): Promise<Employee[]>;
@@ -33,6 +41,40 @@ export interface EmployeesStore {
    * False when the row is missing, unlinked or archived. Throws EmployeesUnavailableError on a read error.
    */
   isActive(session: StaffIdentity): Promise<boolean>;
+  /**
+   * Story 7.1: adds a new employee. Throws EmployeeForbiddenError (Staff, or a department outside a
+   * manager's subtree), EmployeeValidationError (bad input, unknown department), EmployeeExistsError
+   * (duplicate Employee ID or email) or EmployeesUnavailableError. Never creates a sign-in account.
+   */
+  create(session: SessionIdentity, input: NewEmployeeInput): Promise<{ employeeId: string; name: string }>;
+}
+
+/** The caller may not add this employee: a Staff session, or a department outside a manager's subtree. */
+export class EmployeeForbiddenError extends Error {
+  constructor() {
+    super("Only an Administrator, or a manager for their own department subtree, can add employees.");
+    this.name = "EmployeeForbiddenError";
+  }
+}
+
+/** The input failed validation. `fields` names the offending inputs; values are never included. */
+export class EmployeeValidationError extends Error {
+  readonly fields: NewEmployeeField[];
+  constructor(fields: NewEmployeeField[]) {
+    super(`Invalid employee details: ${fields.join(", ")}.`);
+    this.name = "EmployeeValidationError";
+    this.fields = fields;
+  }
+}
+
+/** An employee with this Employee ID or primary email already exists. */
+export class EmployeeExistsError extends Error {
+  readonly field: "employeeId" | "email";
+  constructor(field: "employeeId" | "email") {
+    super(field === "employeeId" ? "An employee with this Employee ID already exists." : "An employee with this email already exists.");
+    this.name = "EmployeeExistsError";
+    this.field = field;
+  }
 }
 
 /** The employee database is unreachable or returned an error. Never treat this as "no employees". */
@@ -114,6 +156,20 @@ const trainingOf = (all: TrainingEntry[], employeeId: string): Employee["trainin
   all.filter(t => t.employeeId === employeeId).map(({ employeeId: _, ...entry }) => entry);
 
 type Result<T> = { data: T | null; error: unknown };
+type DbError = { code?: string; message?: string; details?: string };
+
+/** Maps an insert refusal to the store's typed errors; anything unrecognised is "unavailable". */
+function insertRefusal(error: DbError): Error {
+  const text = `${error.message ?? ""} ${error.details ?? ""}`;
+  if (error.code === "23505") {
+    if (/employees_pkey|\(employee_id\)/.test(text)) return new EmployeeExistsError("employeeId");
+    if (/employees_email_key|\(email\)/.test(text)) return new EmployeeExistsError("email");
+  }
+  // 23503: no such department; 22P02: not even a valid department id.
+  if (error.code === "23503" || error.code === "22P02") return new EmployeeValidationError(["departmentId"]);
+  if (error.code === "42501") return new EmployeeForbiddenError();
+  return new EmployeesUnavailableError({ cause: error });
+}
 
 export type EmployeesStoreClients = {
   /** Per-request client carrying the signed-in user's JWT (RLS enforced). Used for every read. */
@@ -197,7 +253,42 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
     return toEmployee(row, "manager", [], trainingOf(await trainingFor(session, id), id));
   }
 
+  /** Story 7.1: the departments a manager may add employees to. Scope failure: unavailable, never "allowed". */
+  async function managedDepartmentIds(session: ManagerIdentity): Promise<Set<string>> {
+    try {
+      return (await scope.forManager(session)).departmentIds;
+    } catch (cause) {
+      if (cause instanceof ManagerScopeUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   return {
+    async create(session, input) {
+      // Staff never add employees: refused before any query.
+      if (session.role !== "admin" && session.role !== "manager") throw new EmployeeForbiddenError();
+      const employee = normalizeNewEmployee(input);
+      const invalid = invalidNewEmployeeFields(employee);
+      if (invalid.length > 0) throw new EmployeeValidationError(invalid);
+      if (session.role === "manager" && !(await managedDepartmentIds(session)).has(employee.departmentId)) {
+        throw new EmployeeForbiddenError();
+      }
+      const derived = derivedFields(employee);
+      let result: { error: DbError | null };
+      try {
+        // No .select(): nothing is read back, so only the insert policies apply.
+        result = await (await userClient()).from("employees").insert({
+          employee_id: employee.employeeId, name: employee.name, title: employee.title, team: employee.team,
+          employment_type: employee.employmentType, email: employee.email, joined_on: employee.joinedOn,
+          manager: employee.manager, office: employee.office, department_id: employee.departmentId,
+          status: derived.status, initials: derived.initials, avatar_color: derived.avatarColor, summary: derived.summary,
+        });
+      } catch (cause) {
+        throw new EmployeesUnavailableError({ cause });
+      }
+      if (result.error) throw insertRefusal(result.error);
+      return { employeeId: employee.employeeId, name: employee.name };
+    },
     async listFor(session) {
       if (session.role === "manager") return listForManager(session);
       // One interviews and one training read for the whole list: everyone's for an admin, the caller's own for staff.

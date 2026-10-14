@@ -17,6 +17,9 @@ vi.mock("@/server/department-actions", () => ({
   updateDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
   setDepartmentManagerAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
+vi.mock("@/server/employee-actions", () => ({
+  createEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -715,5 +718,39 @@ describe("Portal scoped to a manager's departments (Story 4.3)", () => {
     expect(lines).toHaveLength(scoped.length + 1);
     for (const e of scoped) expect(csvText).toContain(e.id);
     expect(csvText).not.toContain("Meera Das");
+  });
+});
+
+describe("Portal add-employee form (Story 7.1)", () => {
+  const LND = "de9a0000-0000-4000-8000-0000000000b1";
+  const QA = "de9a0000-0000-4000-8000-0000000000b2";
+  const departments = [
+    { id: LND, name: "L&D", parentId: null, managerUserId: null, managerEmployeeId: null },
+    { id: QA, name: "QA Lab", parentId: LND, managerUserId: null, managerEmployeeId: null },
+  ];
+  const openEmployees = async () => {
+    const user = userEvent.setup();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /^Employees/ }));
+  };
+  const departmentOptions = () =>
+    within(within(screen.getByRole("form", { name: "Add an employee" })).getByLabelText("Department")).getAllByRole("option").slice(1).map(o => o.textContent);
+
+  it("shows the form in the Employees view for the Administrator, offering every department it was given", async () => {
+    await show(<Portal employees={employees} departments={departments} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Add an employee" })).not.toBeInTheDocument();
+    await openEmployees();
+    expect(screen.getByRole("form", { name: "Add an employee" })).toBeInTheDocument();
+    expect(departmentOptions()).toEqual(["L&D", "QA Lab"]);
+  });
+
+  it("shows the form for a department manager, offering only their subtree's departments", async () => {
+    await show(<Portal role="manager" employees={employees.slice(0, 2)} departments={departments.slice(1)} current={none()} />);
+    await openEmployees();
+    expect(departmentOptions()).toEqual(["QA Lab"]);
+  });
+
+  it("is not on the Overview", async () => {
+    await show(<Portal employees={employees} departments={departments} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Add an employee" })).not.toBeInTheDocument();
   });
 });

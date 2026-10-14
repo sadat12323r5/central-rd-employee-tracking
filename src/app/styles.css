@@ -27,3 +27,5 @@
 .staff-field select:focus-visible{outline:3px solid var(--focus-ring);outline-offset:1px}
 .departments-add{margin-top:24px;border-top:1px solid var(--line-divider);padding-top:20px}
 .departments-add h3{margin:0}
+/* Story 7.1: add an employee */
+.add-employee{margin-top:24px}.add-employee h2{margin-bottom:6px}.add-employee-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.add-employee-grid .staff-field:first-child{grid-column:auto}.add-employee-grid small{font-size:11px}
