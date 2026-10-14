@@ -11,6 +11,7 @@ import { addInterviewAction, updateInterviewAction, withdrawInterviewAction } fr
 import { signOut } from "@/server/auth";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
+import { EvaluationSummary, SKILL_SCALE, SkillList } from "./assessment-summary";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -274,6 +275,17 @@ export default function StaffAttendance({ employee, entries, serverNow, current 
         <Suspense fallback={<CompletedTable entries={completedTraining} />}>
           <CompletedWithLms stored={completedTraining} current={current} employeeId={employee.id} />
         </Suspense>
+      </section>
+
+      {/* Story 7.4: read-only. Only an Administrator or a department manager can change skills or the evaluation. */}
+      <section className="panel staff-assessment" aria-labelledby="assessment-heading">
+        <h2 id="assessment-heading">Skills & evaluation</h2>
+        <p className="muted">Your assessed skills and your manager&apos;s evaluation. Read-only: your manager or the L&D Administrator records them.</p>
+        <h3 id="assessed-skills-heading">Assessed skills</h3>
+        <p className="muted">{SKILL_SCALE}</p>
+        <SkillList skills={employee.skills} />
+        <h3 id="manager-evaluation-heading">Manager evaluation</h3>
+        <EvaluationSummary review={employee.review} headingLevel="h4" />
       </section>
 
       <section className="panel staff-interviews" aria-labelledby="interviews-heading">

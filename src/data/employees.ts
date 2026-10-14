@@ -8,6 +8,10 @@
   archived?: boolean;
   /** Administrator reads only: the employee's department (`department_id`, Story 4.1); null when unset. */
   departmentId?: string | null;
+  /**
+   * Assessed skills (Story 7.4, read through assessments-store from the `employee_skills` table), strongest
+   * first. In this fixture they are seed-only (`skillSeedRows`).
+   */
   skills: { name: string; level: number; evidence: string }[];
   history: { role: string; company: string; period: string; detail: string }[];
   /**
@@ -25,6 +29,11 @@
    */
   interviews: { id: string; company: string; role: string; date: string; stage: string; outcome: string; feedback: string; withdrawn: boolean }[];
   attendance: { scheduled: number; worked: number; leave: number; unrecorded: number; records: { date: string; type: string; days: number; status: string }[] };
+  /**
+   * The manager evaluation (Story 7.4, read through assessments-store from the `employee_evaluations` table):
+   * `date` is the review date, `next` the development priorities. All empty when none is recorded yet. In
+   * this fixture it is seed-only (`evaluationSeedRows`).
+   */
   review: { date: string; reviewer: string; readiness: string; strengths: string; next: string };
 };
 
@@ -86,6 +95,27 @@ export function lmsStubSeedRows(list: Employee[]) {
     id: lmsStubSeedId(e.id, index), employee_id: e.id, programme: t.name, provider: t.provider,
     status: "in_progress" as const, progress: t.progress, target_date: t.date,
   }] : [])));
+}
+
+/**
+ * The `employee_skills` rows `npm run db:seed` inserts (Story 7.4): every fixture skill, unrated by any
+ * account (`updated_by` null). The seed skips a skill whose (employee, lower-cased name) already exists.
+ */
+export function skillSeedRows(list: Employee[]) {
+  return list.flatMap(e => e.skills.map(s => ({
+    employee_id: e.id, name: s.name, level: s.level, evidence: s.evidence, updated_by: null,
+  })));
+}
+
+/**
+ * The `employee_evaluations` rows `npm run db:seed` inserts (Story 7.4): one per fixture employee, with the
+ * fixture's reviewer and review date, unsaved by any account (`updated_by` null).
+ */
+export function evaluationSeedRows(list: Employee[]) {
+  return list.map(e => ({
+    employee_id: e.id, strengths: e.review.strengths, development_priorities: e.review.next, readiness: e.review.readiness,
+    reviewer: e.review.reviewer, reviewed_on: e.review.date, updated_by: null,
+  }));
 }
 
 const people = [

@@ -2,7 +2,7 @@
 title: "Story 7.4: Record skills assessments and the manager evaluation"
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: 'bac1e0c1d3cfa287242c0c5c10193980a8b0f2ea'
 review_loop_iteration: 0
 followup_review_recommended: false

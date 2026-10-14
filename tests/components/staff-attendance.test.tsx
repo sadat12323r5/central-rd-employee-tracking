@@ -337,3 +337,37 @@ describe("StaffAttendance current enrolments (Story 3.2)", () => {
     expect(screen.queryByText("Secure coding basics")).not.toBeInTheDocument();
   });
 });
+
+describe("StaffAttendance skills and evaluation (Story 7.4: read-only)", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now)); });
+  afterEach(() => { vi.useRealTimers(); });
+  const section = () => screen.getByRole("region", { name: "Skills & evaluation" });
+
+  it("shows the employee's own skills and evaluation, with the reviewer and D MMM YYYY date", async () => {
+    const { container } = await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const view = within(section());
+    for (const skill of employee.skills) expect(view.getByText(skill.name)).toBeInTheDocument();
+    expect(view.getAllByRole("img", { name: /out of 5$/ })).toHaveLength(employee.skills.length);
+    expect(view.getByText(`14 Sep 2026 · ${employee.review.reviewer}`)).toBeInTheDocument();
+    expect(view.getByText(employee.review.strengths)).toBeInTheDocument();
+    expect(view.getByText(employee.review.next)).toBeInTheDocument();
+    expect(view.getByText(employee.review.readiness)).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("offers no form to change skills or the evaluation", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Rate a skill" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Edit evaluation" })).not.toBeInTheDocument();
+    expect(within(section()).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(section()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows the empty states when nothing is recorded yet", async () => {
+    const bare = { ...employee, skills: [], review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" } };
+    await show(<StaffAttendance employee={bare} entries={[]} serverNow={now} current={none()} />);
+    expect(within(section()).getByText("No skills assessed yet.")).toBeInTheDocument();
+    expect(within(section()).getByText("No evaluation recorded yet.")).toBeInTheDocument();
+    expect(within(section()).queryByText(/Not recorded/)).not.toBeInTheDocument();
+  });
+});

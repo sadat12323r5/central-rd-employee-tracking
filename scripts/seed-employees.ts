@@ -10,13 +10,17 @@
 // Administrator account (pickSeedAdministrator: the Administrator whose email is SEED_ADMIN_EMAIL, else
 // the earliest-created Administrator; never a non-admin) only while
 // L&D has no manager; with no Administrator yet it warns to run `npm run db:seed-admin` first and
-// continues. Central R&D gets no manager. Other nested profile data stays in the fixture (read by employees-store); the fixture's
-// interviews and training are never read at runtime.
+// continues. Central R&D gets no manager. Story 7.4: after training, the fixture's skills go into
+// `employee_skills` (insert-only: a skill whose (employee, lower-cased name) already exists is skipped, so a
+// manager's later rating survives) and its evaluations into `employee_evaluations` (insert-only, one per
+// employee), both with updated_by null. Other nested profile data stays in the fixture (read by
+// employees-store); the fixture's interviews, training, skills and evaluations are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
-  Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
+  Employee, evaluationSeedRows as EvaluationSeedRows, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows,
+  skillSeedRows as SkillSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
 import type {
   departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
@@ -32,9 +36,9 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+const { employees, evaluationSeedRows, interviewSeedRows, lmsStubSeedRows, skillSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
   employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
-  trainingSeedRows: typeof TrainingSeedRows;
+  trainingSeedRows: typeof TrainingSeedRows; skillSeedRows: typeof SkillSeedRows; evaluationSeedRows: typeof EvaluationSeedRows;
 };
 
 // Loaded the same way: the seed departments and the default department for fixture employees.
@@ -144,6 +148,42 @@ if (training.error) {
   process.exit(1);
 }
 console.log(`Inserted ${training.data?.length ?? 0} new completed-training entries (existing ones left unchanged).`);
+
+// Story 7.4, after the employees: employee_skills.employee_id references employees (ON DELETE RESTRICT).
+// The skill identifier is (employee_id, lower(name)), an expression index that upsert cannot target, so the
+// existing skills of the fixture employees are read first and only missing ones are inserted.
+// Read page by page (PostgREST caps one response at max_rows, 1000), in a total order.
+const existingSkills: { employee_id: string; name: string }[] = [];
+for (let from = 0; ; from += 1000) {
+  const page = await supabase.from("employee_skills").select("employee_id,name")
+    .in("employee_id", employees.map(e => e.id)).order("id").range(from, from + 999);
+  if (page.error) {
+    console.error(`Reading existing skills failed: ${page.error.message}`);
+    process.exit(1);
+  }
+  existingSkills.push(...(page.data ?? []) as { employee_id: string; name: string }[]);
+  if ((page.data ?? []).length < 1000) break;
+}
+const skillKey = (employeeId: string, name: string) => `${employeeId}\u0000${name.toLowerCase()}`;
+const knownSkills = new Set(existingSkills.map(s => skillKey(s.employee_id, s.name)));
+const newSkills = skillSeedRows(employees).filter(r => !knownSkills.has(skillKey(r.employee_id, r.name)));
+if (newSkills.length > 0) {
+  const skills = await supabase.from("employee_skills").insert(newSkills, { defaultToNull: false }).select("id");
+  if (skills.error) {
+    console.error(`Seeding skills failed: ${skills.error.message}`);
+    process.exit(1);
+  }
+}
+console.log(`Inserted ${newSkills.length} new skill assessments (existing ones left unchanged).`);
+
+// Story 7.4, after the employees: one evaluation per employee; insert-only, so a saved evaluation survives.
+const evaluations = await supabase.from("employee_evaluations")
+  .upsert(evaluationSeedRows(employees), { onConflict: "employee_id", ignoreDuplicates: true }).select("employee_id");
+if (evaluations.error) {
+  console.error(`Seeding evaluations failed: ${evaluations.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${evaluations.data?.length ?? 0} new evaluations (existing ones left unchanged).`);
 
 // After the employees: lms_stub_enrolments.employee_id references employees (ON DELETE RESTRICT).
 // In-progress entries only; insert-only, so existing rows (and their synced_at) are left unchanged.
