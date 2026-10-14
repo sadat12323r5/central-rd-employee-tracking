@@ -1,17 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Employee } from "../src/data/employees";
 import type { TimesheetEntry } from "../src/domain/timesheet";
+import type { ManagerScopeSet } from "../src/server/manager-scope";
 import type { CurrentTraining } from "../src/server/training-store";
 
-const { getActor, getServiceClient, recordActivityExport, recordBulkActivityExport, createAuditStore } = vi.hoisted(() => {
+const {
+  getActor, getServiceClient, recordActivityExport, recordBulkActivityExport, recordDepartmentActivityExport, createAuditStore,
+} = vi.hoisted(() => {
   const recordActivityExport = vi.fn();
   const recordBulkActivityExport = vi.fn();
+  const recordDepartmentActivityExport = vi.fn();
   return {
     getActor: vi.fn(),
     getServiceClient: vi.fn(() => ({ fake: "service client" })),
     recordActivityExport,
     recordBulkActivityExport,
-    createAuditStore: vi.fn(() => ({ recordActivityExport, recordBulkActivityExport })),
+    recordDepartmentActivityExport,
+    createAuditStore: vi.fn(() => ({ recordActivityExport, recordBulkActivityExport, recordDepartmentActivityExport })),
   };
 });
 
@@ -24,7 +29,7 @@ vi.mock("../src/server/audit-store", async importOriginal => ({
 
 const {
   activityErrorMessage, ActivityEmployeeNotFoundError, ActivityForbiddenError, ActivityUnavailableError, ActivityValidationError,
-  exportActivity, exportAllActivity, NOT_ADMIN, UNAVAILABLE, UNKNOWN_EMPLOYEE,
+  exportActivity, exportAllActivity, NOT_ALLOWED, UNAVAILABLE, UNKNOWN_EMPLOYEE,
 } = await import("../src/server/activity-export");
 const { exportActivityAction, exportAllActivityAction } = await import("../src/server/activity-actions");
 const { AttendanceUnavailableError, attendanceStore } = await import("../src/server/attendance-store");
@@ -48,7 +53,7 @@ function fakeDeps() {
   const audit = vi.fn(async () => {});
   const deps = {
     employees: { getFor: vi.fn(async (_s: unknown, id: string) => (id === "BS-1001" ? nadia : null)) },
-    attendance: { listForEmployee: vi.fn(async () => [entry("2026-09-02"), entry("2026-10-01")]) },
+    attendance: { listFor: vi.fn(async () => [entry("2026-09-02"), entry("2026-10-01")]) },
     interviews: {
       listFor: vi.fn(async () => [{
         id: "i1", employeeId: "BS-1001", company: "=HYPERLINK(\"http://x\")", role: "QA", date: "2026-09-15", stage: "Technical",
@@ -70,7 +75,7 @@ function fakeDeps() {
 }
 
 const reads = (deps: ReturnType<typeof fakeDeps>) => [
-  deps.attendance.listForEmployee, deps.interviews.listFor, deps.training.listFor, deps.training.currentFor,
+  deps.attendance.listFor, deps.interviews.listFor, deps.training.listFor, deps.training.currentFor,
 ].map(fn => fn.mock.calls.length);
 
 describe("exportActivity", () => {
@@ -92,7 +97,7 @@ describe("exportActivity", () => {
     expect(order).toEqual(["read", "audit"]);
     // Every source is read through its store with the Administrator's session.
     expect(deps.employees.getFor).toHaveBeenCalledWith(admin, "BS-1001");
-    expect(deps.attendance.listForEmployee).toHaveBeenCalledWith("BS-1001");
+    expect(deps.attendance.listFor).toHaveBeenCalledWith(admin, "BS-1001");
     expect(deps.interviews.listFor).toHaveBeenCalledWith(admin, "BS-1001");
     expect(deps.training.listFor).toHaveBeenCalledWith(admin, "BS-1001");
     expect(deps.training.currentFor).toHaveBeenCalledWith(admin, ["BS-1001"]);
@@ -141,7 +146,7 @@ describe("exportActivity", () => {
 
   it("resolves all time with no records to today, header only", async () => {
     const deps = fakeDeps();
-    deps.attendance.listForEmployee.mockResolvedValue([]);
+    deps.attendance.listFor.mockResolvedValue([]);
     deps.interviews.listFor.mockResolvedValue([]);
     deps.training.listFor.mockResolvedValue([]);
     deps.training.currentFor.mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} });
@@ -193,7 +198,7 @@ describe("exportActivity", () => {
 
   it.each([
     ["employees", (d: ReturnType<typeof fakeDeps>) => d.employees.getFor.mockRejectedValue(new EmployeesUnavailableError())],
-    ["attendance", (d: ReturnType<typeof fakeDeps>) => d.attendance.listForEmployee.mockRejectedValue(new AttendanceUnavailableError())],
+    ["attendance", (d: ReturnType<typeof fakeDeps>) => d.attendance.listFor.mockRejectedValue(new AttendanceUnavailableError())],
     ["interviews", (d: ReturnType<typeof fakeDeps>) => d.interviews.listFor.mockRejectedValue(new InterviewsUnavailableError())],
     ["training", (d: ReturnType<typeof fakeDeps>) => d.training.listFor.mockRejectedValue(new TrainingUnavailableError())],
     ["LMS", (d: ReturnType<typeof fakeDeps>) => d.training.currentFor.mockResolvedValue({ status: "unavailable" } as never)],
@@ -219,7 +224,7 @@ describe("exportActivity", () => {
   });
 
   it("maps errors to inline messages, anything unexpected to unavailable", () => {
-    expect(activityErrorMessage(new ActivityForbiddenError())).toBe(NOT_ADMIN);
+    expect(activityErrorMessage(new ActivityForbiddenError())).toBe(NOT_ALLOWED);
     expect(activityErrorMessage(new ActivityEmployeeNotFoundError())).toBe(UNKNOWN_EMPLOYEE);
     expect(activityErrorMessage(new ActivityValidationError("Choose a year."))).toBe("Choose a year.");
     expect(activityErrorMessage(new TypeError("boom"))).toBe(UNAVAILABLE);
@@ -243,7 +248,7 @@ describe("exportActivityAction", () => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     spies.push(
       vi.spyOn(employeesStore, "getFor").mockResolvedValue(nadia),
-      vi.spyOn(attendanceStore, "listForEmployee").mockResolvedValue([entry("2026-09-02")]),
+      vi.spyOn(attendanceStore, "listFor").mockResolvedValue([entry("2026-09-02")]),
       vi.spyOn(interviewsStore, "listFor").mockResolvedValue([]),
       vi.spyOn(trainingStore, "listFor").mockResolvedValue([]),
       vi.spyOn(trainingStore, "currentFor").mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} }),
@@ -257,9 +262,9 @@ describe("exportActivityAction", () => {
   it.each([[{ identity: { role: "staff", employeeId: "BS-1001" }, userId: actorId }], [null]])("rejects actor %j with no reads and no CSV", async actor => {
     getActor.mockResolvedValue(actor);
     const result = await exportActivityAction({ error: "", message: "" }, form({ employeeId: "BS-1001", period: "all" }));
-    expect(result).toEqual({ error: "Only an Administrator can export activity.", message: "" });
+    expect(result).toEqual({ error: "Only an Administrator or a department manager can export activity.", message: "" });
     expect(employeesStore.getFor).not.toHaveBeenCalled();
-    expect(attendanceStore.listForEmployee).not.toHaveBeenCalled();
+    expect(attendanceStore.listFor).not.toHaveBeenCalled();
     expect(getServiceClient).not.toHaveBeenCalled();
     expect(recordActivityExport).not.toHaveBeenCalled();
   });
@@ -273,7 +278,7 @@ describe("exportActivityAction", () => {
   });
 
   it("shows the unavailable message and no CSV when a source is down", async () => {
-    vi.mocked(attendanceStore.listForEmployee).mockRejectedValue(new AttendanceUnavailableError());
+    vi.mocked(attendanceStore.listFor).mockRejectedValue(new AttendanceUnavailableError());
     const result = await exportActivityAction({ error: "", message: "" }, form({ employeeId: "BS-1001", period: "all" }));
     expect(result).toEqual({ error: UNAVAILABLE, message: "" });
     expect(recordActivityExport).not.toHaveBeenCalled();
@@ -336,7 +341,8 @@ function fakeBulkDeps() {
         freshness: Object.fromEntries(ids.map(id => [id, { asOf: "2026-10-13T00:00:00Z", stale: id === "BS-1002" }])),
       })),
     },
-    audit: { recordBulkActivityExport: vi.fn(async () => {}) },
+    audit: { recordBulkActivityExport: vi.fn(async () => {}), recordDepartmentActivityExport: vi.fn(async () => {}) },
+    scope: { forManager: vi.fn(async (): Promise<ManagerScopeSet> => ({ departmentIds: new Set(), employeeIds: new Set() })) },
   };
   return deps;
 }
@@ -498,7 +504,7 @@ describe("exportAllActivityAction", () => {
   it.each([[{ identity: { role: "staff", employeeId: "BS-1001" }, userId: actorId }], [null]])("rejects actor %j with no reads and no CSV", async actor => {
     getActor.mockResolvedValue(actor);
     const result = await exportAllActivityAction({ error: "", message: "" }, form({ period: "all" }));
-    expect(result).toEqual({ error: "Only an Administrator can export activity.", message: "" });
+    expect(result).toEqual({ error: "Only an Administrator or a department manager can export activity.", message: "" });
     expect(employeesStore.listFor).not.toHaveBeenCalled();
     expect(attendanceStore.listAll).not.toHaveBeenCalled();
     expect(getServiceClient).not.toHaveBeenCalled();
