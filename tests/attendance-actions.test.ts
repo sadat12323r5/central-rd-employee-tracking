@@ -13,6 +13,11 @@ vi.mock("../src/server/employees-store", async importOriginal => {
     employeesStore: { getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn(), isActive: async (session: { employeeId: string }) => employees.some(e => e.id === session.employeeId) },
   };
 });
+// Story 4.2: every Staff request checks whether the account manages a department; none does here.
+vi.mock("../src/server/departments-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("../src/server/departments-store")>()),
+  departmentsStore: { list: vi.fn(), create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: async () => false },
+}));
 // Attendance is backed by an in-memory AttendanceStore so these tests stay offline (the Supabase store
 // is covered by attendance-store.test.ts and, against the shared project, attendance-rls.test.ts).
 vi.mock("../src/server/attendance-store", async importOriginal => {

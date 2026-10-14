@@ -6,7 +6,11 @@
 // stub table `lms_stub_enrolments` (Story 3.2, ids from lmsStubSeedId), which the LMS adapter stub
 // reads. Departments (Story 4.1) are inserted before the employees are touched (L&D, then Central R&D
 // under it, fixed ids, insert-only); afterwards every fixture employee whose department_id is still
-// null is placed in Central R&D. Other nested profile data stays in the fixture (read by employees-store); the fixture's
+// null is placed in Central R&D. Story 4.2: right after the departments, L&D's manager is set to the
+// Administrator account (pickSeedAdministrator: the Administrator whose email is SEED_ADMIN_EMAIL, else
+// the earliest-created Administrator; never a non-admin) only while
+// L&D has no manager; with no Administrator yet it warns to run `npm run db:seed-admin` first and
+// continues. Central R&D gets no manager. Other nested profile data stays in the fixture (read by employees-store); the fixture's
 // interviews and training are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
@@ -14,7 +18,9 @@ import { createClient } from "@supabase/supabase-js";
 import type {
   Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
-import type { departmentSeedRows as DepartmentSeedRows } from "../src/data/departments";
+import type {
+  departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
+} from "../src/data/departments";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -33,8 +39,9 @@ const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (awa
 
 // Loaded the same way: the seed departments and the default department for fixture employees.
 const departmentsUrl = new URL("../src/data/departments.ts", import.meta.url).href;
-const { departmentSeedRows, DEFAULT_EMPLOYEE_DEPARTMENT_ID } = (await import(departmentsUrl)) as {
-  departmentSeedRows: typeof DepartmentSeedRows; DEFAULT_EMPLOYEE_DEPARTMENT_ID: string;
+const { departmentSeedRows, DEFAULT_EMPLOYEE_DEPARTMENT_ID, ADMIN_MANAGED_DEPARTMENT_ID, pickSeedAdministrator } = (await import(departmentsUrl)) as {
+  departmentSeedRows: typeof DepartmentSeedRows; DEFAULT_EMPLOYEE_DEPARTMENT_ID: string; ADMIN_MANAGED_DEPARTMENT_ID: string;
+  pickSeedAdministrator: typeof PickSeedAdministrator;
 };
 
 const rows = employees.map(e => ({
@@ -53,6 +60,48 @@ if (departments.error) {
   process.exit(1);
 }
 console.log(`Inserted ${departments.data?.length ?? 0} new departments (existing ones left unchanged).`);
+
+/** Every auth user (all pages); L&D's manager is chosen from them by pickSeedAdministrator. */
+async function allAuthUsers(): Promise<SeedAuthUser[]> {
+  const users: SeedAuthUser[] = [];
+  for (let page = 1; page <= 1000; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) {
+      console.error(`Reading auth users failed: ${error.message}`);
+      process.exit(1);
+    }
+    users.push(...data.users);
+    const nextPage = (data as { nextPage?: number | null }).nextPage;
+    if (data.users.length === 0 || nextPage === null || (nextPage === undefined && data.users.length < 1000)) break;
+  }
+  return users;
+}
+
+// L&D's manager is the Administrator (AD-5), set only while L&D has no manager, so an Administrator's
+// later choice survives a re-run. Central R&D gets no manager: its authority resolves to L&D's manager.
+const managedBy = await supabase.from("departments").select("manager_user_id").eq("id", ADMIN_MANAGED_DEPARTMENT_ID).maybeSingle();
+if (managedBy.error) {
+  console.error(`Reading the L&D manager failed: ${managedBy.error.message}`);
+  process.exit(1);
+}
+if (managedBy.data && managedBy.data.manager_user_id === null) {
+  const adminId = pickSeedAdministrator(await allAuthUsers(), process.env.SEED_ADMIN_EMAIL)?.id ?? null;
+  if (adminId === null) {
+    console.warn(`No Administrator account found, so L&D has no manager yet. Run \`npm run db:seed-admin\` first, then re-run \`npm run db:seed\`.`);
+  } else {
+    const assigned = await supabase.from("departments").update({ manager_user_id: adminId })
+      .eq("id", ADMIN_MANAGED_DEPARTMENT_ID).is("manager_user_id", null).select("id");
+    if (assigned.error) {
+      console.error(`Setting the L&D manager failed: ${assigned.error.message}`);
+      process.exit(1);
+    }
+    console.log(`Set the Administrator account as L&D's manager (${assigned.data?.length ?? 0} department updated).`);
+  }
+} else if (!managedBy.data) {
+  console.warn("L&D was not found, so no manager was set.");
+} else {
+  console.log("L&D already has a manager (left unchanged).");
+}
 
 const { data, error } = await supabase.from("employees").upsert(rows, { onConflict: "employee_id" }).select("employee_id");
 if (error) {

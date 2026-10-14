@@ -1,8 +1,9 @@
 "use client";
 
 import { useActionState } from "react";
+import type { Employee } from "@/data/employees";
 import { wouldCreateCycle, type Department } from "@/domain/departments";
-import { createDepartmentAction, updateDepartmentAction } from "@/server/department-actions";
+import { createDepartmentAction, setDepartmentManagerAction, updateDepartmentAction } from "@/server/department-actions";
 import type { ActionState } from "@/server/attendance-actions";
 
 const initial: ActionState = { error: "", message: "" };
@@ -81,22 +82,59 @@ function EditDepartment({ department, departments }: { department: Department; d
   </details>;
 }
 
+/** Story 4.2: who manages the department, as shown in the list. */
+function managerLabel(department: Department, employees: Employee[]): string {
+  if (department.managerUserId === null) return "No manager";
+  if (department.managerEmployeeId === null) return "Administrator account";
+  return employees.find(e => e.id === department.managerEmployeeId)?.name ?? department.managerEmployeeId;
+}
+
+/**
+ * Story 4.2: set or remove the department's manager. Anyone can be chosen from the active employees;
+ * the server refuses people without a sign-in account (provision first) and never creates one.
+ */
+function ManagerForm({ department, employees }: { department: Department; employees: Employee[] }) {
+  const [state, action, pending] = useActionState(setDepartmentManagerAction, initial);
+  const key = department.id;
+  const candidates = employees.filter(e => !e.archived);
+  return <details className="staff-interview-editor">
+    <summary aria-label={`Set manager: ${department.name}`}>Set manager</summary>
+    <form action={action} className="staff-log">
+      <input type="hidden" name="id" value={department.id} />
+      <div className="staff-field">
+        <label htmlFor={`department-manager-${key}`}>Manager<span className="sr-only"> · {department.name}</span></label>
+        <select id={`department-manager-${key}`} name="manager" defaultValue="" required>
+          <option value="">Choose…</option>
+          <option value="none">No manager</option>
+          {candidates.map(e => <option key={e.id} value={e.id}>{e.name} ({e.id}){e.hasAccount === false ? " · no account" : ""}</option>)}
+        </select>
+      </div>
+      <div className="staff-actions">
+        <button className="primary" disabled={pending}>{pending ? "Saving…" : "Save manager"}</button>
+      </div>
+      <Feedback state={state} />
+    </form>
+  </details>;
+}
+
 /**
  * Story 4.1, Administrator only: the department list with its parents, an add form and a per-row edit
- * form (name and parent). There is no delete control: departments are never removed.
+ * form (name and parent). There is no delete control: departments are never removed. Story 4.2 adds
+ * each department's manager and a per-row manager form (`employees` are the people who can be chosen).
  */
-export default function DepartmentsPanel({ departments }: { departments: Department[] }) {
+export default function DepartmentsPanel({ departments, employees = [] }: { departments: Department[]; employees?: Employee[] }) {
   const nameOf = (id: string | null) => (id === null ? TOP_LEVEL : departments.find(d => d.id === id)?.name ?? "Unknown department");
   return <section className="panel departments-panel" aria-labelledby="departments-heading">
     <h2 id="departments-heading">Department list</h2>
     <p className="muted">Every employee belongs to one department. Departments can be renamed or moved, but never deleted.</p>
     <div className="table-scroll">
       <table aria-label="Departments">
-        <thead><tr><th>Department</th><th>Parent department</th><th><span className="sr-only">Edit</span></th></tr></thead>
+        <thead><tr><th>Department</th><th>Parent department</th><th>Manager</th><th><span className="sr-only">Edit</span></th></tr></thead>
         <tbody>{departments.map(d => <tr key={d.id}>
           <td><strong className="regular">{d.name}</strong></td>
           <td>{nameOf(d.parentId)}</td>
-          <td><EditDepartment department={d} departments={departments} /></td>
+          <td>{managerLabel(d, employees)}</td>
+          <td><EditDepartment department={d} departments={departments} /><ManagerForm department={d} employees={employees} /></td>
         </tr>)}</tbody>
       </table>
       {departments.length === 0 && <p className="muted">No departments yet. Add the first one below.</p>}

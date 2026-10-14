@@ -18,7 +18,7 @@ vi.mock("@/server/employees-store", async importOriginal => ({
 }));
 vi.mock("@/server/departments-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/departments-store")>()),
-  departmentsStore: { list: listDepartments, create: vi.fn(), update: vi.fn() },
+  departmentsStore: { list: listDepartments, create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: vi.fn() },
 }));
 vi.mock("@/server/training-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/training-store")>()),
@@ -115,6 +115,35 @@ describe("Home routing by role", () => {
     render(await Home());
     expect(screen.getByText("Employee directory")).toBeInTheDocument();
   });
+
+  it("renders the management portal as `manager` for a manager session, without reading departments (Story 4.2)", async () => {
+    const { employees } = await import("@/data/employees");
+    const own = employees.find(e => e.id === "BS-1003");
+    const manager = { role: "manager", employeeId: "BS-1003" };
+    getSession.mockResolvedValue(manager);
+    listFor.mockResolvedValue([own]);
+    currentFor.mockResolvedValue({ status: "unavailable" });
+    portalProps.mockClear();
+    listDepartments.mockClear();
+    render(await Home());
+    expect(screen.getByText("Employee directory")).toBeInTheDocument();
+    expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
+    expect(listFor).toHaveBeenCalledWith(manager);
+    expect(getFor).not.toHaveBeenCalled();
+    expect(listDepartments).not.toHaveBeenCalled();
+    const props = portalProps.mock.calls.at(-1)?.[0] as { role: string; employees: unknown[]; departments?: unknown };
+    expect(props.role).toBe("manager");
+    expect(props.employees).toEqual([own]);
+    expect(props.departments).toBeUndefined();
+  });
+
+  it("passes no role (the Administrator portal) for an admin", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    portalProps.mockClear();
+    render(await Home());
+    expect((portalProps.mock.calls.at(-1)?.[0] as { role?: string }).role).toBeUndefined();
+  });
 });
 
 describe("Home when attendance is unavailable", () => {
@@ -193,8 +222,8 @@ describe("Home streams current LMS enrolments (Story 3.2)", () => {
 
 describe("Home loads the department list for the Administrator (Story 4.1)", () => {
   const departments = [
-    { id: "de9a0000-0000-4000-8000-000000000001", name: "L&D", parentId: null },
-    { id: "de9a0000-0000-4000-8000-000000000002", name: "Central R&D", parentId: "de9a0000-0000-4000-8000-000000000001" },
+    { id: "de9a0000-0000-4000-8000-000000000001", name: "L&D", parentId: null, managerUserId: null, managerEmployeeId: null },
+    { id: "de9a0000-0000-4000-8000-000000000002", name: "Central R&D", parentId: "de9a0000-0000-4000-8000-000000000001", managerUserId: null, managerEmployeeId: null },
   ];
   let errorSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {

@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Department, DepartmentInput } from "@/server/departments-store";
 import type { SessionIdentity } from "@/server/session";
 
-const { getSession, create, update, revalidatePath } = vi.hoisted(() => ({
+const { getSession, create, update, setManager, revalidatePath } = vi.hoisted(() => ({
   getSession: vi.fn<() => Promise<SessionIdentity | null>>(),
   create: vi.fn<(session: SessionIdentity, input: DepartmentInput) => Promise<Department>>(),
   update: vi.fn<(session: SessionIdentity, id: string, input: DepartmentInput) => Promise<Department>>(),
+  setManager: vi.fn<(session: SessionIdentity, id: string, employeeId: string | null) => Promise<Department>>(),
   revalidatePath: vi.fn(),
 }));
 
@@ -14,18 +15,22 @@ vi.mock("../src/server/auth", () => ({ getSession }));
 // The Supabase store is covered by departments-store.test.ts and, against the shared project, departments-rls.test.ts.
 vi.mock("../src/server/departments-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/departments-store")>()),
-  departmentsStore: { create, update, list: vi.fn() },
+  departmentsStore: { create, update, setManager, list: vi.fn(), managesAny: vi.fn() },
 }));
 
 const actions = await import("../src/server/department-actions");
-const { createDepartmentAction, updateDepartmentAction } = actions;
+const { createDepartmentAction, setDepartmentManagerAction, updateDepartmentAction } = actions;
 const {
   DepartmentCycleError, DepartmentNameInvalidError, DepartmentNameTakenError, DepartmentNotFoundError, DepartmentsForbiddenError,
-  DepartmentsUnavailableError,
+  DepartmentsUnavailableError, ManagerArchivedError, ManagerEmployeeNotFoundError, ManagerHasNoAccountError,
 } = await import("../src/server/departments-store");
 
 const blank = { error: "", message: "" };
 const ADMIN = { role: "admin" } as const;
+const MANAGER = { role: "manager", employeeId: "BS-1002" } as const;
+const STAFF = { role: "staff", employeeId: "BS-1001" } as const;
+const NON_ADMINS: [string, SessionIdentity | null][] = [["a staff session", STAFF], ["a manager session", MANAGER], ["no session", null]];
+const noManager = { managerUserId: null, managerEmployeeId: null };
 const LND = "de9a0000-0000-4000-8000-000000000001";
 const CRD = "de9a0000-0000-4000-8000-000000000002";
 
@@ -43,14 +48,17 @@ function form(fields: Record<string, string>) {
 
 beforeEach(() => {
   getSession.mockResolvedValue(ADMIN);
-  create.mockImplementation(async (_session, input) => ({ id: "new", ...input }));
-  update.mockImplementation(async (_session, id, input) => ({ id, ...input }));
+  create.mockImplementation(async (_session, input) => ({ id: "new", ...input, ...noManager }));
+  update.mockImplementation(async (_session, id, input) => ({ id, ...input, ...noManager }));
+  setManager.mockImplementation(async (_session, id, employeeId) => ({
+    id, name: "L&D", parentId: null, managerUserId: employeeId ? "user-1" : null, managerEmployeeId: employeeId,
+  }));
 });
 afterEach(() => vi.clearAllMocks());
 
 describe("department actions module", () => {
   it("exports no delete action", () => {
-    expect(Object.keys(actions).sort()).toEqual(["createDepartmentAction", "updateDepartmentAction"]);
+    expect(Object.keys(actions).sort()).toEqual(["createDepartmentAction", "setDepartmentManagerAction", "updateDepartmentAction"]);
   });
 });
 
@@ -88,7 +96,7 @@ describe("createDepartmentAction", () => {
     expect((await createDepartmentAction(blank, form({ name: "x".repeat(100), parentId: "" }))).message).toBe("Department added.");
   });
 
-  it.each([["a staff session", { role: "staff", employeeId: "BS-1001" }], ["no session", null]])(
+  it.each(NON_ADMINS)(
     "rejects %s at the server; the store is never called", async (_label, session) => {
       getSession.mockResolvedValue(session as SessionIdentity | null);
       expect(await createDepartmentAction(blank, form({ name: "Quality", parentId: "" }))).toEqual({ error: FORBIDDEN, message: "" });
@@ -146,7 +154,7 @@ describe("updateDepartmentAction", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it.each([["a staff session", { role: "staff", employeeId: "BS-1001" }], ["no session", null]])(
+  it.each(NON_ADMINS)(
     "rejects %s at the server; the store is never called", async (_label, session) => {
       getSession.mockResolvedValue(session as SessionIdentity | null);
       expect(await updateDepartmentAction(blank, form({ id: CRD, name: "Central R&D", parentId: "" }))).toEqual({ error: FORBIDDEN, message: "" });
@@ -179,5 +187,64 @@ describe("updateDepartmentAction", () => {
     expect(await updateDepartmentAction(blank, form({ id: LND, name: "L&D", parentId: "" }))).toEqual({ error: UNAVAILABLE, message: "" });
     expect(revalidatePath).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe("setDepartmentManagerAction", () => {
+  it("assigns an employee as manager", async () => {
+    expect(await setDepartmentManagerAction(blank, form({ id: LND, manager: "BS-1002" }))).toEqual({ error: "", message: "Manager updated." });
+    expect(setManager).toHaveBeenCalledWith(ADMIN, LND, "BS-1002");
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("removes the manager for \"none\"", async () => {
+    expect(await setDepartmentManagerAction(blank, form({ id: LND, manager: "none" }))).toEqual({ error: "", message: "Manager removed." });
+    expect(setManager).toHaveBeenCalledWith(ADMIN, LND, null);
+  });
+
+  it.each([
+    ["a missing department", { manager: "BS-1002" }, /department/i],
+    ["a non-uuid department", { id: "lnd", manager: "BS-1002" }, /existing department/i],
+    ["a missing choice", { id: LND }, /choose a manager/i],
+    ["an empty choice (Choose…)", { id: LND, manager: "" }, /choose a manager/i],
+    ["a malformed employee id", { id: LND, manager: "BS-12" }, /employee from the list/i],
+    ["another value", { id: LND, manager: "admin" }, /employee from the list/i],
+  ])("rejects %s before the store", async (_label, fields, message) => {
+    const result = await setDepartmentManagerAction(blank, form(fields as Record<string, string>));
+    expect(result.message).toBe("");
+    expect(result.error).toMatch(message);
+    expect(setManager).not.toHaveBeenCalled();
+  });
+
+  it.each(NON_ADMINS)("rejects %s at the server; the store is never called", async (_label, session) => {
+    getSession.mockResolvedValue(session);
+    expect(await setDepartmentManagerAction(blank, form({ id: LND, manager: "BS-1002" }))).toEqual({ error: FORBIDDEN, message: "" });
+    expect(setManager).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new ManagerHasNoAccountError("Rafi Ahmed"), "Rafi Ahmed has no sign-in account yet. Provision their account first, then make them a manager."],
+    [new ManagerArchivedError("Rafi Ahmed"), "Rafi Ahmed's account is archived. Restore it first."],
+    [new ManagerEmployeeNotFoundError(), "Choose an existing department and employee."],
+    [new DepartmentNotFoundError(), "Choose an existing department and employee."],
+    [new DepartmentsForbiddenError(), FORBIDDEN],
+  ])("maps the store's %s to its message, saving nothing", async (error, message) => {
+    setManager.mockRejectedValue(error);
+    expect(await setDepartmentManagerAction(blank, form({ id: LND, manager: "BS-1002" }))).toEqual({ error: message, message: "" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("never reports success when departments are unavailable", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setManager.mockRejectedValue(new DepartmentsUnavailableError());
+    expect(await setDepartmentManagerAction(blank, form({ id: LND, manager: "none" }))).toEqual({ error: UNAVAILABLE, message: "" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("rethrows unexpected errors", async () => {
+    setManager.mockRejectedValue(new TypeError("bug"));
+    await expect(setDepartmentManagerAction(blank, form({ id: LND, manager: "BS-1002" }))).rejects.toThrow("bug");
   });
 });

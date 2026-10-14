@@ -11,6 +11,11 @@ vi.mock("../src/server/employees-store", async importOriginal => ({
   employeesStore: { listFor: vi.fn(), getFor, isActive },
 }));
 
+// Story 4.2: every Staff request checks whether the account manages a department; none does here.
+vi.mock("../src/server/departments-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("../src/server/departments-store")>()),
+  departmentsStore: { list: vi.fn(), create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: async () => false },
+}));
 const { getSession, signIn } = await import("../src/server/auth");
 const { EmployeesUnavailableError } = await import("../src/server/employees-store");
 

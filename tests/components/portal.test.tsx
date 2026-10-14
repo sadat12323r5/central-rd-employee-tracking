@@ -15,6 +15,7 @@ vi.mock("@/server/account-actions", () => ({
 vi.mock("@/server/department-actions", () => ({
   createDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
   updateDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
+  setDepartmentManagerAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 
 import Portal from "@/components/portal";
@@ -181,7 +182,7 @@ describe("Portal employee profile", () => {
 describe("Portal departments (Story 4.1)", () => {
   const LND = "de9a0000-0000-4000-8000-000000000001";
   const CRD = "de9a0000-0000-4000-8000-000000000002";
-  const departments = [{ id: CRD, name: "Central R&D", parentId: LND }, { id: LND, name: "L&D", parentId: null }];
+  const departments = [{ id: CRD, name: "Central R&D", parentId: LND, managerUserId: null, managerEmployeeId: null }, { id: LND, name: "L&D", parentId: null, managerUserId: null, managerEmployeeId: null }];
   const placed = employees.map(e => ({ ...e, hasAccount: false, archived: false, departmentId: e.id === "BS-1008" ? null : CRD }));
 
   it("shows each employee's department in the directory, and \"No department\" when unset", async () => {
@@ -554,5 +555,65 @@ describe("Portal training views (Stories 3.1 and 3.2: stored history at once, LM
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("Portal for a department manager (Story 4.2)", () => {
+  const own = employees.filter(e => e.id === "BS-1001");
+
+  it("leaves Departments and Interviews & placements out of the navigation", async () => {
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    const nav = within(screen.getByRole("navigation"));
+    expect(nav.queryByRole("button", { name: "Departments" })).not.toBeInTheDocument();
+    expect(nav.queryByRole("button", { name: /Interviews & placements/ })).not.toBeInTheDocument();
+    for (const name of ["Overview", "Employees", "Learning & development", "Attendance & leave"]) {
+      expect(nav.getByRole("button", { name: new RegExp(name) })).toBeInTheDocument();
+    }
+  });
+
+  it("says Department manager in the sidebar identity", async () => {
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    expect(screen.getByText("Department manager")).toBeInTheDocument();
+    expect(screen.queryByText(/L&D administrator/)).not.toBeInTheDocument();
+    // Neither the sidebar nor the topbar avatar shows the Administrator's initials.
+    expect(screen.queryByText("AK")).not.toBeInTheDocument();
+    expect(screen.getAllByText("DM")).toHaveLength(2);
+  });
+
+  it("hides the Upcoming interviews stat and the interview radar row on the Overview", async () => {
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    expect(screen.queryByText("Upcoming interviews")).not.toBeInTheDocument();
+    expect(screen.queryByText(/technical interview/)).not.toBeInTheDocument();
+    expect(screen.getByText("Total employees")).toBeInTheDocument();
+  });
+
+  it("opens a profile without the Interviews tab or the account controls", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    const tabs = within(screen.getByRole("tablist", { name: "Employee details" }));
+    expect(tabs.queryByRole("tab", { name: "Interviews" })).not.toBeInTheDocument();
+    expect(tabs.getByRole("tab", { name: "Training" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign-in account" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Account access" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Northstar Labs/)).not.toBeInTheDocument();
+  });
+
+  it("keeps everything for the Administrator portal (the default role)", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={own} current={none()} />);
+    const nav = within(screen.getByRole("navigation"));
+    expect(nav.getByRole("button", { name: "Departments" })).toBeInTheDocument();
+    expect(nav.getByRole("button", { name: /Interviews & placements/ })).toBeInTheDocument();
+    expect(screen.getByText("Upcoming interviews")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    expect(screen.getByRole("tab", { name: "Interviews" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign-in account" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
+  });
+
+  it("has no accessibility violations", async () => {
+    const { container } = await show(<Portal role="manager" employees={own} current={none()} />);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

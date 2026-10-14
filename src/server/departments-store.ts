@@ -17,6 +17,11 @@ import { getUserClient } from "./supabase";
 // error), a parent must be an existing department, and a department may never become its own parent or
 // ancestor (the DB trigger `departments_prevent_cycle` is the backstop, mapped to the same error).
 // There is no delete path.
+//
+// Story 4.2 adds department managers: `setManager` (Administrator only) points a department at an
+// employee's existing, non-archived sign-in account (or clears it), and `managesAny` is the per-request
+// check auth.ts uses to derive the `manager` role (RLS: a user reads only the departments they manage).
+// Assigning a manager never creates an account.
 export type { Department } from "@/domain/departments";
 
 /** What the Administrator sends when adding or changing a department. `parentId` null = top level. */
@@ -29,6 +34,17 @@ export interface DepartmentsStore {
   create(session: SessionIdentity, input: DepartmentInput): Promise<Department>;
   /** Renames and/or re-parents a department. Administrators only. */
   update(session: SessionIdentity, id: string, input: DepartmentInput): Promise<Department>;
+  /**
+   * Sets the department's manager to the sign-in account linked to `employeeId`, or removes the manager
+   * when `employeeId` is null. Administrators only. The employee must already have a linked, non-archived
+   * account; this never creates one.
+   */
+  setManager(session: SessionIdentity, departmentId: string, employeeId: string | null): Promise<Department>;
+  /**
+   * True when the auth user manages at least one department (read through that user's own JWT, so RLS
+   * limits it to the departments they manage). Throws DepartmentsUnavailableError on a read error.
+   */
+  managesAny(userId: string): Promise<boolean>;
 }
 
 /** The departments database is unreachable or refused the query. Never treat this as "no departments" or "saved". */
@@ -79,13 +95,45 @@ export class DepartmentNotFoundError extends Error {
   }
 }
 
-export type DepartmentRow = { id: string; name: string; parent_department_id: string | null };
+/** The chosen manager is not an existing employee. */
+export class ManagerEmployeeNotFoundError extends Error {
+  constructor() {
+    super("Choose an existing department and employee.");
+    this.name = "ManagerEmployeeNotFoundError";
+  }
+}
+
+/** The chosen manager has no linked sign-in account: provision one first (never created here). */
+export class ManagerHasNoAccountError extends Error {
+  constructor(readonly employeeName: string) {
+    super(`${employeeName} has no sign-in account yet. Provision their account first, then make them a manager.`);
+    this.name = "ManagerHasNoAccountError";
+  }
+}
+
+/** The chosen manager's account is archived. */
+export class ManagerArchivedError extends Error {
+  constructor(readonly employeeName: string) {
+    super(`${employeeName}'s account is archived. Restore it first.`);
+    this.name = "ManagerArchivedError";
+  }
+}
+
+export type DepartmentRow = { id: string; name: string; parent_department_id: string | null; manager_user_id?: string | null };
 
 const TABLE = "departments";
-const COLUMNS = "id,name,parent_department_id";
+const COLUMNS = "id,name,parent_department_id,manager_user_id";
 
-export function toDepartment(row: DepartmentRow): Department {
-  return { id: row.id, name: row.name, parentId: row.parent_department_id ?? null };
+type ManagerCandidateRow = { employee_id: string; name: string; auth_user_id: string | null; archived_at: string | null };
+type LinkedEmployeeRow = { employee_id: string; auth_user_id: string };
+
+/** `managerEmployeeId` is the Employee ID linked to the manager account, resolved by the caller (null when none). */
+export function toDepartment(row: DepartmentRow, managerEmployeeId: string | null = null): Department {
+  const managerUserId = row.manager_user_id ?? null;
+  return {
+    id: row.id, name: row.name, parentId: row.parent_department_id ?? null,
+    managerUserId, managerEmployeeId: managerUserId === null ? null : managerEmployeeId,
+  };
 }
 
 type DbError = { code?: string; message?: string; details?: string };
@@ -109,10 +157,10 @@ export function createDepartmentsStore({ userClient }: DepartmentsStoreClients):
   type Query<T> = (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>;
 
   /** Runs a query whose "no row" is a legitimate answer (maybeSingle): null means not found. */
-  async function runMaybe<T>(query: Query<T>): Promise<T | null> {
+  async function runMaybe<T>(query: Query<T>, table = TABLE): Promise<T | null> {
     let result: Result<T>;
     try {
-      result = await query((await userClient()).from(TABLE));
+      result = await query((await userClient()).from(table));
     } catch (cause) {
       throw new DepartmentsUnavailableError({ cause });
     }
@@ -120,8 +168,8 @@ export function createDepartmentsStore({ userClient }: DepartmentsStoreClients):
     return result.data ?? null;
   }
 
-  async function run<T>(query: Query<T>): Promise<T> {
-    const data = await runMaybe(query);
+  async function run<T>(query: Query<T>, table = TABLE): Promise<T> {
+    const data = await runMaybe(query, table);
     if (data === null) throw new DepartmentsUnavailableError({ cause: "no data returned" });
     return data;
   }
@@ -130,9 +178,37 @@ export function createDepartmentsStore({ userClient }: DepartmentsStoreClients):
     if (session?.role !== "admin") throw new DepartmentsForbiddenError();
   }
 
+  /** Employee IDs linked to the given auth user ids (Administrator read of employees, RLS enforced). */
+  async function employeeIdsFor(userIds: string[]): Promise<Map<string, string>> {
+    const ids = [...new Set(userIds)];
+    if (ids.length === 0) return new Map();
+    const rows = await run<LinkedEmployeeRow[]>(t => t.select("employee_id,auth_user_id").in("auth_user_id", ids)
+      .returns<LinkedEmployeeRow[]>(), "employees");
+    return new Map(rows.map(r => [r.auth_user_id, r.employee_id]));
+  }
+
+  async function withManagers(rows: DepartmentRow[]): Promise<Department[]> {
+    const linked = await employeeIdsFor(rows.flatMap(r => (r.manager_user_id ? [r.manager_user_id] : [])));
+    return rows.map(r => toDepartment(r, r.manager_user_id ? linked.get(r.manager_user_id) ?? null : null));
+  }
+
+  /**
+   * The saved department after a committed write. The write already succeeded, so a failed follow-up
+   * lookup of the manager's Employee ID is logged and reported as unknown (null), never as "not saved".
+   */
+  async function afterWrite(saved: DepartmentRow): Promise<Department> {
+    try {
+      return (await withManagers([saved]))[0];
+    } catch (error) {
+      if (!(error instanceof DepartmentsUnavailableError)) throw error;
+      console.error("Department saved, but its manager's Employee ID could not be read.", error, { cause: error.cause });
+      return toDepartment(saved, null);
+    }
+  }
+
   async function readAll(): Promise<Department[]> {
     const rows = await run<DepartmentRow[]>(t => t.select(COLUMNS).order("name").order("id").returns<DepartmentRow[]>());
-    return rows.map(toDepartment);
+    return withManagers(rows);
   }
 
   /** The store-level rules shared by create and update. `id` is undefined for a new department. */
@@ -175,7 +251,30 @@ export function createDepartmentsStore({ userClient }: DepartmentsStoreClients):
       const saved = await runMaybe<DepartmentRow>(t => t.update({ name: values.name, parent_department_id: values.parentId })
         .eq("id", id).select(COLUMNS).maybeSingle<DepartmentRow>());
       if (!saved) throw new DepartmentNotFoundError();
-      return toDepartment(saved);
+      return afterWrite(saved);
+    },
+    async setManager(session, departmentId, employeeId) {
+      requireAdmin(session);
+      const all = await readAll();
+      if (!all.some(d => d.id === departmentId)) throw new DepartmentNotFoundError();
+      let managerUserId: string | null = null;
+      if (employeeId !== null) {
+        const employee = await runMaybe<ManagerCandidateRow>(t => t.select("employee_id,name,auth_user_id,archived_at")
+          .eq("employee_id", employeeId).maybeSingle<ManagerCandidateRow>(), "employees");
+        if (!employee) throw new ManagerEmployeeNotFoundError();
+        // Archived first: an archived employee is told to restore, whether or not they have an account.
+        if (employee.archived_at) throw new ManagerArchivedError(employee.name);
+        if (!employee.auth_user_id) throw new ManagerHasNoAccountError(employee.name);
+        managerUserId = employee.auth_user_id;
+      }
+      const saved = await runMaybe<DepartmentRow>(t => t.update({ manager_user_id: managerUserId })
+        .eq("id", departmentId).select(COLUMNS).maybeSingle<DepartmentRow>());
+      if (!saved) throw new DepartmentNotFoundError();
+      return toDepartment(saved, employeeId);
+    },
+    async managesAny(userId) {
+      const rows = await run<{ id: string }[]>(t => t.select("id").eq("manager_user_id", userId).limit(1).returns<{ id: string }[]>());
+      return rows.length > 0;
     },
   };
 }

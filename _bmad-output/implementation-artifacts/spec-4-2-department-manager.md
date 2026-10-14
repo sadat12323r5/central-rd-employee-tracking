@@ -2,7 +2,7 @@
 title: 'Story 4.2: Administrator assigns a department manager'
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '0e21739babcdd2acf617dbf772e774d42a17ae6f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -93,6 +93,41 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 31 findings — high 0, medium 8, low 20, false 3, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` (verification-gap) Seed step that makes the Administrator L&D's manager is never tested — selection moved to a pure `pickSeedAdministrator` helper with unit tests.
+  - `[medium]` `[patch]` (verification-gap other) `SEED_ADMIN_EMAIL` branch accepts a non-admin account — helper only returns admin users; same patch.
+  - `[medium]` `[reject]` (verification-gap other) A Staff account made manager loses Staff self-service (clock in, own interviews) — real, but the intent places this in Story 4.10 ("My record"); stories build strictly in order; flagged in the PR.
+  - `[medium]` `[patch]` (edge) update/setManager report "Nothing was saved" when the post-write manager lookup fails — post-write lookup failure now returns the saved department without the employee link.
+  - `[medium]` `[patch]` (edge) SEED_ADMIN_EMAIL non-admin — same root cause as the verification-gap finding; same patch.
+  - `[medium]` `[reject]` (edge) Manager loses clock-in/interview actions — same as above; Story 4.10.
+  - `[low]` `[patch]` (edge) `hasDepartmentAuthority` grants chain authority to a staff actor — now admin or manager only.
+  - `[low]` `[patch]` (edge) Archived employee without account gets the provision-first message — archived checked first.
+  - `[low]` `[patch]` (edge) Manager topbar shows the Administrator's initials — neutral manager initials.
+  - `[low]` `[reject]` (edge) Manages-check logs an error on every Staff request until the migration is applied — transient until the migration lands; the PR says to apply migrations before deploying.
+  - `[low]` `[reject]` (edge) BS-93xx RLS slot collision between concurrent runs — same randomized-slot convention as every other RLS file.
+  - `[low]` `[reject]` (edge) Archived-employees filter and export visible to managers — inert for a manager who sees only their own record; scoping is Story 4.3.
+  - `[medium]` `[reject]` (blind) Staff made manager loses Staff functions — Story 4.10 (see above).
+  - `[medium]` `[patch]` (blind) SEED_ADMIN_EMAIL non-admin — same patch.
+  - `[low]` `[reject]` (blind) Archiving a manager leaves `manager_user_id` set — the archived account cannot sign in, ancestor managers keep authority via the chain, and the Administrator can reassign; manager archiving is Story 4.9.
+  - `[low]` `[reject]` (blind) "Administrator account" label for any manager without an employee row — through the app only the seeded Administrator can be such a manager.
+  - `[low]` `[reject]` (blind) setManager check-then-write race — needs a concurrent archive between two requests; the archived account still cannot sign in.
+  - `[low]` `[reject]` (blind) setManager reads all departments first — a few extra rows on an admin-only action.
+  - `[low]` `[reject]` (blind) Extra departments query per Staff request and log flood without migration — one indexed `limit 1` query; required by "derived on every request".
+  - `[false]` `[reject]` (blind) `authorityChain`/`hasDepartmentAuthority` unused in production — no department-scoped permission check exists yet; Story 4.3 is the first caller; AC6 asks for the resolver in `src/domain/departments.ts`.
+  - `[low]` `[reject]` (blind) Manager form doesn't preselect the current manager — the current manager is shown in its column; an explicit choice avoids accidental resubmits.
+  - `[low]` `[reject]` (blind) Manager Overview shows "1 employee" / fixed notes — manager scoping is Story 4.3.
+  - `[low]` `[patch]` (blind) No tests for the seed manager step — same patch as the verification-gap finding.
+  - `[low]` `[reject]` (blind) training-store manager-session tests missing — training-store is unchanged; the non-admin path it takes is already tested.
+  - `[low]` `[reject]` (blind) No tests for manager signIn / duplicate auth_user_id / sibling departments RLS — `auth_user_id` is unique; signIn derives nothing; policy is a plain equality.
+  - `[low]` `[reject]` (blind) Error message doesn't say whether the department or the employee was wrong — both come from the same form's selects; rare.
+  - `[false]` `[reject]` (intent) AC6 tree walk not wired into a runtime check — no department-scoped permission check exists in this story; the resolver exists with its loop guard.
+  - `[low]` `[reject]` (intent) No test of the Administrator renaming a managed department — department writes are Administrator-only regardless of manager (4.1 tests).
+  - `[low]` `[patch]` (intent) Seed manager step only exercised in definitions — same patch.
+  - `[low]` `[reject]` (intent) No live test of an Administrator who also manages — precedence is structural (admin returned before any manages-check), covered in auth tests.
+  - `[false]` `[reject]` (intent) No RLS test of a manager renaming/re-parenting — 4.1's update policy is admin-only and RLS-tested; a manager is a staff JWT.
+
 ## Design Notes
 
 The manager reference is an auth user id, not an Employee ID, because the seeded L&D manager is the Administrator account, which has no employee row. The UI picks people by Employee ID and the store resolves the linked account, which is what makes "no account → provision first" observable. Deriving `manager` only from staff identities makes the admin precedence structural. Falling back to `staff` when the manages-check read fails is fail-closed for manager powers and keeps Staff working; the existing archived check stays fail-closed for access. Session length follows the account's `app_metadata` role, so no new session-length decision is introduced.
@@ -104,3 +139,35 @@ The manager reference is an auth user id, not an Employee ID, because the seeded
 - `npm test` -- expected: all pass except live-DB tests needing the 4.1/4.2 migrations, failing only with schema-missing errors (42P01/42703/PGRST204/PGRST205)
 - `npm run build` -- expected: success
 - `npm run test:e2e` (here: Chromium via `launchOptions.executablePath: "/opt/pw-browsers/chromium"`) -- expected: pass, or fail only with schema-missing errors until the migrations are applied
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Departments gain an optional manager account (`manager_user_id`, ADDITIVE migration with a "read departments you manage" policy). Only the Administrator can set or remove a manager, through the store, an action and the Departments panel. The employee must have a linked, non-archived account, so the action never creates one. Staff accounts that manage at least one department get the `manager` role, worked out fresh on every request; Administrators are always `admin`, and a failed check falls back to `staff`. Manager sessions reach the management portal without Departments, Interviews or account controls, and the interviews store returns nothing for them. `authorityChain` and `hasDepartmentAuthority` are pure and guard against loops. The seed makes the Administrator L&D's manager.
+
+**Files changed:**
+- `supabase/migrations/20261014010000_department_managers.sql`: ADDITIVE column, index, policy.
+- `src/domain/departments.ts`: manager fields, `authorityChain`, `hasDepartmentAuthority`.
+- `src/server/session.ts`, `src/server/auth.ts`: manager role, its precedence, the staff fallback.
+- `src/server/departments-store.ts`, `src/server/department-actions.ts`: `setManager`, `managesAny`, manager fields on `list`.
+- `src/server/interviews-store.ts`: managers get `[]`.
+- `src/app/page.tsx`, `src/components/portal.tsx`, `src/components/departments-panel.tsx`: manager routing and hidden sections, Manager column and form.
+- `src/data/departments.ts`, `scripts/seed-employees.ts`, `docs/DEPLOYMENT.md`: L&D manager seed (`pickSeedAdministrator`) and run order.
+- Tests: domain, store, actions, session, auth, interviews, page, portal, panel, RLS (live), e2e `department-manager.spec.ts`, e2e setup with 2 more throwaway employees.
+
+**Review findings:** 31 in total.
+- Patched: 11 rows, covering 5 root causes (3 medium, 2 low).
+- Deferred: 0.
+- Rejected: 20, each with its reason in the triage log.
+
+**Follow-up review recommended:** false. The patches fixed no high findings, and every patched entry was re-verified.
+
+**Verification:**
+- Typecheck and build pass.
+- `npm test`: 815 passed and 12 skipped. The only failures are in `tests/departments-rls.test.ts`, with PGRST205.
+- E2E: 11 passed. The 12 admin-portal specs fail only with 42703/PGRST205 (schema missing).
+
+**Residual risks:**
+- Both migrations (4.1, then 4.2) must be applied before deploying. Until then, Staff requests log a failed manager check and continue as Staff.
+- A Staff account made manager loses Staff self-service until Story 4.10 adds "My record".

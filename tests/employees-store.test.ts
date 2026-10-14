@@ -122,6 +122,26 @@ describe("employees-store role scoping", () => {
   });
 });
 
+describe("employees-store and manager sessions (Story 4.2)", () => {
+  const manager = { role: "manager", employeeId: "BS-1002" } as const;
+
+  it("takes the non-admin paths: only the manager's own record, no admin columns", async () => {
+    const { client, queries } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client));
+    const list = await store.listFor(manager);
+    expect(list.map(e => e.id)).toEqual(["BS-1002"]);
+    expect(queries[0].filters).toEqual([["employee_id", "BS-1002"]]);
+    expect(await store.getFor(manager, "BS-1001")).toBeNull();
+    const own = await store.getFor(manager, "BS-1002");
+    for (const employee of [own, list[0]]) {
+      expect(employee).not.toHaveProperty("hasAccount");
+      expect(employee).not.toHaveProperty("archived");
+      expect(employee).not.toHaveProperty("departmentId");
+    }
+    for (const q of queries) for (const column of ["auth_user_id", "archived_at", "department_id"]) expect(q.columns).not.toContain(column);
+  });
+});
+
 describe("employees-store data", () => {
   it("merges each row with the fixture's nested profile data by id, but interviews and training from their stores", async () => {
     const { client } = fakeClient(seeded);

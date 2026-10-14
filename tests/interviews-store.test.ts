@@ -114,6 +114,27 @@ describe("interviews-store reads", () => {
   });
 });
 
+describe("interviews-store and manager sessions (Story 4.2)", () => {
+  const manager = { role: "manager", employeeId: "BS-1001" } as const;
+
+  it("returns nothing for a manager session, without a query, even for its own employee", async () => {
+    const { client, calls } = fakeClient(rows);
+    expect(await storeFor(client).listFor(manager)).toEqual([]);
+    expect(await storeFor(client).listFor(manager, "BS-1001")).toEqual([]);
+    expect(await storeFor(client).listFor(manager, "BS-1002")).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a manager session's add, update and withdraw without a query", async () => {
+    const { client, calls } = fakeClient(rows);
+    const store = storeFor(client);
+    await expect(store.add(manager, input)).rejects.toBeInstanceOf(InterviewsForbiddenError);
+    await expect(store.update(manager, "a", { stage: "Final", outcome: "", feedback: "" })).rejects.toBeInstanceOf(InterviewsForbiddenError);
+    await expect(store.withdraw(manager, "a")).rejects.toBeInstanceOf(InterviewsForbiddenError);
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("interviews-store add", () => {
   it("adds an interview for the session's employee, with empty feedback", async () => {
     const { client, calls } = fakeClient([]);

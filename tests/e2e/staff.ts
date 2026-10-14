@@ -28,6 +28,24 @@ export function e2eArchiveStaff() {
   return { id, name, email, password };
 }
 
+/** Story 4.2: the linked throwaway Staff account the department-manager spec makes a manager. */
+export function e2eManagerStaff() {
+  const id = process.env.E2E_STAFF_MANAGER_ID;
+  const name = process.env.E2E_STAFF_MANAGER_NAME;
+  const email = process.env.E2E_STAFF_MANAGER_EMAIL;
+  const password = process.env.E2E_STAFF_MANAGER_PASSWORD;
+  if (!id || !name || !email || !password) throw new Error("E2E_STAFF_MANAGER_* are not set; global-setup.ts did not run.");
+  return { id, name, email, password };
+}
+
+/** Story 4.2: the throwaway employee that never gets a sign-in account. */
+export function e2eNoAccountEmployee() {
+  const id = process.env.E2E_STAFF_NO_ACCOUNT_ID;
+  const name = process.env.E2E_STAFF_NO_ACCOUNT_NAME;
+  if (!id || !name) throw new Error("E2E_STAFF_NO_ACCOUNT_* are not set; global-setup.ts did not run.");
+  return { id, name };
+}
+
 export async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel("Email address").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);

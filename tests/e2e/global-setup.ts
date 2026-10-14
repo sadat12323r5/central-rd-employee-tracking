@@ -5,9 +5,11 @@ import { serviceClient } from "./supabase-admin";
 // Creates throwaway accounts and rows for this run, following the RLS-test convention of dedicated
 // test accounts created and removed by the test itself (never the seeded demo employees):
 // - an Administrator (E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD);
-// - four throwaway employees (BS-98nn, team/title "E2E Throwaway"): two linked to Staff users
+// - six throwaway employees (BS-98nn, team/title "E2E Throwaway"): two linked to Staff users
 //   (E2E_STAFF_1_* / E2E_STAFF_2_*), one left unlinked for the provisioning spec (E2E_STAFF_UNLINKED_*),
-//   and one linked Staff user the archive spec archives and restores (E2E_STAFF_ARCHIVE_*).
+//   one linked Staff user the archive spec archives and restores (E2E_STAFF_ARCHIVE_*), and for the
+//   department-manager spec (Story 4.2) one linked Staff user made a manager (E2E_STAFF_MANAGER_*) and
+//   one employee that never gets an account (E2E_STAFF_NO_ACCOUNT_*).
 // global-teardown.ts deletes all of them (their attendance entries and external interviews first). Leftovers of an aborted run (older than two hours) are swept first.
 // Staff users are created directly through the service role here (test setup is the AD-6 exception).
 
@@ -87,11 +89,11 @@ export default async function globalSetup() {
   process.env.E2E_ADMIN_EMAIL = email;
   process.env.E2E_ADMIN_PASSWORD = password;
 
-  // One per-run slot of four consecutive ids in BS-9800..BS-9899, so the rows never overlap within a run.
-  const base = randomInt(0, 25) * 4;
-  const staff = [1, 2, 3, 4].map(n => ({
+  // One per-run slot of six consecutive ids in BS-9800..BS-9895, so the rows never overlap within a run.
+  const base = randomInt(0, 16) * 6;
+  const staff = [1, 2, 3, 4, 5, 6].map(n => ({
     id: `BS-98${String(base + n - 1).padStart(2, "0")}`,
-    name: `E2E Staff ${["One", "Two", "Three", "Four"][n - 1]} ${runId}`,
+    name: `E2E Staff ${["One", "Two", "Three", "Four", "Five", "Six"][n - 1]} ${runId}`,
     email: `${STAFF_EMAIL_PREFIX}${runId}-${n}@example.test`,
   }));
   process.env.E2E_STAFF_RUN = runId;
@@ -128,4 +130,14 @@ export default async function globalSetup() {
   process.env.E2E_STAFF_ARCHIVE_ID = toArchive.id;
   process.env.E2E_STAFF_ARCHIVE_NAME = toArchive.name;
   process.env.E2E_STAFF_ARCHIVE_EMAIL = toArchive.email;
+
+  const manager = staff[4];
+  process.env.E2E_STAFF_MANAGER_PASSWORD = await linkStaff(manager);
+  process.env.E2E_STAFF_MANAGER_ID = manager.id;
+  process.env.E2E_STAFF_MANAGER_NAME = manager.name;
+  process.env.E2E_STAFF_MANAGER_EMAIL = manager.email;
+
+  const noAccount = staff[5];
+  process.env.E2E_STAFF_NO_ACCOUNT_ID = noAccount.id;
+  process.env.E2E_STAFF_NO_ACCOUNT_NAME = noAccount.name;
 }

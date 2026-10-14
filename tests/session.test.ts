@@ -12,4 +12,8 @@ describe("session module", () => {
     expect(session.sessionHours({ role: "staff", employeeId: "BS-1003" })).toBe(12);
     expect(session.sessionHours({ role: "admin" })).toBe(8);
   });
+
+  it("gives a manager session (a Staff account) the 12-hour Staff length (Story 4.2)", () => {
+    expect(session.sessionHours({ role: "manager", employeeId: "BS-1003" })).toBe(12);
+  });
 });
