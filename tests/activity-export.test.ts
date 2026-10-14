@@ -29,7 +29,7 @@ vi.mock("../src/server/audit-store", async importOriginal => ({
 
 const {
   activityErrorMessage, ActivityEmployeeNotFoundError, ActivityForbiddenError, ActivityUnavailableError, ActivityValidationError,
-  exportActivity, exportAllActivity, NOT_ALLOWED, UNAVAILABLE, UNKNOWN_EMPLOYEE,
+  exportActivity, exportAllActivity, NOT_ALLOWED, OUT_OF_SCOPE, UNAVAILABLE, UNKNOWN_EMPLOYEE,
 } = await import("../src/server/activity-export");
 const { exportActivityAction, exportAllActivityAction } = await import("../src/server/activity-actions");
 const { AttendanceUnavailableError, attendanceStore } = await import("../src/server/attendance-store");
@@ -37,6 +37,7 @@ const { InterviewsUnavailableError, interviewsStore } = await import("../src/ser
 const { TrainingUnavailableError, trainingStore } = await import("../src/server/training-store");
 const { EmployeesUnavailableError, employeesStore } = await import("../src/server/employees-store");
 const { AuditEmployeeNotFoundError, AuditUnavailableError, AuditValidationError } = await import("../src/server/audit-store");
+const { managerScope, ManagerScopeUnavailableError } = await import("../src/server/manager-scope");
 
 const admin = { role: "admin" } as const;
 const actorId = "11111111-1111-4111-8111-111111111111";
@@ -538,5 +539,236 @@ describe("exportAllActivityAction", () => {
       .toEqual({ error: "The end date cannot be before the start date.", message: "" });
     expect(employeesStore.listFor).not.toHaveBeenCalled();
     expect(recordBulkActivityExport).not.toHaveBeenCalled();
+  });
+});
+
+// ---- Story 8.3: department managers export within their department subtree ----
+
+const manager = { role: "manager", employeeId: "BS-1009", userId: actorId } as const;
+const DEPT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+const DEPT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2";
+const subtree = (employeeIds: string[], departmentIds = [DEPT_B, DEPT_A]): ManagerScopeSet =>
+  ({ departmentIds: new Set(departmentIds), employeeIds: new Set(employeeIds) });
+
+describe("exportActivity for a department manager", () => {
+  it("exports an in-subtree employee: attendance, training and enrolments, never interviews; audited against the employee", async () => {
+    const deps = fakeDeps();
+    const result = await exportActivity(deps, manager, actorId, { employeeId: "BS-1001", period: "month", month: "9", year: "2026" }, now);
+
+    expect(result.filename).toBe("activity-BS-1001-2026-09-01_to_2026-09-30.csv");
+    expect(result.csv.split("\r\n")[0]).toBe(HEADER);
+    expect(cells(result.csv)).toEqual([
+      ["BS-1001", "2026-09-02", "attendance"], ["BS-1001", "2026-09-20", "training"], ["BS-1001", "2026-09-28", "enrolment"],
+    ]);
+    expect(result.csv).not.toContain('"interview"');
+    // The fake interviews store would return a row; it is not even asked.
+    expect(deps.interviews.listFor).not.toHaveBeenCalled();
+    expect(deps.employees.getFor).toHaveBeenCalledWith(manager, "BS-1001");
+    expect(deps.attendance.listFor).toHaveBeenCalledWith(manager, "BS-1001");
+    expect(deps.training.listFor).toHaveBeenCalledWith(manager, "BS-1001");
+    expect(deps.training.currentFor).toHaveBeenCalledWith(manager, ["BS-1001"]);
+    expect(deps.audit.recordActivityExport).toHaveBeenCalledExactlyOnceWith({ actorId, employeeId: "BS-1001", from: "2026-09-01", to: "2026-09-30" });
+  });
+
+  it.each([["outside the subtree", "BS-1002"], ["unknown", "BS-1999"]])("refuses an employee %s with the scope message: no other read, no audit", async (_name, employeeId) => {
+    const deps = fakeDeps();
+    deps.employees.getFor.mockResolvedValue(null);
+    const error = await exportActivity(deps, manager, actorId, { employeeId, period: "all" }, now).catch(e => e);
+    expect(error).toBeInstanceOf(ActivityForbiddenError);
+    expect(error.message).toBe(OUT_OF_SCOPE);
+    expect(activityErrorMessage(error)).toBe(OUT_OF_SCOPE);
+    expect(reads(deps)).toEqual([0, 0, 0, 0]);
+    expect(deps.audit.recordActivityExport).not.toHaveBeenCalled();
+  });
+
+  it("validates the period before reading anything", async () => {
+    const deps = fakeDeps();
+    const error = await exportActivity(deps, manager, actorId, { employeeId: "BS-1001", period: "custom", from: "2026-10-05", to: "2026-10-01" }, now).catch(e => e);
+    expect(error).toBeInstanceOf(ActivityValidationError);
+    expect(deps.employees.getFor).not.toHaveBeenCalled();
+    expect(deps.audit.recordActivityExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the scope (employees read)", (d: ReturnType<typeof fakeDeps>) => d.employees.getFor.mockRejectedValue(new EmployeesUnavailableError({ cause: new ManagerScopeUnavailableError() }))],
+    ["attendance", (d: ReturnType<typeof fakeDeps>) => d.attendance.listFor.mockRejectedValue(new AttendanceUnavailableError())],
+    ["training", (d: ReturnType<typeof fakeDeps>) => d.training.listFor.mockRejectedValue(new TrainingUnavailableError())],
+    ["LMS", (d: ReturnType<typeof fakeDeps>) => d.training.currentFor.mockResolvedValue({ status: "unavailable" } as never)],
+    ["the audit log", (d: ReturnType<typeof fakeDeps>) => d.audit.recordActivityExport.mockRejectedValue(new AuditUnavailableError())],
+  ])("fails as a whole when %s is unavailable", async (_name, breakSource) => {
+    const deps = fakeDeps();
+    breakSource(deps);
+    const error = await exportActivity(deps, manager, actorId, { employeeId: "BS-1001", period: "all" }, now).catch(e => e);
+    expect(error).toBeInstanceOf(ActivityUnavailableError);
+    expect(error.message).toBe(UNAVAILABLE);
+  });
+});
+
+/** Bulk deps for a manager whose subtree holds BS-1001, BS-1002 (active) and BS-1003 (archived). */
+function fakeManagerBulkDeps() {
+  const deps = fakeBulkDeps();
+  deps.scope.forManager.mockResolvedValue(subtree(["BS-1001", "BS-1002", "BS-1003"]));
+  return deps;
+}
+
+describe("exportAllActivity for a department manager", () => {
+  it("exports the subtree's active employees without interviews, auditing the subtree's department ids", async () => {
+    const deps = fakeManagerBulkDeps();
+    const result = await exportAllActivity(deps, manager, actorId, { period: "month", month: "9", year: "2026" }, now);
+
+    expect(result.filename).toBe("activity-all-employees-2026-09-01_to_2026-09-30.csv");
+    expect(result.csv.split("\r\n")[0]).toBe(HEADER);
+    // BS-1002's stored interview (returned by the fake store) is dropped; BS-1003 is archived.
+    expect(cells(result.csv)).toEqual([
+      ["BS-1001", "2026-09-02", "attendance"], ["BS-1001", "2026-09-20", "training"], ["BS-1001", "2026-09-25", "attendance"],
+      ["BS-1001", "2026-09-28", "enrolment"],
+      ["BS-1002", "2026-09-03", "attendance"],
+    ]);
+    expect(result.csv).not.toContain('"interview"');
+    expect(deps.employees.listFor).toHaveBeenCalledWith(manager);
+    expect(deps.scope.forManager).toHaveBeenCalledExactlyOnceWith(manager);
+    expect(deps.training.currentFor).toHaveBeenCalledWith(manager, ["BS-1001", "BS-1002"]);
+    expect(deps.audit.recordDepartmentActivityExport).toHaveBeenCalledExactlyOnceWith({
+      actorId, departmentIds: [DEPT_A, DEPT_B], includeArchived: false, from: "2026-09-01", to: "2026-09-30",
+    });
+    expect(deps.audit.recordBulkActivityExport).not.toHaveBeenCalled();
+  });
+
+  it("includes the subtree's archived employees when asked", async () => {
+    const deps = fakeManagerBulkDeps();
+    const result = await exportAllActivity(deps, manager, actorId, { period: "month", month: "9", year: "2026", includeArchived: "on" }, now);
+    expect(cells(result.csv).filter(c => c[0] === "BS-1003")).toEqual([["BS-1003", "2026-09-04", "attendance"], ["BS-1003", "2026-09-29", "enrolment"]]);
+    expect(deps.audit.recordDepartmentActivityExport).toHaveBeenCalledExactlyOnceWith({
+      actorId, departmentIds: [DEPT_A, DEPT_B], includeArchived: true, from: "2026-09-01", to: "2026-09-30",
+    });
+  });
+
+  it("never includes an employee outside the scope, whatever the employee list returned", async () => {
+    const deps = fakeBulkDeps();
+    deps.scope.forManager.mockResolvedValue(subtree(["BS-1001"]));
+    const result = await exportAllActivity(deps, manager, actorId, { period: "month", month: "9", year: "2026" }, now);
+    expect(new Set(cells(result.csv).map(c => c[0]))).toEqual(new Set(["BS-1001"]));
+    expect(deps.training.currentFor).toHaveBeenCalledWith(manager, ["BS-1001"]);
+  });
+
+  it("returns a header-only CSV for a subtree with no employees, still audited", async () => {
+    const deps = fakeBulkDeps();
+    deps.employees.listFor.mockResolvedValue([]);
+    deps.scope.forManager.mockResolvedValue(subtree([], [DEPT_A]));
+    deps.training.currentFor.mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} });
+    const result = await exportAllActivity(deps, manager, actorId, { period: "last-week" }, now);
+    expect(result.csv).toBe(HEADER);
+    expect(deps.audit.recordDepartmentActivityExport).toHaveBeenCalledExactlyOnceWith({
+      actorId, departmentIds: [DEPT_A], includeArchived: false, from: "2026-10-05", to: "2026-10-11",
+    });
+  });
+
+  it("rejects a bad period before reading anything", async () => {
+    const deps = fakeManagerBulkDeps();
+    await expect(exportAllActivity(deps, manager, actorId, { period: "custom", from: "2026-10-01", to: "2026-10-14" }, now))
+      .rejects.toBeInstanceOf(ActivityValidationError);
+    expect(deps.scope.forManager).not.toHaveBeenCalled();
+    expect(bulkReads(deps)).toEqual([0, 0, 0]);
+    expect(deps.audit.recordDepartmentActivityExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the scope", (d: ReturnType<typeof fakeBulkDeps>) => d.scope.forManager.mockRejectedValue(new ManagerScopeUnavailableError())],
+    ["employees", (d: ReturnType<typeof fakeBulkDeps>) => d.employees.listFor.mockRejectedValue(new EmployeesUnavailableError())],
+    ["attendance", (d: ReturnType<typeof fakeBulkDeps>) => d.attendance.listAll.mockRejectedValue(new AttendanceUnavailableError())],
+    ["LMS", (d: ReturnType<typeof fakeBulkDeps>) => d.training.currentFor.mockResolvedValue({ status: "unavailable" } as never)],
+  ])("fails as a whole when %s is unavailable: no CSV, no audit", async (_name, breakSource) => {
+    const deps = fakeManagerBulkDeps();
+    breakSource(deps);
+    const error = await exportAllActivity(deps, manager, actorId, { period: "all" }, now).catch(e => e);
+    expect(error).toBeInstanceOf(ActivityUnavailableError);
+    expect(error.message).toBe(UNAVAILABLE);
+    expect(deps.audit.recordDepartmentActivityExport).not.toHaveBeenCalled();
+    expect(deps.audit.recordBulkActivityExport).not.toHaveBeenCalled();
+  });
+
+  it.each([[new AuditUnavailableError()], [new AuditValidationError(["departmentIds"])]])("returns no CSV when the audit write fails (%s)", async failure => {
+    const deps = fakeManagerBulkDeps();
+    deps.audit.recordDepartmentActivityExport.mockRejectedValue(failure);
+    await expect(exportAllActivity(deps, manager, actorId, { period: "all" }, now)).rejects.toBeInstanceOf(ActivityUnavailableError);
+  });
+
+  it("leaves the Administrator's bulk export unscoped: no scope read, interviews kept, all-employees audit", async () => {
+    const deps = fakeBulkDeps();
+    const result = await exportAllActivity(deps, admin, actorId, { period: "month", month: "9", year: "2026" }, now);
+    expect(deps.scope.forManager).not.toHaveBeenCalled();
+    expect(cells(result.csv)).toContainEqual(["BS-1002", "2026-09-10", "interview"]);
+    expect(deps.audit.recordDepartmentActivityExport).not.toHaveBeenCalled();
+    expect(deps.audit.recordBulkActivityExport).toHaveBeenCalledOnce();
+  });
+});
+
+describe("activity export actions for a department manager", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  const spies: { mockRestore(): void }[] = [];
+
+  function form(fields: Record<string, string>) {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) data.set(key, value);
+    return data;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActor.mockResolvedValue({ identity: manager, userId: actorId });
+    recordActivityExport.mockResolvedValue(undefined);
+    recordDepartmentActivityExport.mockResolvedValue(undefined);
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    spies.push(
+      vi.spyOn(employeesStore, "getFor").mockResolvedValue(nadia),
+      vi.spyOn(employeesStore, "listFor").mockResolvedValue([person("BS-1001", "Nadia Rahman", false, {
+        interviews: [{ id: "i9", company: "Orbit", role: "QA", date: "2026-09-02", stage: "Screening", outcome: "", feedback: "", withdrawn: false }],
+      } as Partial<Employee>)]),
+      vi.spyOn(attendanceStore, "listFor").mockResolvedValue([entry("2026-09-02")]),
+      vi.spyOn(attendanceStore, "listAll").mockResolvedValue([attendanceOf("BS-1001", "2026-09-02")]),
+      vi.spyOn(interviewsStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(trainingStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(trainingStore, "currentFor").mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} }),
+      vi.spyOn(managerScope, "forManager").mockResolvedValue(subtree(["BS-1001"], [DEPT_A])),
+    );
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    while (spies.length) spies.pop()!.mockRestore();
+  });
+
+  it("exports one in-subtree employee with the manager's session, never reading interviews", async () => {
+    const result = await exportActivityAction({ error: "", message: "" }, form({ employeeId: "BS-1001", period: "all" }));
+    expect(result).toMatchObject({ error: "", filename: "activity-BS-1001-2026-09-02_to_2026-09-02.csv" });
+    expect(employeesStore.getFor).toHaveBeenCalledWith(manager, "BS-1001");
+    expect(attendanceStore.listFor).toHaveBeenCalledWith(manager, "BS-1001");
+    expect(interviewsStore.listFor).not.toHaveBeenCalled();
+    expect(recordActivityExport).toHaveBeenCalledExactlyOnceWith({ actorId, employeeId: "BS-1001", from: "2026-09-02", to: "2026-09-02" });
+  });
+
+  it("refuses an employee outside the subtree inline", async () => {
+    vi.mocked(employeesStore.getFor).mockResolvedValue(null);
+    expect(await exportActivityAction({ error: "", message: "" }, form({ employeeId: "BS-1002", period: "all" })))
+      .toEqual({ error: OUT_OF_SCOPE, message: "" });
+    expect(attendanceStore.listFor).not.toHaveBeenCalled();
+    expect(recordActivityExport).not.toHaveBeenCalled();
+  });
+
+  it("bulk-exports the subtree without interviews and audits the departments", async () => {
+    const result = await exportAllActivityAction({ error: "", message: "" }, form({ period: "all" }));
+    expect(result).toMatchObject({ error: "", filename: "activity-all-employees-2026-09-02_to_2026-09-02.csv" });
+    expect(result.csv).not.toContain('"interview"');
+    expect(managerScope.forManager).toHaveBeenCalledWith(manager);
+    expect(createAuditStore).toHaveBeenCalledWith(getServiceClient);
+    expect(recordDepartmentActivityExport).toHaveBeenCalledExactlyOnceWith({
+      actorId, departmentIds: [DEPT_A], includeArchived: false, from: "2026-09-02", to: "2026-09-02",
+    });
+    expect(recordBulkActivityExport).not.toHaveBeenCalled();
+  });
+
+  it("shows the unavailable message when the scope cannot be read", async () => {
+    vi.mocked(managerScope.forManager).mockRejectedValue(new ManagerScopeUnavailableError());
+    expect(await exportAllActivityAction({ error: "", message: "" }, form({ period: "all" }))).toEqual({ error: UNAVAILABLE, message: "" });
+    expect(recordDepartmentActivityExport).not.toHaveBeenCalled();
   });
 });

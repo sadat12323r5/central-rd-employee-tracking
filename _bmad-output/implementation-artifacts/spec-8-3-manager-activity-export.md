@@ -2,7 +2,7 @@
 title: "Story 8.3: Department managers export within their department"
 type: 'feature'
 created: '2026-10-14'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '9f74ea5f0cf6442385dd92c8ffee6063d3833147'
 review_loop_iteration: 0
 followup_review_recommended: false

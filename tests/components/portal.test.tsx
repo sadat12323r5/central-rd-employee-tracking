@@ -717,3 +717,36 @@ describe("Portal scoped to a manager's departments (Story 4.3)", () => {
     expect(csvText).not.toContain("Meera Das");
   });
 });
+
+describe("Portal activity export for a department manager (Story 8.3)", () => {
+  const own = employees.filter(e => e.id === "BS-1001");
+
+  it("offers Download activity on a profile's Overview, saying interviews are not included, without the account panels", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByText("Interviews are not included in a department manager's export.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign-in account" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Account access" })).not.toBeInTheDocument();
+  });
+
+  it("offers Download activity (your departments) in the Employees section", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: /Employees/ }));
+    expect(screen.getByRole("heading", { name: "Download activity (your departments)" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Download activity (all employees)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Include archived" })).toBeInTheDocument();
+    expect(screen.getByText("Interviews are not included in a department manager's export.")).toBeInTheDocument();
+  });
+
+  it("keeps the Administrator's panels unchanged, with no manager note", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={own} current={none()} />);
+    await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: /Employees/ }));
+    expect(screen.getByRole("heading", { name: "Download activity (all employees)" })).toBeInTheDocument();
+    expect(screen.queryByText(/Interviews are not included/)).not.toBeInTheDocument();
+  });
+});
