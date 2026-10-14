@@ -161,7 +161,7 @@ const UNAVAILABLE_ERRORS = [
 ];
 
 /** Who may export at all (Story 8.3): the Administrator and department managers. */
-const mayExport = (session: SessionIdentity) => session.role === "admin" || session.role === "manager";
+export const mayExport = (session: SessionIdentity) => session.role === "admin" || session.role === "manager";
 const isUnavailable = (error: unknown) => UNAVAILABLE_ERRORS.some(type => error instanceof type);
 
 /**
@@ -272,6 +272,8 @@ export async function exportAllActivity(
       includedRead.then(list => deps.training.currentFor(session, list.map(e => e.id))),
     ]);
     if (current.status !== "ok") throw new ActivityUnavailableError({ cause: "LMS unavailable" });
+    // A manager with no department in scope (e.g. just unassigned) has nothing to export.
+    if (scope && scope.departmentIds.size === 0) throw new ActivityForbiddenError(OUT_OF_SCOPE);
 
     const attendanceOf = new Map<string, typeof attendance>();
     for (const entry of attendance) {

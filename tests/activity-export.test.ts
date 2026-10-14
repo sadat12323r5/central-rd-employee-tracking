@@ -663,6 +663,19 @@ describe("exportAllActivity for a department manager", () => {
     });
   });
 
+  it("refuses a manager whose scope has no departments with the scope message: no CSV, no audit", async () => {
+    const deps = fakeBulkDeps();
+    deps.employees.listFor.mockResolvedValue([]);
+    deps.scope.forManager.mockResolvedValue(subtree([], []));
+    deps.training.currentFor.mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} });
+    const error = await exportAllActivity(deps, manager, actorId, { period: "all" }, now).catch(e => e);
+    expect(error).toBeInstanceOf(ActivityForbiddenError);
+    expect(error.message).toBe(OUT_OF_SCOPE);
+    expect(activityErrorMessage(error)).toBe(OUT_OF_SCOPE);
+    expect(deps.audit.recordDepartmentActivityExport).not.toHaveBeenCalled();
+    expect(deps.audit.recordBulkActivityExport).not.toHaveBeenCalled();
+  });
+
   it("rejects a bad period before reading anything", async () => {
     const deps = fakeManagerBulkDeps();
     await expect(exportAllActivity(deps, manager, actorId, { period: "custom", from: "2026-10-01", to: "2026-10-14" }, now))

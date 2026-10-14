@@ -1,7 +1,7 @@
 "use server";
 
 import {
-  activityErrorMessage, exportActivity, exportAllActivity, NOT_ALLOWED, type ActivityExportInput, type BulkActivityExportInput,
+  activityErrorMessage, exportActivity, exportAllActivity, mayExport, NOT_ALLOWED, type ActivityExportInput, type BulkActivityExportInput,
 } from "./activity-export";
 import { attendanceStore } from "./attendance-store";
 import type { ActionState } from "./attendance-actions";
@@ -10,7 +10,6 @@ import { getActor } from "./auth";
 import { employeesStore } from "./employees-store";
 import { interviewsStore } from "./interviews-store";
 import { managerScope } from "./manager-scope";
-import type { SessionIdentity } from "./session";
 import { getServiceClient } from "./supabase";
 import { trainingStore } from "./training-store";
 
@@ -21,9 +20,6 @@ import { trainingStore } from "./training-store";
 // Story 8.2 adds the bulk export of every employee (exportAllActivityAction), with the same checks.
 // Story 8.3 opens both to department managers: the role is checked here, and the subtree scope (and the
 // absence of interviews) is enforced in activity-export.ts through the session-aware stores.
-
-/** The Administrator and department managers may export; Staff and no session may not. */
-const mayExport = (identity: SessionIdentity | undefined) => identity?.role === "admin" || identity?.role === "manager";
 
 export type ActivityExportState = ActionState & { csv?: string; filename?: string };
 

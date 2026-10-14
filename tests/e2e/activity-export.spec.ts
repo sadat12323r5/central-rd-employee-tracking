@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { signInAsAdmin } from "./admin";
@@ -115,9 +115,22 @@ test("a department manager downloads an in-department employee's activity and th
   const created = await service.from("departments").insert({ name: department, manager_user_id: account.data.auth_user_id }).select("id").single();
   if (created.error) throw new Error(`Could not create the throwaway department (${created.error.code}): ${created.error.message}`);
   const departmentId = created.data.id as string;
+  const managerUserId = account.data.auth_user_id as string;
+  // One attendance row and one external interview for the member, inside the exported period ("All time").
+  const attendanceId = randomUUID();
+  const interviewId = randomUUID();
   try {
     const placed = await service.from("employees").update({ department_id: departmentId }).eq("employee_id", member.id);
     if (placed.error) throw new Error(`Could not place the throwaway employee: ${placed.error.message}`);
+    const attended = await service.from("attendance_entries").insert([{
+      id: attendanceId, employee_id: member.id, work_date: "2026-01-05", clock_in: "2026-01-05T03:00:00Z",
+      clock_out: "2026-01-05T11:00:00Z", break_minutes: 0, work_mode: "Office", log: null,
+    }], { defaultToNull: false });
+    if (attended.error) throw new Error(`Could not seed attendance (${attended.error.code}): ${attended.error.message}`);
+    const interviewed = await service.from("external_interviews").insert([{
+      id: interviewId, employee_id: member.id, company: "E2E Export Co", role: "QA", stage: "Screening", interview_date: "2026-01-06",
+    }], { defaultToNull: false });
+    if (interviewed.error) throw new Error(`Could not seed the interview (${interviewed.error.code}): ${interviewed.error.message}`);
 
     await page.goto("/");
     await signIn(page, manager.email, manager.password);
@@ -131,6 +144,7 @@ test("a department manager downloads an in-department employee's activity and th
     const all = await download(page, bulk, "Download activity (your departments)");
     expect(all.filename).toMatch(/^activity-all-employees-\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}\.csv$/);
     await expect(bulk.getByRole("status").filter({ hasText: `Downloaded ${all.filename}.` })).toBeVisible();
+    expect(all.rows.length).toBeGreaterThan(0);
     for (const row of all.rows) {
       expect(row.startsWith(`"${member.id}",`)).toBe(true);
       expect(row).not.toContain('","interview","');
@@ -142,11 +156,19 @@ test("a department manager downloads an in-department employee's activity and th
     await single.getByLabel("Period").selectOption("all");
     const one = await download(page, single, "Download activity");
     expect(one.filename).toMatch(new RegExp(`^activity-${member.id}-\\d{4}-\\d{2}-\\d{2}_to_\\d{4}-\\d{2}-\\d{2}\\.csv$`));
+    expect(one.rows.length).toBeGreaterThan(0);
     for (const row of one.rows) {
       expect(row.startsWith(`"${member.id}",`)).toBe(true);
       expect(row).not.toContain('","interview","');
     }
+
+    // Exactly one audit row for the bulk export, scoped to the throwaway department.
+    const audited = await service.from("audit_events").select("id").eq("actor", managerUserId).eq("target", `departments:${departmentId}`);
+    expect(audited.error).toBeNull();
+    expect(audited.data).toHaveLength(1);
   } finally {
+    await service.from("attendance_entries").delete().eq("id", attendanceId);
+    await service.from("external_interviews").delete().eq("id", interviewId);
     await service.from("employees").update({ department_id: null }).eq("employee_id", member.id);
     await service.from("departments").delete().eq("id", departmentId);
   }

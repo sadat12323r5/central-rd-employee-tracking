@@ -6,7 +6,7 @@ import { isCalendarDate } from "@/domain/dates";
 // `record_activity_export`, which appends one `audit_events` row (actor, target employee,
 // `export_activity`, period). audit_events is append-only with RLS on and no policies, so the client
 // passed in must be the service-role client; the export action uses it only after the caller's
-// Administrator session was checked. Story 8.2 adds the bulk export (every employee), recorded through
+// Administrator or department manager session was checked. Story 8.2 adds the bulk export (every employee), recorded through
 // `record_bulk_activity_export` with the target `all-employees` or `all-employees+archived`. Story 8.3
 // adds a department manager's bulk export, recorded through `record_department_activity_export` with
 // the target `departments:<the subtree's department ids>` (plus `+archived`).

@@ -2,7 +2,7 @@
 title: "Story 8.3: Department managers export within their department"
 type: 'feature'
 created: '2026-10-14'
-status: 'in-review'
+status: 'done'
 baseline_revision: '9f74ea5f0cf6442385dd92c8ffee6063d3833147'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -95,6 +95,30 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-14 — Review pass
+- verdicts: 20 findings — high 0, medium 1, low 13, false 6, maybe-false 0
+- findings:
+  - `[low]` `[patch]` EdgeCase: a manager whose scope has no departments gets the "unavailable" message (audit zod min(1)) — bulk path now refuses with OUT_OF_SCOPE before the CSV and audit; unit test added.
+  - `[low]` `[reject]` EdgeCase: an employee leaving the subtree between getFor and the source reads yields a partial CSV — needs a re-parent within one request; threading one scope snapshot through every store is a wider refactor than the risk.
+  - `[low]` `[reject]` EdgeCase: the audited department ids and the employee list come from separate scope reads — same mid-request race; the audit records the manager's scope at export time, which is what the AC asks.
+  - `[medium]` `[patch]` Blind: the manager e2e was vacuous (header-only CSVs) — setup now seeds one attendance row and one interview for the member, asserts rows exist and no interview rows, and checks the one audit row (target `departments:<id>`).
+  - `[low]` `[patch]` Blind: empty-scope message — duplicate of the first EdgeCase row.
+  - `[low]` `[patch]` Blind: DEPLOYMENT.md labelled the 8.1 migration ADDITIVE — now DESTRUCTIVE (widening only), matching its header.
+  - `[low]` `[patch]` Blind: comments still said Administrator-only — audit-store header and panel comments updated.
+  - `[low]` `[patch]` Blind: `mayExport` duplicated — exported from activity-export.ts and imported by the actions.
+  - `[low]` `[reject]` Blind: scope recomputed several times per export — performance only; each store re-derives scope by design (Story 4.3, never cached).
+  - `[false]` `[patch]` Blind: bulk attendance would silently be empty without the manager-scope migration — false: without it `employees.listFor(manager)` fails first (unavailable); the ARCHITECTURE wording was still corrected.
+  - `[low]` `[reject]` Blind: live test checks anon but not a signed-in user calling the function — execute is revoked from `authenticated` in the migration (verified on local Postgres by the implementer); adding a sign-in to this file is not worth its code.
+  - `[low]` `[patch]` Blind: e2e does not check the audit row — added with the first e2e patch. Out-of-scope e2e rejected: covered by unit/action tests and Story 4.3's scope tests.
+  - `[false]` `[reject]` Blind: manager bulk filename `activity-all-employees-…` — the spec keeps the 8.2 filename (the story asks for "the same" exports).
+  - `[low]` `[reject]` Blind: e2e cleanup nulls the member's department instead of restoring it — the same pattern as department-manager.spec.ts; the fixture member has no department before the test.
+  - `[false]` `[reject]` VerificationGap: no gaps; e2e vacuity noted — duplicate of the e2e row (patched).
+  - `[false]` `[reject]` Intent: bulk "rejected" only applies to the single export (A1) — the bulk export takes no target, so filtering is the only reading.
+  - `[false]` `[reject]` Intent: a manager's single-export audit row looks like an Administrator's (B2/C2) — the actor id identifies the manager; the AC asks for manager, scope and period.
+  - `[false]` `[reject]` Intent: a manager loses their own interviews (E1) — the epic says interviews are never in a manager's export; own-record self-service is Story 4.10.
+  - `[low]` `[reject]` Intent: scope enforcement delegated to Story 4.3 stores and tested with mocks — 4.3's own live suites cover the stores and RLS; this story's e2e now runs a real manager export.
+  - `[low]` `[reject]` Intent: the Administrator's single export now reads attendance via `listFor` — same rows for an admin; existing admin tests pass.
+
 ## Design Notes
 
 The manager's bulk scope is recorded as the subtree's department ids at export time, so the audit row stays meaningful after later re-parenting or manager changes. A single export's scope is the employee itself, already recorded by `record_activity_export`, so no new function is needed there. Stacked on Story 4.3 (manager scope); Story 4.4's interview privacy is honoured here independently by never reading interviews for managers.
@@ -107,3 +131,28 @@ The manager's bulk scope is recorded as the subtree's department ids at export t
 - `npm run build` -- success.
 - `npm run test:e2e` with Chromium via a temporary config (`channel: undefined`, `launchOptions.executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`; delete it afterwards) -- pass, or fail only with schema-missing errors.
 - Optional: apply all migrations to a throwaway local Postgres 16 (`/usr/lib/postgresql/16/bin`) and exercise the new function.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Department managers can download the per-employee and bulk activity exports, limited to their department subtree, from the management portal. A request for an employee outside the subtree is refused at the server with "You can only export employees in your own department or its sub-departments." Manager exports never contain interview rows (the interviews store is not called). Each successful export writes one audit row: target = the employee for a single export; `departments:<sorted subtree ids>[+archived]` for a manager's bulk export, through the new `record_department_activity_export` (service role only). The Administrator's exports are unchanged.
+
+**Files changed:**
+- `supabase/migrations/20261015050000_department_activity_export_audit.sql`: new function and grants (ADDITIVE).
+- `src/server/activity-export.ts`, `activity-actions.ts`, `audit-store.ts`: manager branches, `mayExport`, scope dep, new audit call.
+- `src/components/activity-export-panel.tsx`, `portal.tsx`: panels for managers, manager heading and note.
+- Tests: `tests/activity-export.test.ts`, `tests/audit-store.test.ts` (unit + live), panel and portal component tests, manager e2e in `tests/e2e/activity-export.spec.ts`.
+- `docs/DEPLOYMENT.md`, `docs/ARCHITECTURE.md`.
+
+**Review:** 20 findings: 1 medium, 13 low, 6 false. Patched 7 rows (1 medium: e2e made meaningful; low: empty-scope refusal, migration label, stale comments, shared predicate, architecture wording, audit check in e2e). Deferred none. Rejected the rest with reasons above.
+
+Follow-up review recommended: false (patched: high 0, medium 1).
+
+**Verification:**
+- `npm run typecheck`: pass. `npm run build`: pass.
+- `npm test`: 1066 passed, 24 skipped, 2 failed — the live 8.3 audit tests, PGRST202 "Could not find the function public.record_department_activity_export"; plus suite errors in departments-rls and manager-scope-rls, PGRST205 (`public.departments` missing).
+- `npm run test:e2e` (Chromium): 11 passed, 16 failed, all schema-missing (11× 42703 `employees.department_id`, 5× PGRST205 `public.departments`).
+- Local Postgres 16 (implementer): the new function writes sorted, de-duplicated targets with `+archived`, raises `invalid_scope`/`invalid_period`, and refuses anon and authenticated.
+
+**Residual risks:** none of the manager paths has run against the real schema; re-run the live and e2e suites after the 4.1–4.3 and 8.3 migrations are applied.

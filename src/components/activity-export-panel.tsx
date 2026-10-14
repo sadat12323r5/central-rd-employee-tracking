@@ -43,7 +43,7 @@ async function submit(previous: ActivityExportState, form: FormData): Promise<Ac
 /**
  * Administrator and department managers: download one employee's activity timeline (attendance, interviews, training and
  * LMS enrolments) for a chosen period as a CSV. The form sends only the Employee ID and the period;
- * the acting Administrator is taken from the session at the server, which also audits the export.
+ * the acting Administrator or department manager is taken from the session at the server, which also audits the export.
  * Without an `employeeId` (Story 8.2, on the directory) it is the bulk export of every employee, with an
  * "Include archived" checkbox.
  * With `manager` (Story 8.3) only the heading and the notes change: the bulk export covers the manager's
@@ -54,7 +54,7 @@ export default function ActivityExportPanel({ employeeId, manager = false }: { e
   const title = bulk ? (manager ? "Download activity (your departments)" : "Download activity (all employees)") : "Download activity";
   const [state, action, pending] = useActionState(submit, initial);
   // Submitted by hand rather than through `<form action>`, so React does not reset the form after the
-  // action: the chosen period and the controlled "Include archived" box stay as the Administrator left them.
+  // action: the chosen period and the controlled "Include archived" box stay as the Administrator or department manager left them.
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
