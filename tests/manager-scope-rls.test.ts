@@ -14,6 +14,7 @@
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createAssignmentsStore } from "@/server/assignments-store";
 import { createAttendanceStore } from "@/server/attendance-store";
 import { createDepartmentsStore } from "@/server/departments-store";
 import { createEmployeesStore } from "@/server/employees-store";
@@ -253,7 +254,8 @@ describe.skipIf(!configured)("manager scope RLS (shared Supabase project)", () =
     const userClient = async () => client;
     const scope = createManagerScope({ userClient });
     const training = createTrainingStore({ userClient, lms: createStubLmsClient({ userClient }), scope });
-    const employees = createEmployeesStore({ userClient, interviews: createInterviewsStore({ userClient }), training, scope });
+    const assignments = createAssignmentsStore({ userClient, scope });
+    const employees = createEmployeesStore({ userClient, interviews: createInterviewsStore({ userClient }), training, assignments, scope });
     const list = await employees.listFor(session);
     expect(list.map(e => e.id).sort()).toEqual([childEmployee, staffId].sort());
     expect(list.every(e => e.departmentId === childId && e.interviews.length === 0)).toBe(true);

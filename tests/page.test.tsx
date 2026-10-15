@@ -142,6 +142,26 @@ describe("Home routing by role", () => {
     expect(props.departments).toEqual(departments);
   });
 
+  it("passes each employee's assignments through unchanged; no `work` field reaches the portal (Story 4.5)", async () => {
+    const { employees } = await import("@/data/employees");
+    const open = {
+      id: "a-1", employeeId: "BS-1001", departmentId: "d-1", client: "Not recorded", projectName: "Customer experience platform",
+      role: "Software Engineer I", allocation: 80, startDate: "2026-09-14", latestUpdate: "", status: "open", completionDate: null,
+      createdAt: "2026-10-14T00:00:00Z", closedAt: null,
+    };
+    const listed = [{ ...employees[0], assignments: [open] }];
+    for (const session of [{ role: "admin" }, { role: "manager", employeeId: "BS-1008", userId: "u-1" }]) {
+      getSession.mockResolvedValue(session);
+      listFor.mockResolvedValue(listed);
+      currentFor.mockResolvedValue({ status: "unavailable" });
+      portalProps.mockClear();
+      render(await Home());
+      const props = portalProps.mock.calls.at(-1)?.[0] as { employees: { assignments: unknown[] }[] };
+      expect(props.employees[0].assignments).toEqual([open]);
+      expect(props.employees[0]).not.toHaveProperty("work");
+    }
+  });
+
   it("passes no role (the Administrator portal) for an admin", async () => {
     getSession.mockResolvedValue({ role: "admin" });
     listFor.mockResolvedValue([]);

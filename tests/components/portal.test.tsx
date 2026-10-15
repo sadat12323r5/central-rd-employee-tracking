@@ -17,13 +17,19 @@ vi.mock("@/server/department-actions", () => ({
   updateDepartmentAction: vi.fn(async () => ({ error: "", message: "" })),
   setDepartmentManagerAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
+vi.mock("@/server/assignment-actions", () => ({
+  createAssignmentAction: vi.fn(async () => ({ error: "", message: "Assignment created." })),
+  updateAssignmentNoteAction: vi.fn(async () => ({ error: "", message: "Latest update saved." })),
+  closeAssignmentAction: vi.fn(async () => ({ error: "", message: "Assignment closed." })),
+}));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 
 import Portal from "@/components/portal";
-import { employees } from "@/data/employees";
+import { employees, type Assignment } from "@/data/employees";
+import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 
 /** LMS answers as page.tsx passes them: a promise that always resolves. */
@@ -191,7 +197,7 @@ describe("Portal employee profile", () => {
     const user = userEvent.setup();
     const bare = {
       ...employees[0], id: "BS-9801", name: "Bare Employee", skills: [], history: [], training: [], interviews: [],
-      work: { project: "", role: "", allocation: 0, update: "", commits: 0, period: "" },
+      assignments: [],
       attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
       review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" }, hasAccount: false,
     };
@@ -715,5 +721,139 @@ describe("Portal scoped to a manager's departments (Story 4.3)", () => {
     expect(lines).toHaveLength(scoped.length + 1);
     for (const e of scoped) expect(csvText).toContain(e.id);
     expect(csvText).not.toContain("Meera Das");
+  });
+});
+
+describe("Portal Current work tab (Story 4.5)", () => {
+  const CRD = "de9a0000-0000-4000-8000-000000000002";
+  const departments = [{ id: CRD, name: "Central R&D", parentId: null, managerUserId: null, managerEmployeeId: null }];
+  const assignment = (extra: Partial<Assignment> = {}): Assignment => ({
+    id: "5e000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: CRD, client: "Not recorded",
+    projectName: "Customer experience platform", role: "Software Engineer I", allocation: 80, startDate: "2026-09-14",
+    latestUpdate: "Reviewed this week's deliverables.", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z",
+    closedAt: null, ...extra,
+  });
+  const closedOne = assignment({
+    id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)", status: "closed",
+    startDate: "2026-03-01", completionDate: "2026-08-31", closedAt: "2026-09-01T00:00:00Z", latestUpdate: "Handed over.",
+  });
+  const withAssignments = (list: Assignment[]) => employees.map(e => ({ ...e, departmentId: CRD, assignments: e.id === "BS-1001" ? list : [] }));
+
+  async function openWork(list: Assignment[], role: "admin" | "manager" = "admin") {
+    const user = userEvent.setup();
+    const result = await show(<Portal role={role} employees={withAssignments(list)} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    return { user, ...result };
+  }
+
+  afterEach(() => vi.clearAllMocks());
+
+  it("shows the open assignment with its client, role, allocation, start date, department and latest update, and no Git panel", async () => {
+    await openWork([assignment()]);
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByRole("heading", { name: "Customer experience platform" })).toBeInTheDocument();
+    expect(within(panel).getByText("Open")).toBeInTheDocument();
+    for (const text of ["Not recorded", "Software Engineer I", "80%", "14 Sep 2026", "Central R&D"]) expect(within(panel).getByText(text)).toBeInTheDocument();
+    expect(within(panel).getAllByText("Reviewed this week's deliverables.").length).toBeGreaterThan(0);
+    expect(within(panel).queryByText(/Recorded Git activity/)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/commits/)).not.toBeInTheDocument();
+    // Nothing open is offered to create while an assignment is open.
+    expect(within(panel).queryByRole("form", { name: "Create an assignment" })).not.toBeInTheDocument();
+    expect(within(panel).getByRole("form", { name: "Edit the latest update" })).toBeInTheDocument();
+    expect(within(panel).getByRole("form", { name: "Close the assignment" })).toBeInTheDocument();
+  });
+
+  it("offers the create form only when nothing is open, with no department field", async () => {
+    const { user } = await openWork([closedOne]);
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByRole("heading", { name: "No open assignment" })).toBeInTheDocument();
+    const form = within(panel).getByRole("form", { name: "Create an assignment" });
+    expect(within(form).queryByLabelText(/Department/)).not.toBeInTheDocument();
+    expect(form.querySelector("[name=departmentId]")).toBeNull();
+    await user.type(within(form).getByLabelText("Client"), "Northwind (fictional)");
+    await user.type(within(form).getByLabelText("Project name"), "Portal rebuild");
+    await user.type(within(form).getByLabelText("Role"), "Developer");
+    await user.type(within(form).getByLabelText("Allocation (%)"), "60");
+    await user.type(within(form).getByLabelText("Start date"), "2026-10-01");
+    // Keyboard-operable: Enter submits the form.
+    await user.keyboard("{Enter}");
+    expect(createAssignmentAction).toHaveBeenCalledTimes(1);
+    const sent = vi.mocked(createAssignmentAction).mock.calls[0][1] as FormData;
+    expect(Object.fromEntries(sent.entries())).toEqual({
+      employeeId: "BS-1001", client: "Northwind (fictional)", projectName: "Portal rebuild", role: "Developer", allocation: "60", startDate: "2026-10-01",
+    });
+    expect(await within(panel).findByRole("status")).toHaveTextContent("Assignment created.");
+  });
+
+  it("shows the server's refusal and keeps what was entered", async () => {
+    vi.mocked(createAssignmentAction).mockResolvedValueOnce({ error: "This employee already has an open assignment. Close it first.", message: "" });
+    const { user } = await openWork([]);
+    const panel = screen.getByRole("tabpanel");
+    const form = within(panel).getByRole("form", { name: "Create an assignment" });
+    await user.type(within(form).getByLabelText("Client"), "Northwind (fictional)");
+    await user.type(within(form).getByLabelText("Project name"), "Portal rebuild");
+    await user.type(within(form).getByLabelText("Role"), "Developer");
+    await user.type(within(form).getByLabelText("Allocation (%)"), "60");
+    await user.type(within(form).getByLabelText("Start date"), "2026-10-01");
+    await user.click(within(form).getByRole("button", { name: "Create assignment" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("This employee already has an open assignment. Close it first.");
+    expect(within(panel).getByLabelText("Client")).toHaveValue("Northwind (fictional)");
+  });
+
+  it("saves the latest update and closes the assignment by its id only", async () => {
+    const { user } = await openWork([assignment()]);
+    const panel = screen.getByRole("tabpanel");
+    const note = within(panel).getByLabelText("Latest update");
+    await user.clear(note);
+    await user.type(note, "Demo delivered.");
+    await user.click(within(panel).getByRole("button", { name: "Save update" }));
+    expect(Object.fromEntries((vi.mocked(updateAssignmentNoteAction).mock.calls[0][1] as FormData).entries()))
+      .toEqual({ id: "5e000000-0000-4000-8000-000000000001", note: "Demo delivered." });
+    expect(await within(panel).findByRole("status")).toHaveTextContent("Latest update saved.");
+
+    await user.type(within(panel).getByLabelText("Completion date"), "2026-10-10");
+    await user.click(within(panel).getByRole("button", { name: "Close assignment" }));
+    expect(Object.fromEntries((vi.mocked(closeAssignmentAction).mock.calls[0][1] as FormData).entries()))
+      .toEqual({ id: "5e000000-0000-4000-8000-000000000001", completionDate: "2026-10-10" });
+    expect(await within(panel).findByRole("status")).toHaveTextContent("Assignment closed.");
+  });
+
+  it("lists closed assignments in history with a Closed label and D MMM YYYY dates, with no edit or close control", async () => {
+    await openWork([assignment(), closedOne]);
+    const history = screen.getByRole("list", { name: "Closed assignments" });
+    const item = within(history).getByRole("listitem");
+    expect(within(item).getByRole("heading", { name: "Legacy migration" })).toBeInTheDocument();
+    expect(within(item).getByText("Closed")).toBeInTheDocument();
+    expect(within(item).getByText(/1 Mar 2026 – 31 Aug 2026/)).toBeInTheDocument();
+    expect(within(item).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(item).queryByRole("textbox")).not.toBeInTheDocument();
+    // The only edit and close controls belong to the open assignment.
+    expect(screen.getAllByRole("button", { name: "Close assignment" })).toHaveLength(1);
+  });
+
+  it("works the same for a manager session", async () => {
+    await openWork([assignment()], "manager");
+    expect(screen.getByRole("form", { name: "Close the assignment" })).toBeInTheDocument();
+  });
+
+  it("shows the open assignment on the Overview's Current focus, or that none is open", async () => {
+    const user = userEvent.setup();
+    const { unmount } = await show(<Portal employees={withAssignments([assignment()])} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    const focus = screen.getByRole("heading", { name: "Current focus" }).closest("article")!;
+    expect(within(focus).getByRole("heading", { name: "Customer experience platform" })).toBeInTheDocument();
+    expect(within(focus).getByText("Reviewed this week's deliverables.")).toBeInTheDocument();
+    unmount();
+
+    await show(<Portal employees={withAssignments([closedOne])} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    const empty = screen.getByRole("heading", { name: "Current focus" }).closest("article")!;
+    expect(within(empty).getByText("No open assignment")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations on the Current work tab", async () => {
+    const { container } = await openWork([assignment(), closedOne]);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

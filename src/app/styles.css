@@ -27,3 +27,5 @@
 .staff-field select:focus-visible{outline:3px solid var(--focus-ring);outline-offset:1px}
 .departments-add{margin-top:24px;border-top:1px solid var(--line-divider);padding-top:20px}
 .departments-add h3{margin:0}
+/* Story 4.5: the profile Current work tab (assignment forms and history) */
+.assignment-history{list-style:none;margin:0;padding:0}.assignment-forms{display:flex;flex-direction:column;gap:20px;margin-top:20px}

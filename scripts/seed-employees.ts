@@ -10,13 +10,19 @@
 // Administrator account (pickSeedAdministrator: the Administrator whose email is SEED_ADMIN_EMAIL, else
 // the earliest-created Administrator; never a non-admin) only while
 // L&D has no manager; with no Administrator yet it warns to run `npm run db:seed-admin` first and
-// continues. Central R&D gets no manager. Other nested profile data stays in the fixture (read by employees-store); the fixture's
-// interviews and training are never read at runtime.
+// continues. Central R&D gets no manager. Story 4.5: after the department placement, each fixture
+// employee's former "current work" becomes one open assignment (assignmentSeedRows: fixed id from
+// assignmentSeedId, client "Not recorded", start date from the work period, else the join date; the
+// database copies the employee's department), insert-only, skipping employees who already have an open
+// assignment (a manager's own, or the seeded one); a seeded row that was closed is never re-inserted.
+// The fixture's Git commit counts are not migrated. Other nested profile data stays in the fixture (read
+// by employees-store); the fixture's interviews, training and current work are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
-  Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
+  assignmentSeedRows as AssignmentSeedRows, Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows,
+  trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
 import type {
   departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
@@ -32,9 +38,9 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows, assignmentSeedRows } = (await import(fixtureUrl)) as {
   employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
-  trainingSeedRows: typeof TrainingSeedRows;
+  trainingSeedRows: typeof TrainingSeedRows; assignmentSeedRows: typeof AssignmentSeedRows;
 };
 
 // Loaded the same way: the seed departments and the default department for fixture employees.
@@ -122,6 +128,30 @@ if (placed.error) {
   process.exit(1);
 }
 console.log(`Placed ${placed.data?.length ?? 0} fixture employees in the default department ${DEFAULT_EMPLOYEE_DEPARTMENT_ID} (employees with a department left unchanged).`);
+
+// Story 4.5, after the placement (the assignments trigger copies the employee's department and refuses
+// an employee without one). One open assignment per fixture employee, insert-only: employees who already
+// have an open assignment are skipped (the one-open index would refuse a second), and a seeded row that
+// was closed keeps its id, so it is ignored rather than duplicated.
+const alreadyOpen = await supabase.from("assignments").select("employee_id")
+  .in("employee_id", employees.map(e => e.id)).eq("status", "open");
+if (alreadyOpen.error) {
+  console.error(`Reading open assignments failed: ${alreadyOpen.error.message}`);
+  process.exit(1);
+}
+const withOpen = new Set((alreadyOpen.data ?? []).map(r => r.employee_id as string));
+const assignmentRows = assignmentSeedRows(employees).filter(r => !withOpen.has(r.employee_id));
+let insertedAssignments = 0;
+if (assignmentRows.length > 0) {
+  const assignments = await supabase.from("assignments")
+    .upsert(assignmentRows, { onConflict: "id", ignoreDuplicates: true, defaultToNull: false }).select("id");
+  if (assignments.error) {
+    console.error(`Seeding assignments failed: ${assignments.error.message}`);
+    process.exit(1);
+  }
+  insertedAssignments = assignments.data?.length ?? 0;
+}
+console.log(`Inserted ${insertedAssignments} new open assignments (${withOpen.size} employees with an open assignment skipped; existing rows left unchanged).`);
 
 // After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
 const interviewRows = interviewSeedRows(employees);
