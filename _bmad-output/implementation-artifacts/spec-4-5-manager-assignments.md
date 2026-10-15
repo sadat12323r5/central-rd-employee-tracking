@@ -2,7 +2,8 @@
 title: 'Story 4.5: Managers create and close assignments'
 type: 'feature'
 created: '2026-10-14'
-status: 'ready-for-dev'
+status: 'in-progress'
+baseline_revision: 'cd0cd97c1cfe5ce459087a4e6ab007296fb5ffa2'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
