@@ -10,7 +10,7 @@ export function pagedClient<T>(pages: (T[] | "error")[]) {
     from() {
       const answer = pages[request++] ?? [];
       const builder: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "order", "returns"]) builder[method] = () => builder;
+      for (const method of ["select", "eq", "is", "order", "returns"]) builder[method] = () => builder;
       builder.in = (_column: string, values: unknown[]) => { ins.push(values); return builder; };
       builder.range = (from: number, to: number) => { ranges.push([from, to]); return builder; };
       builder.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => Promise.resolve(

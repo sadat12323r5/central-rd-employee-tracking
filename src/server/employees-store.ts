@@ -4,6 +4,9 @@ import {
   derivedFields, invalidEmployeeDetailsFields, invalidNewEmployeeFields, normalizeEmployeeDetails, normalizeNewEmployee,
   type EmployeeDetailsInput, type NewEmployeeField, type NewEmployeeInput,
 } from "@/domain/employee-input";
+import {
+  employmentHistoryStore, EmploymentHistoryUnavailableError, type EmploymentHistoryEntry, type EmploymentHistoryStore,
+} from "./employment-history-store";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { ManagerIdentity, SessionIdentity, StaffIdentity } from "./session";
@@ -13,9 +16,10 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 
 // The only way the app reads employees (AD-2). Basic details come from the Supabase `employees`
 // table, external interviews from the `external_interviews` table (through interviews-store,
-// Story 2.1) and training through training-store (Story 3.1); the other nested profile data (skills,
-// history, work, attendance summary, review) still comes from the fixture, merged by Employee ID, so
-// callers see the same shape. The fixture's interviews and training are never read here.
+// Story 2.1), training through training-store (Story 3.1) and employment history through
+// employment-history-store (Story 7.3, active entries, newest first); the other nested profile data
+// (skills, work, attendance summary, review) still comes from the fixture, merged by Employee ID, so
+// callers see the same shape. The fixture's interviews, training and history are never read here.
 //
 // Every read (Administrator and Staff, Story 1.3) goes through a per-request client carrying the
 // signed-in user's Supabase JWT, so the employees RLS policies are the enforced rule: an admin
@@ -136,10 +140,10 @@ const MANAGER_COLUMNS = `${COLUMNS},department_id,archived_at`;
 /** Which extra fields a read maps: Administrator (account, archived, department), manager (archived, department) or none. */
 export type EmployeeView = "admin" | "manager" | "basic";
 
-type NestedProfile = Pick<Employee, "skills" | "history" | "work" | "attendance" | "review">;
+type NestedProfile = Pick<Employee, "skills" | "work" | "attendance" | "review">;
 
 const emptyProfile = (): NestedProfile => ({
-  skills: [], history: [],
+  skills: [],
   work: { project: "", role: "", allocation: 0, update: "", commits: 0, period: "" },
   attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
   review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" },
@@ -148,18 +152,19 @@ const emptyProfile = (): NestedProfile => ({
 function nestedFor(id: string): NestedProfile {
   const source = fixture.find(e => e.id === id);
   if (!source) return emptyProfile();
-  const { skills, history, work, attendance, review } = structuredClone(source);
-  return { skills, history, work, attendance, review };
+  const { skills, work, attendance, review } = structuredClone(source);
+  return { skills, work, attendance, review };
 }
 
 /**
- * Maps a row to an Employee with the given interviews (from interviews-store) and training (from
- * training-store). The `admin` view (`true` is the same) adds `hasAccount` from `auth_user_id`,
+ * Maps a row to an Employee with the given interviews (from interviews-store), training (from
+ * training-store) and employment history (from employment-history-store, Story 7.3). The `admin` view (`true` is the same) adds `hasAccount` from `auth_user_id`,
  * `archived` from `archived_at` and `departmentId` from `department_id`; the `manager` view (Story 4.3)
  * adds `archived` and `departmentId` only.
  */
 export function toEmployee(
   row: EmployeeRow, view: EmployeeView | boolean = "basic", interviews: Employee["interviews"] = [], training: Employee["training"] = [],
+  history: Employee["history"] = [],
 ): Employee {
   const mode = view === true ? "admin" : view === false ? "basic" : view;
   return {
@@ -169,6 +174,7 @@ export function toEmployee(
     ...(mode === "admin" ? { hasAccount: Boolean(row.auth_user_id) } : {}),
     ...(mode !== "basic" ? { archived: Boolean(row.archived_at), departmentId: row.department_id ?? null } : {}),
     ...nestedFor(row.employee_id),
+    history,
     training,
     interviews,
   };
@@ -181,6 +187,10 @@ const interviewsOf = (all: ExternalInterview[], employeeId: string): Employee["i
 /** The training of one employee, in the store's order, without the store's `employeeId`. */
 const trainingOf = (all: TrainingEntry[], employeeId: string): Employee["training"] =>
   all.filter(t => t.employeeId === employeeId).map(({ employeeId: _, ...entry }) => entry);
+
+/** The employment history of one employee, in the store's order (newest first), without the store's extra fields. */
+const historyOf = (all: EmploymentHistoryEntry[], employeeId: string): Employee["history"] =>
+  all.filter(h => h.employeeId === employeeId).map(({ employeeId: _, createdAt: __, ...entry }) => entry);
 
 type Result<T> = { data: T | null; error: unknown };
 type DbError = { code?: string; message?: string; details?: string };
@@ -215,11 +225,13 @@ export type EmployeesStoreClients = {
   interviews: Pick<InterviewsStore, "listFor">;
   /** Where profile training comes from (RLS-scoped through the same per-request JWT). */
   training: Pick<TrainingStore, "listFor">;
+  /** Story 7.3: where profile employment history comes from (RLS-scoped through the same per-request JWT). */
+  history: Pick<EmploymentHistoryStore, "listFor">;
   /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
   scope?: ManagerScope;
 };
 
-export function createEmployeesStore({ userClient, interviews, training, scope = managerScope }: EmployeesStoreClients): EmployeesStore {
+export function createEmployeesStore({ userClient, interviews, training, history, scope = managerScope }: EmployeesStoreClients): EmployeesStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T | null> {
     let result: Result<T>;
     try {
@@ -251,6 +263,16 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
     }
   }
 
+  /** A failed history read makes the whole record unavailable: never a profile with missing history. */
+  async function historyFor(session: SessionIdentity, employeeId?: string): Promise<EmploymentHistoryEntry[]> {
+    try {
+      return await history.listFor(session, employeeId);
+    } catch (cause) {
+      if (cause instanceof EmploymentHistoryUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   const columnsFor = (session: SessionIdentity) => (session.role === "admin" ? ADMIN_COLUMNS : COLUMNS);
 
   /** The employee ids in a manager's subtree. A scope that cannot be read makes the records unavailable: never a partial list. */
@@ -267,7 +289,7 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
   async function listForManager(session: ManagerIdentity): Promise<Employee[]> {
     const ids = await managedEmployeeIds(session);
     if (ids.size === 0) return [];
-    const [rows, allTraining] = await Promise.all([
+    const [rows, allTraining, allHistory] = await Promise.all([
       // Paged (Story 8.2) like the Administrator list: employee_id is the primary key, so the order is total.
       readAllPages(async (from, to) => {
         const page = await run<EmployeeRow[]>(t => t.select(MANAGER_COLUMNS).in("employee_id", [...ids])
@@ -276,10 +298,11 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
         return page;
       }),
       trainingFor(session),
+      historyFor(session),
     ]);
     // Defence in depth: never a row outside the scope, whatever the query returned.
     return rows.filter(row => ids.has(row.employee_id))
-      .map(row => toEmployee(row, "manager", [], trainingOf(allTraining, row.employee_id)));
+      .map(row => toEmployee(row, "manager", [], trainingOf(allTraining, row.employee_id), historyOf(allHistory, row.employee_id)));
   }
 
   async function getForManager(session: ManagerIdentity, id: string): Promise<Employee | null> {
@@ -287,7 +310,8 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
     if (!(await managedEmployeeIds(session)).has(id)) return null;
     const row = await run<EmployeeRow>(t => t.select(MANAGER_COLUMNS).eq("employee_id", id).maybeSingle<EmployeeRow>());
     if (!row) return null;
-    return toEmployee(row, "manager", [], trainingOf(await trainingFor(session, id), id));
+    const [ownTraining, ownHistory] = await Promise.all([trainingFor(session, id), historyFor(session, id)]);
+    return toEmployee(row, "manager", [], trainingOf(ownTraining, id), historyOf(ownHistory, id));
   }
 
   /** Story 7.1: the departments a manager may add employees to. Scope failure: unavailable, never "allowed". */
@@ -353,7 +377,7 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
     async listFor(session) {
       if (session.role === "manager") return listForManager(session);
       // One interviews and one training read for the whole list: everyone's for an admin, the caller's own for staff.
-      const [rows, all, allTraining] = await Promise.all([
+      const [rows, all, allTraining, allHistory] = await Promise.all([
         // Paged (Story 8.2): one request is capped at PostgREST's max_rows. employee_id is the primary
         // key, so ordering by it alone is total.
         readAllPages(async (from, to) => {
@@ -367,9 +391,11 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
         }),
         interviewsFor(session),
         trainingFor(session),
+        historyFor(session),
       ]);
       return rows.map(row => toEmployee(
         row, session.role === "admin", interviewsOf(all, row.employee_id), trainingOf(allTraining, row.employee_id),
+        historyOf(allHistory, row.employee_id),
       ));
     },
     async getFor(session, id) {
@@ -377,8 +403,8 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
       if (session.role !== "admin" && id !== session.employeeId) return null;
       const row = await run<EmployeeRow>(t => t.select(columnsFor(session)).eq("employee_id", id).maybeSingle<EmployeeRow>());
       if (!row) return null;
-      const [own, ownTraining] = await Promise.all([interviewsFor(session, id), trainingFor(session, id)]);
-      return toEmployee(row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id));
+      const [own, ownTraining, ownHistory] = await Promise.all([interviewsFor(session, id), trainingFor(session, id), historyFor(session, id)]);
+      return toEmployee(row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id), historyOf(ownHistory, id));
     },
     async isActive(session) {
       const row = await run<{ archived_at: string | null }>(t => t.select("archived_at").eq("employee_id", session.employeeId).maybeSingle<{ archived_at: string | null }>());
@@ -388,5 +414,5 @@ export function createEmployeesStore({ userClient, interviews, training, scope =
 }
 
 export const employeesStore: EmployeesStore = createEmployeesStore({
-  userClient: getUserClient, interviews: interviewsStore, training: trainingStore,
+  userClient: getUserClient, interviews: interviewsStore, training: trainingStore, history: employmentHistoryStore,
 });

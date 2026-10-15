@@ -11,6 +11,9 @@ import { many, pagedClient } from "./support/paged-client";
 import { InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "@/server/interviews-store";
 import type { SessionIdentity } from "@/server/session";
 import { TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "@/server/training-store";
+import {
+  EmploymentHistoryUnavailableError, type EmploymentHistoryEntry, type EmploymentHistoryStore,
+} from "@/server/employment-history-store";
 
 const rowFor = (id: string): EmployeeRow => {
   const e = fixture.find(x => x.id === id)!;
@@ -97,8 +100,26 @@ function fakeTraining(rows: TrainingEntry[] = fixtureTraining, fail = false) {
   return { store, calls };
 }
 
-const both = (client: SupabaseClient, interviews = fakeInterviews().store, training = fakeTraining().store) => ({
-  userClient: async () => client, interviews, training,
+/** What employment-history-store would return for the fixture: each employee's entries, newest first. */
+const fixtureHistory: EmploymentHistoryEntry[] = fixture.flatMap(e => e.history.map(h => ({ ...h, employeeId: e.id, createdAt: "2026-10-15T00:00:00Z" })));
+
+/** Stand-in for employment-history-store: applies the same session scoping and records every call. */
+function fakeHistory(rows: EmploymentHistoryEntry[] = fixtureHistory, fail = false) {
+  const calls: [SessionIdentity, string | undefined][] = [];
+  const store: Pick<EmploymentHistoryStore, "listFor"> = {
+    async listFor(session, employeeId) {
+      calls.push([session, employeeId]);
+      if (fail) throw new EmploymentHistoryUnavailableError({ cause: "connection refused" });
+      if (session.role === "staff" && employeeId !== undefined && employeeId !== session.employeeId) return [];
+      const scope = session.role === "staff" ? session.employeeId : employeeId;
+      return rows.filter(r => scope === undefined || r.employeeId === scope).map(r => ({ ...r }));
+    },
+  };
+  return { store, calls };
+}
+
+const both = (client: SupabaseClient, interviews = fakeInterviews().store, training = fakeTraining().store, history = fakeHistory().store) => ({
+  userClient: async () => client, interviews, training, history,
 });
 const withoutEmployee = ({ employeeId: _, ...rest }: ExternalInterview) => rest;
 
@@ -166,8 +187,28 @@ describe("employees-store and manager sessions (Story 4.3: scoped to the departm
     };
     return { store, calls };
   };
-  const storeWith = (client: SupabaseClient, scope: ManagerScope, interviews = fakeInterviews(), training = managerTraining()) =>
-    createEmployeesStore({ userClient: async () => client, interviews: interviews.store, training: training.store, scope });
+  const storeWith = (client: SupabaseClient, scope: ManagerScope, interviews = fakeInterviews(), training = managerTraining(), history = fakeHistory()) =>
+    createEmployeesStore({ userClient: async () => client, interviews: interviews.store, training: training.store, history: history.store, scope });
+
+  it("attaches each in-scope employee's employment history from the history store, read as the manager", async () => {
+    const { client } = fakeClient(rows());
+    const history = fakeHistory();
+    const store = storeWith(client, fakeScope(["BS-1001", "BS-1002"]).scope, fakeInterviews(), managerTraining(), history);
+    const list = await store.listFor(manager);
+    expect(list.map(e => [e.id, e.history.map(h => h.id)])).toEqual([
+      ["BS-1001", fixture.find(e => e.id === "BS-1001")!.history.map(h => h.id)],
+      ["BS-1002", fixture.find(e => e.id === "BS-1002")!.history.map(h => h.id)],
+    ]);
+    expect((await store.getFor(manager, "BS-1001"))?.history).toEqual(fixture.find(e => e.id === "BS-1001")!.history);
+    expect(history.calls).toEqual([[manager, undefined], [manager, "BS-1001"]]);
+  });
+
+  it("reports a manager's records unavailable when the history read fails", async () => {
+    const { client } = fakeClient(rows());
+    const store = storeWith(client, fakeScope(["BS-1001"]).scope, fakeInterviews(), managerTraining(), fakeHistory([], true));
+    await expect(store.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(store.getFor(manager, "BS-1001")).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
 
   it("lists only in-scope employees, archived ones flagged, with their department and never the account link", async () => {
     const { client, queries } = fakeClient(rows());
@@ -335,6 +376,63 @@ describe("employees-store data", () => {
   });
 });
 
+describe("employees-store employment history (Story 7.3)", () => {
+  const historyEntry = (employeeId: string, id: string, period: string): EmploymentHistoryEntry => ({
+    id, employeeId, role: `Role ${id}`, company: "Brain Station 23", period, detail: "", createdAt: "2026-10-15T00:00:00Z",
+  });
+
+  it("takes history from the history store, never from the fixture", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client, fakeInterviews().store, fakeTraining().store, fakeHistory([]).store));
+    expect((await store.getFor(admin, "BS-1001"))?.history).toEqual([]);
+    expect((await store.listFor(admin)).flatMap(e => e.history)).toEqual([]);
+    expect(fixture.find(e => e.id === "BS-1001")!.history.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the store's order and drops the store's employeeId and createdAt", async () => {
+    const { client } = fakeClient(seeded);
+    const rows = [historyEntry("BS-1001", "h-new", "Mar 2023 – Present"), historyEntry("BS-1001", "h-old", "2021 – 2022")];
+    const employee = await createEmployeesStore(both(client, fakeInterviews().store, fakeTraining().store, fakeHistory(rows).store)).getFor(admin, "BS-1001");
+    expect(employee?.history).toEqual([
+      { id: "h-new", role: "Role h-new", company: "Brain Station 23", period: "Mar 2023 – Present", detail: "" },
+      { id: "h-old", role: "Role h-old", company: "Brain Station 23", period: "2021 – 2022", detail: "" },
+    ]);
+  });
+
+  it("makes one history read for an admin's whole list and groups it by employee", async () => {
+    const { client } = fakeClient(seeded);
+    const history = fakeHistory([historyEntry("BS-1001", "h-1", "2023"), historyEntry("BS-1002", "h-2", "2022"), historyEntry("BS-1001", "h-3", "2020")]);
+    const list = await createEmployeesStore(both(client, fakeInterviews().store, fakeTraining().store, history.store)).listFor(admin);
+    expect(history.calls).toEqual([[admin, undefined]]);
+    expect(list.map(e => [e.id, e.history.map(h => h.id)])).toEqual([["BS-1001", ["h-1", "h-3"]], ["BS-1002", ["h-2"]], ["BS-1003", []]]);
+  });
+
+  it("gives staff only their own history, on the list and on their own record", async () => {
+    const { client } = fakeClient(seeded);
+    const history = fakeHistory([historyEntry("BS-1001", "h-1", "2023"), historyEntry("BS-1002", "h-2", "2022")]);
+    const store = createEmployeesStore(both(client, fakeInterviews().store, fakeTraining().store, history.store));
+    expect((await store.listFor(staff)).map(e => e.history.map(h => h.id))).toEqual([["h-2"]]);
+    expect((await store.getFor(staff, "BS-1002"))?.history.map(h => h.id)).toEqual(["h-2"]);
+    expect(history.calls).toEqual([[staff, undefined], [staff, "BS-1002"]]);
+  });
+
+  it("throws EmployeesUnavailableError (never a profile with missing history) when the history read fails", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client, fakeInterviews().store, fakeTraining().store, fakeHistory([], true).store));
+    for (const call of [() => store.listFor(admin), () => store.listFor(staff), () => store.getFor(admin, "BS-1001"), () => store.getFor(staff, "BS-1002")]) {
+      await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    }
+  });
+
+  it("rethrows a non-availability error from the history read unchanged", async () => {
+    const { client } = fakeClient(seeded);
+    const bug = new TypeError("bug");
+    const store = createEmployeesStore(both(client, fakeInterviews().store, fakeTraining().store, { listFor: async () => { throw bug; } }));
+    await expect(store.listFor(admin)).rejects.toBe(bug);
+    await expect(store.getFor(admin, "BS-1001")).rejects.toBe(bug);
+  });
+});
+
 const entry = (employeeId: string, id: string, extra: Partial<TrainingEntry> = {}): TrainingEntry => ({
   id, employeeId, name: `Programme ${id}`, provider: "BS23 Learning & Development", progress: 100, date: "2026-08-20", result: "Completed", ...extra,
 });
@@ -422,7 +520,7 @@ describe("employees-store unavailability", () => {
 
   it("throws EmployeesUnavailableError when Supabase is not configured", async () => {
     const unconfigured = () => { throw new Error("Supabase is not configured"); };
-    const store = createEmployeesStore({ userClient: async () => unconfigured(), interviews: fakeInterviews().store, training: fakeTraining().store });
+    const store = createEmployeesStore({ userClient: async () => unconfigured(), interviews: fakeInterviews().store, training: fakeTraining().store, history: fakeHistory().store });
     for (const call of calls(store)) await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 
@@ -444,7 +542,7 @@ describe("employees-store unavailability", () => {
 describe("employees-store client and columns", () => {
   it("reads with the user's JWT client (RLS) for both roles; it has no service-role client to use", async () => {
     const user = fakeClient(seeded);
-    const store = createEmployeesStore({ userClient: async () => user.client, interviews: fakeInterviews().store, training: fakeTraining().store });
+    const store = createEmployeesStore({ userClient: async () => user.client, interviews: fakeInterviews().store, training: fakeTraining().store, history: fakeHistory().store });
     await store.listFor(admin);
     await store.getFor(admin, "BS-1003");
     await store.listFor(staff);
@@ -506,7 +604,7 @@ describe("employees-store client and columns", () => {
   });
 
   it("reports the directory unavailable when the user client cannot be created", async () => {
-    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); }, interviews: fakeInterviews().store, training: fakeTraining().store });
+    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); }, interviews: fakeInterviews().store, training: fakeTraining().store, history: fakeHistory().store });
     await expect(store.listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
     await expect(store.getFor(staff, "BS-1002")).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
@@ -562,7 +660,7 @@ describe("employees-store manager paging (Story 4.3 with Story 8.2)", () => {
   it("pages a manager's subtree past 1000 rows, never truncating it", async () => {
     const ids = many(2003, i => `BS-${String(i).padStart(4, "0")}`);
     const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
-    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, scope: scopeOf(ids) });
+    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, history: fakeHistory().store, scope: scopeOf(ids) });
     const list = await store.listFor(manager);
     expect(list).toHaveLength(2003);
     expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
@@ -570,7 +668,7 @@ describe("employees-store manager paging (Story 4.3 with Story 8.2)", () => {
 
   it("throws the unavailable error when a later manager page fails", async () => {
     const { client } = pagedClient([many(1000, rowAt), "error"]);
-    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, scope: scopeOf(["BS-0001"]) });
+    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, history: fakeHistory().store, scope: scopeOf(["BS-0001"]) });
     await expect(store.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });
@@ -619,7 +717,7 @@ describe("employees-store.create (Story 7.1)", () => {
   }
 
   const storeWith = (client: SupabaseClient, scope = fakeScope([DEPT]).scope) =>
-    createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: fakeTraining().store, scope });
+    createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: fakeTraining().store, history: fakeHistory().store, scope });
 
   it("lets an admin add an employee with normalised input and derived fields, never an account link or archive flag", async () => {
     const { client, inserts } = insertClient();
@@ -769,7 +867,7 @@ describe("employees-store.updateDetails (Story 7.2)", () => {
   }
 
   const storeWith = (client: SupabaseClient, scope = fakeScope(["BS-4321"]).scope) =>
-    createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: fakeTraining().store, scope });
+    createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: fakeTraining().store, history: fakeHistory().store, scope });
 
   it("lets an admin save the five fields, normalised, through the rpc only", async () => {
     const { client, rpcs, tables } = rpcClient();

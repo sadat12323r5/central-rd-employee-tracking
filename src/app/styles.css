@@ -30,3 +30,5 @@
 /* Story 7.1: add an employee */
 .add-employee{margin-top:24px}.add-employee h2{margin-bottom:6px}.add-employee-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.add-employee-grid .staff-field:first-child{grid-column:auto}.add-employee-grid small{font-size:11px}
 .employee-details{grid-column:1/-1}.employee-details h2{margin-bottom:6px}.read-only-field .field-label{font-size:12px;font-weight:600}.read-only-field strong{padding:11px 0;font-size:12px}
+/* Story 7.3: employment history */
+.history-controls{margin-top:4px}.history-controls .staff-log{margin-top:8px}.history-controls .staff-actions{gap:18px}.employment-history-add{margin-top:8px;border-top:1px solid var(--line-divider);padding-top:20px}.employment-history-add h3{margin:0}

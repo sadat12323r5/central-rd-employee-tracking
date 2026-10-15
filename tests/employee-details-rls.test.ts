@@ -15,6 +15,7 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createEmploymentHistoryStore } from "@/server/employment-history-store";
 import { createEmployeesStore, EmployeeForbiddenError } from "@/server/employees-store";
 import { createInterviewsStore } from "@/server/interviews-store";
 import { createManagerScope } from "@/server/manager-scope";
@@ -123,6 +124,7 @@ describe.skipIf(!configured)("employee details update (shared Supabase project)"
       userClient,
       interviews: createInterviewsStore({ userClient }),
       training: createTrainingStore({ userClient, lms: createStubLmsClient({ userClient }) }),
+      history: createEmploymentHistoryStore({ userClient, scope: createManagerScope({ userClient }) }),
       scope: createManagerScope({ userClient }),
     });
   }

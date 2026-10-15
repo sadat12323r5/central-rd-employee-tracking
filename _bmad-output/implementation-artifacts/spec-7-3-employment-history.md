@@ -2,7 +2,7 @@
 title: 'Story 7.3: Maintain employment history'
 type: 'feature'
 created: '2026-10-14'
-baseline_revision: '89dc0a36f6e331c69a4ed60e29c5f7579fc26793'
+baseline_revision: '5b60d16b07c61cf2dff68d679f987a91f4e5f6c0'
 status: 'in-progress'
 review_loop_iteration: 0
 followup_review_recommended: false

@@ -11,6 +11,7 @@ import { addInterviewAction, updateInterviewAction, withdrawInterviewAction } fr
 import { signOut } from "@/server/auth";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
+import EmploymentHistoryPanel from "./employment-history-panel";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -274,6 +275,12 @@ export default function StaffAttendance({ employee, entries, serverNow, current 
         <Suspense fallback={<CompletedTable entries={completedTraining} />}>
           <CompletedWithLms stored={completedTraining} current={current} employeeId={employee.id} />
         </Suspense>
+      </section>
+
+      <section className="panel staff-employment" aria-labelledby="employment-heading">
+        <h2 id="employment-heading">Employment history</h2>
+        <p className="muted">Your current role and previous employment, newest first. You can add, correct or remove your own entries.</p>
+        <EmploymentHistoryPanel employeeId={employee.id} entries={employee.history} canEdit />
       </section>
 
       <section className="panel staff-interviews" aria-labelledby="interviews-heading">

@@ -12,6 +12,10 @@ const { addInterviewAction, updateInterviewAction, withdrawInterviewAction } = v
   addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn(),
 }));
 vi.mock("@/server/interviews-actions", () => ({ addInterviewAction, updateInterviewAction, withdrawInterviewAction }));
+const { addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploymentHistoryAction } = vi.hoisted(() => ({
+  addEmploymentHistoryAction: vi.fn(), updateEmploymentHistoryAction: vi.fn(), removeEmploymentHistoryAction: vi.fn(),
+}));
+vi.mock("@/server/employment-history-actions", () => ({ addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploymentHistoryAction }));
 
 import StaffAttendance from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
@@ -108,7 +112,9 @@ describe("StaffAttendance external interviews", () => {
 
   it("offers a labelled add form with required company, role, date and stage, and an optional outcome", async () => {
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
-    for (const label of ["Company", "Role", "Stage"]) expect(screen.getByRole("textbox", { name: label })).toBeRequired();
+    // Scoped to the interviews section: the Employment history form (Story 7.3) has its own "Role".
+    const interviews = within(screen.getByRole("region", { name: "External interviews" }));
+    for (const label of ["Company", "Role", "Stage"]) expect(interviews.getByRole("textbox", { name: label })).toBeRequired();
     expect(screen.getByLabelText("Interview date")).toHaveAttribute("type", "date");
     expect(screen.getByLabelText("Interview date")).toBeRequired();
     expect(screen.getByRole("textbox", { name: "Outcome (optional)" })).not.toBeRequired();
@@ -122,7 +128,7 @@ describe("StaffAttendance external interviews", () => {
     const user = userEvent.setup();
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
     await user.type(screen.getByRole("textbox", { name: "Company" }), "Orbit Analytics");
-    await user.type(screen.getByRole("textbox", { name: "Role" }), "AI Engineer");
+    await user.type(within(screen.getByRole("region", { name: "External interviews" })).getByRole("textbox", { name: "Role" }), "AI Engineer");
     await user.type(screen.getByLabelText("Interview date"), "2026-10-20");
     await user.type(screen.getByRole("textbox", { name: "Stage" }), "Recruiter screen");
     await user.click(screen.getByRole("button", { name: "Add interview" }));
@@ -137,7 +143,7 @@ describe("StaffAttendance external interviews", () => {
     const user = userEvent.setup();
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
     await user.type(screen.getByRole("textbox", { name: "Company" }), "Orbit");
-    await user.type(screen.getByRole("textbox", { name: "Role" }), "AI Engineer");
+    await user.type(within(screen.getByRole("region", { name: "External interviews" })).getByRole("textbox", { name: "Role" }), "AI Engineer");
     await user.type(screen.getByLabelText("Interview date"), "2026-10-20");
     await user.type(screen.getByRole("textbox", { name: "Stage" }), "Screen");
     await user.click(screen.getByRole("button", { name: "Add interview" }));
@@ -335,5 +341,33 @@ describe("StaffAttendance current enrolments (Story 3.2)", () => {
     expect(await within(currentSection()).findByText("No current enrolments.")).toBeInTheDocument();
     expect(screen.queryByText("Someone else's course")).not.toBeInTheDocument();
     expect(screen.queryByText("Secure coding basics")).not.toBeInTheDocument();
+  });
+});
+
+describe("StaffAttendance employment history (Story 7.3)", () => {
+  it("shows the employee's own history, newest first, with add, edit and remove", async () => {
+    const { container } = await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const section = within(screen.getByRole("region", { name: "Employment history" }));
+    const items = [...screen.getByRole("region", { name: "Employment history" }).querySelectorAll(".timeline > .timeline-item")];
+    expect(items.map(item => item.querySelector(":scope > h3")?.textContent)).toEqual(employee.history.map(h => h.role));
+    expect(section.getByRole("form", { name: "Add employment entry" })).toBeInTheDocument();
+    for (const h of employee.history) {
+      expect(section.getByRole("button", { name: `Edit employment entry: ${h.role}, ${h.company}` })).toBeInTheDocument();
+      expect(section.getByRole("button", { name: `Remove employment entry: ${h.role}, ${h.company}` })).toBeInTheDocument();
+    }
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("sends the session's own Employee ID with an add (the server ignores anyone else's)", async () => {
+    addEmploymentHistoryAction.mockResolvedValue({ error: "", message: "Employment entry added." });
+    const user = userEvent.setup();
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const form = within(screen.getByRole("form", { name: "Add employment entry" }));
+    await user.type(form.getByLabelText("Role"), "Intern");
+    await user.type(form.getByLabelText("Employer"), "Orbit");
+    await user.type(form.getByLabelText("Period"), "2019");
+    await user.click(form.getByRole("button", { name: "Add entry" }));
+    expect(await screen.findByText("Employment entry added.")).toBeInTheDocument();
+    expect((addEmploymentHistoryAction.mock.calls[0][1] as FormData).get("employeeId")).toBe(employee.id);
   });
 });

@@ -10,13 +10,15 @@
 // Administrator account (pickSeedAdministrator: the Administrator whose email is SEED_ADMIN_EMAIL, else
 // the earliest-created Administrator; never a non-admin) only while
 // L&D has no manager; with no Administrator yet it warns to run `npm run db:seed-admin` first and
-// continues. Central R&D gets no manager. Other nested profile data stays in the fixture (read by employees-store); the fixture's
-// interviews and training are never read at runtime.
+// continues. Central R&D gets no manager. Story 7.3: the fixture's employment history is inserted into
+// `employment_history` (ids from employmentHistorySeedId), insert-only, so edits and removals made in the
+// app survive a re-seed. Other nested profile data (skills, work, attendance, review) stays in the fixture
+// (read by employees-store); the fixture's interviews, training and history are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
-  Employee, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
+  Employee, employmentHistorySeedRows as EmploymentHistorySeedRows, interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
 import type {
   departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
@@ -32,9 +34,9 @@ if (!url || !key) {
 
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
-const { employees, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
-  employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
-  trainingSeedRows: typeof TrainingSeedRows;
+const { employees, employmentHistorySeedRows, interviewSeedRows, lmsStubSeedRows, trainingSeedRows } = (await import(fixtureUrl)) as {
+  employees: Employee[]; employmentHistorySeedRows: typeof EmploymentHistorySeedRows; interviewSeedRows: typeof InterviewSeedRows;
+  lmsStubSeedRows: typeof LmsStubSeedRows; trainingSeedRows: typeof TrainingSeedRows;
 };
 
 // Loaded the same way: the seed departments and the default department for fixture employees.
@@ -122,6 +124,18 @@ if (placed.error) {
   process.exit(1);
 }
 console.log(`Placed ${placed.data?.length ?? 0} fixture employees in the default department ${DEFAULT_EMPLOYEE_DEPARTMENT_ID} (employees with a department left unchanged).`);
+
+// After the employees: employment_history.employee_id references employees (ON DELETE RESTRICT).
+// Insert-only: existing rows are never updated, so edits and removals made in the app survive a re-seed
+// (a removed row can never change: the guard trigger refuses it). defaultToNull: false leaves the
+// columns a row does not name (created_by, timestamps, removed_at) to the table and its trigger.
+const history = await supabase.from("employment_history")
+  .upsert(employmentHistorySeedRows(employees), { onConflict: "id", ignoreDuplicates: true, defaultToNull: false }).select("id");
+if (history.error) {
+  console.error(`Seeding employment history failed: ${history.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${history.data?.length ?? 0} new employment history entries (existing ones left unchanged).`);
 
 // After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
 const interviewRows = interviewSeedRows(employees);
