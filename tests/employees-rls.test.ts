@@ -102,7 +102,8 @@ describe.skipIf(!configured)("employees RLS (shared Supabase project)", () => {
     expect(data ?? []).toEqual([]);
   });
 
-  it("does not let a signed-in user write employees", async () => {
+  // Story 7.1: the Administrator may now insert, but only with a department (employees_insert_admin).
+  it("does not let a signed-in user write an employee without a department", async () => {
     const admin = await signedIn(adminEmail);
     const { error } = await admin.from("employees").insert(row(spareId, `rls-write-${run}@example.com`));
     expect(error).not.toBeNull();

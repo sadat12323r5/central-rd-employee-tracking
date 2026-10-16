@@ -53,6 +53,12 @@ describe("StaffAttendance", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("offers no Edit employee details form on the Staff member's own record (Story 7.2)", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Edit employee details" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
+  });
+
   it("shows the running day, clock-out and the log once clocked in", async () => {
     const { container } = await show(<StaffAttendance employee={employee} entries={[open, stale]} serverNow={now} current={none()} />);
     expect(screen.getByText(/Clocked in at 09:00/)).toBeInTheDocument();
@@ -569,5 +575,39 @@ describe("StaffAttendance past projects (Story 4.7)", () => {
   it("has no detectable accessibility violations with past projects and the add form", async () => {
     const { container } = await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("StaffAttendance skills and evaluation (Story 7.4: read-only)", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now)); });
+  afterEach(() => { vi.useRealTimers(); });
+  const section = () => screen.getByRole("region", { name: "Skills & evaluation" });
+
+  it("shows the employee's own skills and evaluation, with the reviewer and D MMM YYYY date", async () => {
+    const { container } = await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const view = within(section());
+    for (const skill of employee.skills) expect(view.getByText(skill.name)).toBeInTheDocument();
+    expect(view.getAllByRole("img", { name: /out of 5$/ })).toHaveLength(employee.skills.length);
+    expect(view.getByText(`14 Sep 2026 · ${employee.review.reviewer}`)).toBeInTheDocument();
+    expect(view.getByText(employee.review.strengths)).toBeInTheDocument();
+    expect(view.getByText(employee.review.next)).toBeInTheDocument();
+    expect(view.getByText(employee.review.readiness)).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("offers no form to change skills or the evaluation", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Rate a skill" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Edit evaluation" })).not.toBeInTheDocument();
+    expect(within(section()).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(section()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows the empty states when nothing is recorded yet", async () => {
+    const bare = { ...employee, skills: [], review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" } };
+    await show(<StaffAttendance employee={bare} entries={[]} serverNow={now} current={none()} />);
+    expect(within(section()).getByText("No skills assessed yet.")).toBeInTheDocument();
+    expect(within(section()).getByText("No evaluation recorded yet.")).toBeInTheDocument();
+    expect(within(section()).queryByText(/Not recorded/)).not.toBeInTheDocument();
   });
 });
