@@ -63,8 +63,13 @@ begin
     raise exception 'the employee, author and creation time of an employment history entry cannot be changed'
       using errcode = '23514';
   end if;
-  -- The removal time is the database's, never a client-chosen value.
+  -- The removal time is the database's, never a client-chosen value, and a removal keeps the entry as it
+  -- was: role, employer, period and detail cannot change in the same update.
   if old.removed_at is null and new.removed_at is not null then
+    if (new.role, new.employer, new.period, new.detail) is distinct from (old.role, old.employer, old.period, old.detail) then
+      raise exception 'removing employment history entry % cannot also change it', old.id
+        using errcode = '23514';
+    end if;
     new.removed_at := now();
   end if;
   new.updated_at := now();
@@ -91,6 +96,12 @@ $$;
 create trigger employment_history_no_delete
   before delete on public.employment_history
   for each row execute function public.employment_history_no_delete();
+
+-- TRUNCATE skips row triggers: revoke it from the API roles and refuse it for any role that still holds it.
+revoke truncate on public.employment_history from anon, authenticated, service_role;
+create trigger employment_history_no_truncate
+  before truncate on public.employment_history
+  for each statement execute function public.employment_history_no_delete();
 
 alter table public.employment_history enable row level security;
 

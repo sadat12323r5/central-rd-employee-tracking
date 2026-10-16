@@ -73,3 +73,9 @@
 ## Blocked: Stories 5.2, 5.3, 5.4 (recorded 2026-10-14 by the unattended story loop)
 
 Story 5.2 counts working days "against the calendar (weekends and holidays excluded)" and rejects "a year outside the calendar". That calendar is Story 5.1, which is blocked on the System Owner-approved holiday calendar (sprint-status action item). Stories 5.3 and 5.4 build on 5.2's leave records. All three stay `backlog` with a `# blocked` note until 5.1 is unblocked.
+
+## Story 7.3 (recorded 2026-10-16)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-3-employment-history.md`
+  summary: Employment-history edits are last-write-wins (no optimistic concurrency), like interviews; archived employees and archived subjects can still have history written (no archived_at check in RLS or store, as with interviews); the db:seed history write is untested; no e2e drives Staff self-service or a manager.
+  evidence: Recorded in the spec's deferred list with locations.

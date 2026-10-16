@@ -3,14 +3,42 @@ title: 'Story 7.3: Maintain employment history'
 type: 'feature'
 created: '2026-10-14'
 baseline_revision: '5b60d16b07c61cf2dff68d679f987a91f4e5f6c0'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-7-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-7-2-edit-basic-details.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Concurrent edits of one employment entry are last-write-wins, with no conflict message.
+    evidence: |-
+      change() filters the update by id, employee_id and removed_at only, not updated_at. Same as interviews-store (Story 2.2); an optimistic-concurrency rule should be decided once for every editable record.
+    location: >-
+      src/server/employment-history-store.ts:188
+    severity: medium
+  - summary: >-
+      An archived employee (still-valid JWT) or an archived subject's history can still be written; neither RLS nor the store checks archived_at.
+    evidence: |-
+      Same as the external_interviews own-record policies (Stories 2.1/2.2), which do not check archived_at either. Whether archived records stay editable by Administrators and managers is not settled by the PRD or epics.
+    location: >-
+      supabase/migrations/20261015020000_employment_history.sql
+    severity: medium
+  - summary: >-
+      The db:seed employment-history insert (insert-only, re-run keeps edits and removals) is never executed by a test.
+    evidence: |-
+      Only employmentHistorySeedRows/employmentHistorySeedId are tested; same pre-existing gap as the interview and training seed writes (deferred in Story 3.1). Needs a testable seed function or a CI seed run.
+    location: >-
+      scripts/seed-employees.ts
+    severity: medium
+  - summary: >-
+      No e2e drives Staff self-service on the staff portal or a manager on the Employment tab; the only e2e is the Administrator's.
+    evidence: |-
+      Staff and manager rules are covered by action, store, component and live RLS tests, but not end to end through the browser.
+    location: >-
+      tests/e2e/employment-history.spec.ts
+    severity: low
 ---
 
 <intent-contract>
@@ -112,6 +140,44 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-16 — Review pass
+- verdicts: 34 findings — high 0, medium 10, low 21, false 3, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind: a manager's own record outside their subtree is refused by the store but allowed by the RLS own-record branch — matches the spec's Design Notes (own record counts for a manager only inside the subtree; "My record" is Story 4.10); the store is the only runtime path.
+  - `[false]` `[reject]` Blind: edits and removals are not audited — the intent forbids audit rows ("audit scope is undecided").
+  - `[low]` `[reject]` Blind: "kept in the record's history" promises something nobody can see — the message text is prescribed by the intent; changing it means editing the spec.
+  - `[medium]` `[patch]` Blind: TRUNCATE skips the no-delete row trigger — added `revoke truncate … from anon, authenticated, service_role` and a BEFORE TRUNCATE statement trigger (as audit_events does); verified on local Postgres (service_role: permission denied; owner: trigger raises).
+  - `[false]` `[reject]` Blind: history can never be erased — the intent says "No hard delete path"; same for every other employee table.
+  - `[medium]` `[defer]` Blind: archived caller/subject not checked — same as the interview policies; whether archived records stay editable is undecided (deferred).
+  - `[medium]` `[patch]` Blind: CRLF line breaks make a textarea-accepted 2000-character detail fail at the server — the detail is now normalised to LF (`normalizeLineBreaks`) in the domain and the action schema before the length check; tests added.
+  - `[low]` `[reject]` Blind: focus drops to body after Confirm remove — same pattern as the interview withdraw; the status region announces the result; the fix needs new refs and focus plumbing.
+  - `[low]` `[reject]` Blind: the directory loads every employee's history and fails as a whole — mirrors interviewsFor/trainingFor and the "never a profile with missing data" rule (2.1); the store pages the read.
+  - `[low]` `[reject]` Blind: trigger refusals (23514) map to the generic invalid message — the store checks removed state before writing, so only a race between the read and the write reaches it.
+  - `[medium]` `[defer]` Blind: concurrent edits overwrite each other — same as interviews; deferred.
+  - `[low]` `[reject]` Blind: the RLS predicate is written four times and auth.jwt() is not wrapped in select — matches the style of the existing policies; no named harm at this table size.
+  - `[low]` `[defer]` Blind: no e2e for Staff or a manager — deferred (covered below the browser).
+  - `[low]` `[reject]` Blind: period accepts impossible or reversed dates — the period is free text by design (Design Notes); only a year is required for ordering.
+  - `[low]` `[reject]` Blind: toEmployee has five positional parameters — no caller diverges; refactoring the signature is outside this story.
+  - `[medium]` `[defer]` Verification: the db:seed insert-only write is untested — deferred, as filed (pre-existing gap for every seed write).
+  - `[medium]` `[patch]` Verification: the migration's triggers and policies were never run against a database — applied all 15 migrations to a throwaway local Postgres 16 with a Supabase auth shim and ran the matrix: own staff insert ok; other staff insert refused by RLS and sees 0 rows; P manager writes C, refused for U; admin writes both; removed row update → 23514; locked employee_id → 23514; blank role → check violation; delete (service role) raises; anon sees 0; remove-and-rewrite → 23514; truncate refused.
+  - `[low]` `[reject]` Intent: the main persona (Staff on the staff portal) has no e2e — same as the deferred e2e row.
+  - `[low]` `[reject]` Intent: the manager path is tested only below the UI — same root as the deferred e2e row.
+  - `[low]` `[reject]` Intent: "kept in history" vs. nothing showing removed entries — same as the message row above (prescribed by the intent).
+  - `[low]` `[reject]` Intent: "looks the same" is not tested on the seeded database path — same root as the deferred seed-test row.
+  - `[false]` `[reject]` Intent: newest-first by period start, not by entry time — the intent defines ordering by period start explicitly (`periodStartKey`).
+  - `[low]` `[reject]` Intent: the Administrator is added as an editor — the intent contract names the Administrator explicitly.
+  - `[low]` `[reject]` Intent: "rejected at the server" — aligned (action, store and RLS all tested); no divergence.
+  - `[medium]` `[patch]` Edge: CRLF detail length — duplicate of the CRLF row; same patch.
+  - `[medium]` `[defer]` Edge: lost update on concurrent saves — duplicate of the concurrent-edit row.
+  - `[low]` `[reject]` Edge: a removal racing an edit reports "not found" rather than "removed" — needs a re-read and a new branch for a narrow race; the outcome (nothing saved) is correct.
+  - `[low]` `[reject]` Edge: a stale edit error reappears after Cancel and reopen — cosmetic; clearing it needs extra state.
+  - `[low]` `[reject]` Edge: focus lost on remove — duplicate of the focus row.
+  - `[medium]` `[defer]` Edge: an archived employee writes their own history through PostgREST — duplicate of the archived row.
+  - `[medium]` `[patch]` Edge: a direct update can set removed_at and rewrite role/employer/period/detail in one statement — the guard now raises 23514 when a removal also changes the entry; verified on local Postgres.
+  - `[low]` `[defer]` Edge: an Administrator or manager edits an archived employee's history — part of the archived row (undecided).
+  - `[low]` `[reject]` Edge: the manager scope changes between two reads in listForManager — a narrow race whose result is one list missing entries until the next request.
+  - `[low]` `[reject]` Edge: the docs say RLS "enforces the same rule" while the store is stricter for a manager's own record — duplicate of the first row (the store is stricter by design).
+
 ## Design Notes
 
 Ordering: the period stays free text so the migrated demo entries ("2022-02-06 – Present", "2021 – 2022") render exactly as today, which a pair of date columns could not do. "Newest first" is therefore derived from the period's start year (and month/day when written), and validation requires a year so every entry sorts. Removed entries are hidden everywhere in the UI (the story says only that they leave the tab and are kept); restoring or listing them is not asked for.
@@ -127,3 +193,26 @@ A manager's own record counts only when it is inside their subtree (the Epic 4 a
 - `npm run build` -- success.
 - `npm run test:e2e` with Chromium via a temporary config (`channel: undefined`, `launchOptions.executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`; delete it afterwards) -- pass, or fail only with schema-missing errors.
 - Optional: apply all migrations to a throwaway local Postgres (as Stories 7.1 and 7.2 did) to exercise the triggers and policies.
+
+## Auto Run Result
+
+Status: done (resumed by the unattended loop on 2026-10-16 from an idle branch: the earlier run stopped at `in-review`, 35 hours before, with no PR).
+
+**Summary:** Employment history moves from the fixture into a new `employment_history` table (ADDITIVE migration `20261015020000_employment_history.sql`). The employee (own record, staff portal), the Administrator (anyone) and a department manager (their subtree) can add, edit and remove entries. Removal sets `removed_at`, and removed rows are locked and kept. `db:seed` copies the demo history by fixed ids, insert-only. The Employment tab reads from the store, in the same markup and order.
+
+**Files:** migration (table, guard/no-delete/no-truncate triggers, RLS); `src/domain/employment-history.ts` (normalise, validate, period ordering); `src/server/employment-history-store.ts` and `src/server/employment-history-actions.ts`; `src/server/employees-store.ts` (history from the store); `src/data/employees.ts` and `scripts/seed-employees.ts` (seed ids and rows); `src/components/employment-history-panel.tsx`, `portal.tsx`, `staff-attendance.tsx`; unit, component, live RLS and e2e tests; docs. `tests/departments-rls.test.ts` gets main's fix (4.3's subtree read).
+
+**Review:** 34 findings. Patched 4 entries (all medium): TRUNCATE block, removal cannot rewrite the entry, CRLF line-break normalisation, and migration verified on a local Postgres. Deferred 4: concurrent edits, archived records, seed write untested, Staff/manager e2e. Every other finding was rejected, with its reason in the triage log. Follow-up review recommended: false (no high patched; the 4 mediums are small and verified directly, so no unverified risk remains to name).
+
+**Verification:**
+- `npm run typecheck`: clean.
+- `npm run build`: success.
+- `npm test`: 1307 passed, 10 skipped. The only failures are schema-missing ones from the unapplied migration:
+  - `tests/employment-history-rls.test.ts`: PGRST205 "Could not find the table 'public.employment_history' in the schema cache".
+  - `tests/manager-scope-rls.test.ts`: EmployeesUnavailableError caused by the same PGRST205 history read.
+- `npm run test:e2e` (temporary config, installed Chromium 1194): 8 passed and 21 failed. Every failure has the same cause: profile reads hit PGRST205 on `public.employment_history` (42 server log lines, no other error).
+- Local Postgres 16 (all 15 migrations, Supabase auth shim): the whole I/O matrix behaves as specified.
+
+**Residual risks:**
+- Deploying the app before the migration makes every employee read unavailable (documented in DEPLOYMENT.md).
+- The deferred items above.

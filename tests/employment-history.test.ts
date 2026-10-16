@@ -11,6 +11,9 @@ describe("normalizeEmploymentHistory", () => {
     expect(normalizeEmploymentHistory({ role: "  Senior   QA\tEngineer ", employer: " Brain  Station 23 ", period: " Mar  2023 –  Present ", detail: "  Line one.\n\nLine  two.  " }))
       .toEqual({ role: "Senior QA Engineer", employer: "Brain Station 23", period: "Mar 2023 – Present", detail: "Line one.\n\nLine  two." });
   });
+  it("stores line breaks as LF, whatever the browser submitted", () => {
+    expect(normalizeEmploymentHistory({ role: "QA", employer: "BS23", period: "2021", detail: "One.\r\nTwo.\rThree." }).detail).toBe("One.\nTwo.\nThree.");
+  });
 });
 
 describe("invalidEmploymentHistoryFields", () => {

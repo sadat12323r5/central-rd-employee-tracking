@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { DETAIL_MAX, EMPLOYER_MAX, hasPeriodYear, PERIOD_MAX, ROLE_MAX, type EmploymentHistoryField } from "@/domain/employment-history";
+import { DETAIL_MAX, EMPLOYER_MAX, hasPeriodYear, normalizeLineBreaks, PERIOD_MAX, ROLE_MAX, type EmploymentHistoryField } from "@/domain/employment-history";
 import { EMPLOYEE_ID_PATTERN, normalizeText } from "@/domain/employee-input";
 import type { ActionState } from "./attendance-actions";
 import { getSession } from "./auth";
@@ -43,7 +43,7 @@ const entryFields = {
   employer: text("employer", EMPLOYER_MAX),
   period: text("period", PERIOD_MAX)
     .refine(hasPeriodYear, "Include a four-digit year in the period, like 2021 – 2023 or Mar 2023 – Present."),
-  detail: z.string().trim().max(DETAIL_MAX, `Keep the detail to ${DETAIL_MAX} characters or fewer.`).default(""),
+  detail: z.string().transform(normalizeLineBreaks).pipe(z.string().trim().max(DETAIL_MAX, `Keep the detail to ${DETAIL_MAX} characters or fewer.`)).default(""),
 };
 
 const employeeId = z.string({ error: "Choose an employee." }).trim()

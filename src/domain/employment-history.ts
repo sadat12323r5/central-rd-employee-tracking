@@ -22,12 +22,15 @@ const YEAR = /(?<!\d)(19|20)\d{2}(?!\d)/;
 const collapse = (value: string) => value.trim().replace(/\s+/g, " ");
 
 /** Trims every field and collapses inner whitespace in role, employer and period (the detail keeps its line breaks). */
+/** Browsers submit textarea line breaks as CRLF; store LF so the length matches what was typed. */
+export const normalizeLineBreaks = (value: string) => value.replace(/\r\n?/g, "\n");
+
 export function normalizeEmploymentHistory(input: EmploymentHistoryInput): EmploymentHistoryInput {
   return {
     role: collapse(input.role ?? ""),
     employer: collapse(input.employer ?? ""),
     period: collapse(input.period ?? ""),
-    detail: (input.detail ?? "").trim(),
+    detail: normalizeLineBreaks(input.detail ?? "").trim(),
   };
 }
 

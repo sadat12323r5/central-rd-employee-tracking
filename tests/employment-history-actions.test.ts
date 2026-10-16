@@ -95,6 +95,13 @@ describe("addEmploymentHistoryAction", () => {
     expect(add).toHaveBeenCalledWith(NADIA, "BS-1001", { role: "QA Engineer", employer: "Brain Station 23", period: "2024 – Present", detail: "" });
   });
 
+  it("counts a submitted CRLF line break as one character, as the textarea's maxLength does", async () => {
+    const detail = `${"x".repeat(999)}\r\n${"y".repeat(1000)}`;
+    const result = await addEmploymentHistoryAction(blank, form({ ...valid, detail }));
+    expect(result.error).toBe("");
+    expect(add).toHaveBeenCalledWith(NADIA, "BS-1001", { ...valid, detail: `${"x".repeat(999)}\n${"y".repeat(1000)}` });
+  });
+
   it.each([
     ["a missing role", { ...valid, role: "" }, /role/i],
     ["a blank employer", { ...valid, employer: "   " }, /employer/i],

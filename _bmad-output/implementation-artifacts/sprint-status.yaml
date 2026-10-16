@@ -86,7 +86,7 @@ development_status:
   epic-7: backlog
   7-1-add-a-new-employee: review
   7-2-edit-an-employee-s-basic-details: review
-  7-3-maintain-employment-history: in-progress
+  7-3-maintain-employment-history: review
   7-4-record-skills-assessments-and-the-manager-evaluation: backlog
   epic-7-retrospective: optional
 
