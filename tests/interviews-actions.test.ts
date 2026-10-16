@@ -24,6 +24,7 @@ const {
 } = await import("../src/server/interviews-store");
 
 const blank = { error: "", message: "" };
+const NOT_LINKED = /^Your account isn't linked to an employee record, so there is nothing to record here\.$/;
 const NADIA = { role: "staff", employeeId: "BS-1001" } as const;
 const valid = { company: "Orbit Analytics", role: "AI Engineer", date: "2026-10-20", stage: "Recruiter screen" };
 const ID = "5eed0000-0000-4000-8000-000010010000";
@@ -92,10 +93,13 @@ describe("addInterviewAction", () => {
     expect((await addInterviewAction(blank, form({ ...valid, company: long, role: long, stage: long, outcome: long }))).error).toBe("");
   });
 
-  it.each([["an Administrator", { role: "admin" } as const], ["a signed-out caller", null]])("saves nothing for %s and asks to sign in", async (_label, session) => {
+  it.each([
+    ["an unlinked Administrator", { role: "admin" } as const, NOT_LINKED],
+    ["a signed-out caller", null, /^Your session has ended\. Sign in again to add an interview\.$/],
+  ])("saves nothing for %s and says why", async (_label, session, message) => {
     getSession.mockResolvedValue(session);
     const result = await addInterviewAction(blank, form(valid));
-    expect(result.error).toMatch(/sign in/i);
+    expect(result.error).toMatch(message);
     expect(result.message).toBe("");
     expect(add).not.toHaveBeenCalled();
   });
@@ -164,10 +168,13 @@ describe("updateInterviewAction (Story 2.2)", () => {
     expect((await updateInterviewAction(blank, form({ ...edit, feedback: "x".repeat(2000) }))).error).toBe("");
   });
 
-  it.each([["an Administrator", { role: "admin" } as const], ["a signed-out caller", null]])("saves nothing for %s and asks to sign in as staff", async (_label, session) => {
+  it.each([
+    ["an unlinked Administrator", { role: "admin" } as const, NOT_LINKED],
+    ["a signed-out caller", null, /^Your session has ended\. Sign in again to change an interview\.$/],
+  ])("saves nothing for %s and says why", async (_label, session, message) => {
     getSession.mockResolvedValue(session);
     const result = await updateInterviewAction(blank, form(edit));
-    expect(result.error).toMatch(/sign in again as a staff member/i);
+    expect(result.error).toMatch(message);
     expect(update).not.toHaveBeenCalled();
   });
 
@@ -214,9 +221,12 @@ describe("withdrawInterviewAction (Story 2.2)", () => {
     expect(withdraw).not.toHaveBeenCalled();
   });
 
-  it.each([["an Administrator", { role: "admin" } as const], ["a signed-out caller", null]])("saves nothing for %s", async (_label, session) => {
+  it.each([
+    ["an unlinked Administrator", { role: "admin" } as const, NOT_LINKED],
+    ["a signed-out caller", null, /^Your session has ended\. Sign in again to change an interview\.$/],
+  ])("saves nothing for %s", async (_label, session, message) => {
     getSession.mockResolvedValue(session);
-    expect((await withdrawInterviewAction(blank, form({ id: ID }))).error).toMatch(/sign in again as a staff member/i);
+    expect((await withdrawInterviewAction(blank, form({ id: ID }))).error).toMatch(message);
     expect(withdraw).not.toHaveBeenCalled();
   });
 
@@ -258,11 +268,11 @@ describe("own-record identity for managers and linked Administrators (Story 4.10
     },
   );
 
-  it("refuses an unlinked Administrator before any store call", async () => {
+  it("refuses an unlinked Administrator before any store call, saying the account is not linked", async () => {
     getSession.mockResolvedValue({ role: "admin" });
-    expect((await addInterviewAction(blank, form(valid))).error).toMatch(/sign in/i);
-    expect((await updateInterviewAction(blank, form(edit))).error).toMatch(/sign in/i);
-    expect((await withdrawInterviewAction(blank, form({ id: ID }))).error).toMatch(/sign in/i);
+    expect((await addInterviewAction(blank, form(valid))).error).toMatch(NOT_LINKED);
+    expect((await updateInterviewAction(blank, form(edit))).error).toMatch(NOT_LINKED);
+    expect((await withdrawInterviewAction(blank, form({ id: ID }))).error).toMatch(NOT_LINKED);
     expect(add).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(withdraw).not.toHaveBeenCalled();

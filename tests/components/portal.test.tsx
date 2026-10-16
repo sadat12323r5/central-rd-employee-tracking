@@ -1360,6 +1360,7 @@ describe("Portal \"My record\" (Story 4.10)", () => {
     await show(<Portal role={role} employees={team} current={none()} myRecord={myRecord} />);
     await act(async () => { await user.click(nav().getByRole("button", { name: "My record" })); });
     expect(screen.getByRole("heading", { level: 1, name: "My record" })).toBeInTheDocument();
+    expect(screen.getByText("Your own attendance, daily log, assignments, past projects, training and interviews.")).toBeInTheDocument();
     const section = within(screen.getByRole("region", { name: "My record" }));
     expect(section.getByRole("button", { name: "Clock in" })).toBeInTheDocument();
     expect(section.getByRole("heading", { name: "Today's work log" })).toBeInTheDocument();

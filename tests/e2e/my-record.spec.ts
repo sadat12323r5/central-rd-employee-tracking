@@ -11,6 +11,13 @@ import { serviceClient } from "./supabase-admin";
 // The e2e Administrator is not linked to an employee record, so it gets no "My record".
 const run = randomBytes(4).toString("hex");
 
+/** Postgres / PostgREST "table/column does not exist" codes, returned until the migrations are applied. */
+const SCHEMA_MISSING = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
+
+function checkCleanup(what: string, error: { code: string; message: string } | null) {
+  if (error && !SCHEMA_MISSING.has(error.code)) throw new Error(`Could not ${what}: ${error.message}`);
+}
+
 test("a manager opens \"My record\", adds an interview and sees it listed there", async ({ page }) => {
   const manager = e2eManagerStaff();
   const company = `E2E My Record Co ${run}`;
@@ -56,8 +63,10 @@ test("a manager opens \"My record\", adds an interview and sees it listed there"
     await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "My record" }).click();
     await expect(row()).toHaveCount(1);
   } finally {
-    await service.from("departments").update({ manager_user_id: null }).eq("id", departmentId);
-    await service.from("departments").delete().eq("id", departmentId);
+    const cleared = await service.from("departments").update({ manager_user_id: null }).eq("id", departmentId);
+    checkCleanup("clear the throwaway department's manager", cleared.error);
+    const deleted = await service.from("departments").delete().eq("id", departmentId);
+    checkCleanup("delete the throwaway department", deleted.error);
   }
 });
 

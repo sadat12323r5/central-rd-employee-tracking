@@ -12,13 +12,21 @@ export type ActionState = { error: string; message: string };
 // The employee is always taken from the signed session, never from the submitted form,
 // so staff can only create or change their own records. Story 4.10: a manager, or an Administrator
 // linked to an employee row, records their own attendance ("My record") under the same Staff rules.
-async function staffId(): Promise<string | null> {
-  return ownRecordIdentity(await getSession())?.employeeId ?? null;
+const SIGNED_OUT = "Your session has ended. Sign in again to record attendance.";
+const NOT_LINKED = "Your account isn't linked to an employee record, so there is nothing to record here.";
+
+/** The session's own employee id, or the refusal: signed out, or signed in without a linked employee record. */
+async function staffId(): Promise<{ employeeId: string } | { error: string }> {
+  const session = await getSession();
+  if (!session) return { error: SIGNED_OUT };
+  const own = ownRecordIdentity(session);
+  return own ? { employeeId: own.employeeId } : { error: NOT_LINKED };
 }
 
 async function run(work: (employeeId: string, now: Date) => Promise<string>): Promise<ActionState> {
-  const employeeId = await staffId();
-  if (!employeeId) return { error: "Your session has ended. Sign in again to record attendance.", message: "" };
+  const own = await staffId();
+  if ("error" in own) return { error: own.error, message: "" };
+  const { employeeId } = own;
   try {
     const message = await work(employeeId, new Date());
     revalidatePath("/");

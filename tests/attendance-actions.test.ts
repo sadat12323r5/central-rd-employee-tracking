@@ -162,7 +162,7 @@ describe("attendance for managers and Administrators, own record only (Story 4.1
     expect(await attendanceStore.listAll()).toEqual([expect.objectContaining({ employeeId: "BS-1003" })]);
   });
 
-  it("refuses an unlinked Administrator before any store call", async () => {
+  it("refuses an unlinked Administrator before any store call, saying the account is not linked", async () => {
     await signIn(blank, form(ADMIN));
     expect(await getSession()).toEqual({ role: "admin" });
     const listSpy = vi.spyOn(attendanceStore, "listForEmployee");
@@ -171,7 +171,7 @@ describe("attendance for managers and Administrators, own record only (Story 4.1
         await clockInAction(blank, form({ workMode: "Office" })),
         await clockOutAction(blank, form({ breakMinutes: "0" })),
         await saveLogAction(blank, form({ summary: "x", blockers: "", taskDescription: "x", taskHours: "1", taskLink: "" })),
-      ]) expect(result.error).toMatch(/sign in/i);
+      ]) expect(result.error).toBe("Your account isn't linked to an employee record, so there is nothing to record here.");
       expect(listSpy).not.toHaveBeenCalled();
     } finally {
       listSpy.mockRestore();
