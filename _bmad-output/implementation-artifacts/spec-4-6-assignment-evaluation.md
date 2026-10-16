@@ -4,13 +4,27 @@ type: 'feature'
 created: '2026-10-16'
 status: 'in-review'
 baseline_revision: '6df80d84bbc0c41b66e8877c72ceea93e3d7d660'
-review_loop_iteration: 0
+review_loop_iteration: 1
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-4-5-manager-assignments.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      An amendment overwrites the earlier evaluation text; no version history is kept.
+    evidence: |-
+      AD-4 specifies upsert-with-authorship, which keeps created_by and authored_by but not the earlier wording. Keeping full versions needs a System Owner decision.
+    location: >-
+      supabase/migrations/20261016000000_assignment_evaluations.sql
+    severity: medium
+  - summary: >-
+      Story 4.8: hide the evaluation form from a current-department manager who has no authority over the assignment's department.
+    evidence: |-
+      ClosedEvaluation shows the form on every closed row. This is unreachable until transfers exist, because the assignment's department and the employee's department are equal today.
+    location: >-
+      src/components/assignments-panel.tsx
+    severity: low
 ---
 
 <intent-contract>
@@ -127,7 +141,48 @@ deferred: []
 
 ## Spec Change Log
 
+### 2026-10-16: review pass 1 (bad_spec: authorship display)
+- **Trigger:** the review found that author names were worked out at display time from whoever currently manages a department in the viewer's list. A manager whose employee row the viewer can't see showed as "the Administrator", which is the wrong author. An Administrator who manages nothing, or a replaced manager, showed as "a manager or the Administrator". Staff always saw the anonymous phrase. The same evaluation also showed different authors to different viewers.
+- **Amended:** Code Map and Design Notes. The writer's display name and role are now captured on each write (see "Authorship snapshot" below), and the display reads only those stored values.
+- **Known-bad state avoided:** the author label depending on the viewer and on later manager changes; the guessed "the Administrator".
+- **KEEP:** everything else in the implementation is kept as is: the migration's table, guard, policies and no-delete trigger, the store, the actions, the forms (including keeping refused values), the staff "My assignments" section, and all tests. This is a delta, not a re-derivation. Only the authorship resolution changes, plus the review patches listed in the triage log.
+
 ## Review Triage Log
+
+### 2026-10-16 — Review pass 1
+- verdicts: 27 findings — high 0, medium 4, low 17, false 2, maybe-false 0 (4 more are descriptive intent-audit notes and are logged below as reject)
+- findings:
+  - blind-hunter
+    - `[medium]` `[patch]` A department manager can't evaluate pre-transfer work, because the assignments read RLS uses manages_employee — fixed by an additive `assignments_select_department_managed` policy. The path is only reachable once 4.8 ships.
+    - `[low]` `[defer]` A write form is shown to a current-department manager who lacks authority over the assignment's department — unreachable until 4.8 transfers exist (the departments are always equal today). Deferred to 4.8.
+    - `[low]` `[patch]` A refused create (already exists) leaves the form stuck in create mode — the action now revalidates on Exists/NotFound refusals.
+    - `[medium]` `[defer]` An amendment overwrites the earlier text with no version history — AD-4 specifies upsert-with-authorship. A full version history is a stakeholder decision. Deferred.
+    - `[medium]` `[bad_spec]` Author names are unstable and depend on the viewer; a manager can be guessed as "the Administrator" — the spec is amended with an authorship snapshot (name and role captured on write).
+    - `[medium]` `[bad_spec]` Staff never see who evaluated them — same root cause; the snapshot gives Staff the same text.
+    - `[false]` `[reject]` The staff assignment list isn't ordered — `assignments-store.listFor` sorts with `compareAssignments` and `assignmentsOf` keeps that order.
+    - `[low]` `[patch]` No index on `department_id` — index added.
+    - `[low]` `[reject]` `client_feedback` has no trim CHECK — the app always trims; adding a database-level check is extra code for a service-role-only path.
+    - `[low]` `[reject]` 23514 on create shows an amend-style message — this needs an assignment reopened or removed between the store's read and the insert, and assignments can't be reopened or deleted.
+    - `[low]` `[patch]` The live tests don't cover the department-vs-employee split — a transfer case was added (see verification-gap).
+    - `[low]` `[patch]` The single-writer test name no longer matches its claim — renamed/tightened.
+  - edge-case-hunter
+    - `[medium]` `[patch]` The post-transfer manager is refused — duplicate of the first blind-hunter row; same fix.
+    - `[medium]` `[bad_spec]` A sub-manager whose employee row is invisible shows as "the Administrator" — fixed by the snapshot.
+    - `[low]` `[patch]` CRLF newlines push text over the server's length limits — newlines are normalized before validation.
+    - `[low]` `[patch]` A stale create/amend form mode — duplicate; same revalidate fix.
+    - `[low]` `[reject]` A no-op amend bumps `updated_at` — an explicit save by an authorized manager is a write, and recording it is correct.
+    - `[medium]` `[patch]` The transfer claim (same root cause as the first row) — same fix.
+  - verification-gap
+    - `[low]` `[patch]` No live RLS case where the employee's current department differs from the assignment's department — added the transfer case to `tests/assignment-evaluations-rls.test.ts`.
+    - `[medium]` `[bad_spec]` (other finding) "the Administrator" is a wrong label when the manager's employee row is hidden — same snapshot fix.
+  - intent-alignment
+    - `[medium]` `[bad_spec]` The authorship display uses viewer visibility (A2) and introduces a third string, rather than the intent's two role words — fixed by the snapshot, which implements reading A1.
+    - `[low]` `[reject]` The insert policy has `with check` only — Postgres INSERT policies can't take `USING`; B1 is the only valid reading.
+    - `[low]` `[defer]` The authority-after-transfer path is not exercised end to end — covered at the database level by the new RLS case; the UI path waits on 4.8.
+    - `[false]` `[reject]` `create` refuses Staff and invalid input before reading the assignment — extra early checks don't change any outcome in the matrix.
+    - `[low]` `[reject]` An extra `employee_id` index — additive and harmless.
+    - `[low]` `[reject]` Every employee read now also reads evaluations (unavailable before the migration) — the same composition as 4.5, documented in DEPLOYMENT.md.
+    - `[low]` `[reject]` The locked-field 23514 mapping is only reachable through a direct database call — by design, since the store never sends locked fields.
 
 ## Design Notes
 
@@ -136,6 +191,22 @@ Authority follows the **assignment's** stored department (AD-4: "the Assignment'
 AD-4 makes evaluations upsert-with-authorship, not insert-once. The epic AC still forbids a second record, so there are two entry points: `create`, which refuses when one exists, and `amend`. `created_by` keeps the first author. `authored_by` and `updated_at` are the latest writer, so an amendment by another manager is recorded without an extra history table.
 
 Assumptions, which are conservative and recorded so the owner can revisit them: the evaluation is limited to 4000 characters and client feedback to 2000; client feedback may be cleared on amend; an evaluation can be written for an archived employee's assignment.
+
+**Authorship snapshot (review pass 1).**
+- **Columns:** four new columns on `assignment_evaluations`:
+  - `created_by_name text null` and `authored_by_name text null`;
+  - `created_by_role text not null` and `authored_by_role text not null`, each with `check in ('admin','manager')`.
+- **The guard sets them on every write.**
+  - The role is `'admin'` when `auth.jwt() -> 'app_metadata' ->> 'role' = 'admin'`, otherwise `'manager'`.
+  - The name is the `employees` name whose `auth_user_id = auth.uid()`, or null when no row is linked.
+  - When `auth.uid()` is null (the service role), the values sent are kept. The role then defaults to `'admin'` if none is sent.
+  - The created_* pair is locked on update, the same as `created_by`.
+- **Display** (`src/domain/evaluations.ts`): the stored name if there is one. Otherwise "the Administrator" for `admin` and "a manager" for `manager`. Both portals, staff included, use the same text. The `authorNames` resolver built from the department list goes away.
+- **`AssignmentEvaluation`** gains `createdByName`, `createdByRole`, `authoredByName`, `authoredByRole`.
+
+**Transfer read path (review pass 1).**
+- **New policy:** an additive select policy on `assignments`, `assignments_select_department_managed using (public.manages_department(department_id))`. Without it, after a 4.8 transfer the store's assignment read is hidden from the department manager who should be able to evaluate the work.
+- **Index:** an index on `assignment_evaluations(department_id)`.
 
 ## Verification
 
