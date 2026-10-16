@@ -32,7 +32,7 @@ vi.mock("@/server/activity-actions", () => ({
 }));
 
 import Portal from "@/components/portal";
-import { employees, type Assignment, type AssignmentEvaluation } from "@/data/employees";
+import { employees, type Assignment, type AssignmentEvaluation, type BackfilledProject } from "@/data/employees";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
@@ -736,7 +736,7 @@ describe("Portal Current work tab (Story 4.5)", () => {
     id: "5e000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: CRD, client: "Not recorded",
     projectName: "Customer experience platform", role: "Software Engineer I", allocation: 80, startDate: "2026-09-14",
     latestUpdate: "Reviewed this week's deliverables.", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z",
-    closedAt: null, ...extra,
+    closedAt: null, provenance: "assignment", ...extra,
   });
   const closedOne = assignment({
     id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)", status: "closed",
@@ -844,7 +844,7 @@ describe("Portal Current work tab (Story 4.5)", () => {
 
   it("lists closed assignments in history with a Closed label and D MMM YYYY dates, with no edit or close control", async () => {
     await openWork([assignment(), closedOne]);
-    const history = screen.getByRole("list", { name: "Closed assignments" });
+    const history = screen.getByRole("list", { name: "Work history" });
     const item = within(history).getByRole("listitem");
     expect(within(item).getByRole("heading", { name: "Legacy migration" })).toBeInTheDocument();
     expect(within(item).getByText("Closed")).toBeInTheDocument();
@@ -896,7 +896,7 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
   const open: Assignment = {
     id: "5e000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: CRD, client: "Not recorded",
     projectName: "Customer experience platform", role: "Software Engineer I", allocation: 80, startDate: "2026-09-14",
-    latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null,
+    latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null, provenance: "assignment",
   };
   const closed: Assignment = {
     ...open, id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)", status: "closed",
@@ -917,7 +917,7 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
     const result = await show(<Portal role={role} employees={list(evaluations)} departments={departments} current={none()} />);
     await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
     await user.click(screen.getByRole("tab", { name: "Current work" }));
-    const item = within(screen.getByRole("list", { name: "Closed assignments" })).getByRole("listitem");
+    const item = within(screen.getByRole("list", { name: "Work history" })).getByRole("listitem");
     return { user, item, ...result };
   }
 
@@ -1001,6 +1001,80 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
 
   it("has no detectable accessibility violations with an evaluation shown", async () => {
     const { container } = await openWork([evaluation()]);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("Portal mixed work history (Story 4.7)", () => {
+  const CRD = "de9a0000-0000-4000-8000-000000000002";
+  const LND = "de9a0000-0000-4000-8000-000000000001";
+  const departments = [
+    { id: CRD, name: "Central R&D", parentId: LND, managerUserId: null, managerEmployeeId: null },
+    { id: LND, name: "L&D", parentId: null, managerUserId: null, managerEmployeeId: null },
+  ];
+  const open: Assignment = {
+    id: "5e000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: CRD, client: "Not recorded",
+    projectName: "Customer experience platform", role: "Software Engineer I", allocation: 80, startDate: "2026-09-14",
+    latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null, provenance: "assignment",
+  };
+  const closed: Assignment = {
+    ...open, id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)", status: "closed",
+    startDate: "2026-03-01", completionDate: "2026-08-31", closedAt: "2026-09-01T00:00:00Z",
+  };
+  const past = (extra: Partial<BackfilledProject> = {}): BackfilledProject => ({
+    id: "bf000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: LND, client: "Old Bank (fictional)",
+    projectName: "Core banking audit", completionDate: "2025-12-15", outcome: "Delivered the audit report.", status: "active",
+    createdAt: "2026-10-16T00:00:00Z", updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null, provenance: "backfilled", ...extra,
+  });
+  const newer = past({ id: "bf000000-0000-4000-8000-000000000002", projectName: "Mobile wallet", completionDate: "2026-09-30" });
+  const withdrawn = past({
+    id: "bf000000-0000-4000-8000-000000000003", projectName: "Abandoned pilot", completionDate: "2024-05-01", status: "withdrawn",
+    withdrawnAt: "2026-10-16T02:00:00Z",
+  });
+  const list = () => employees.map(e => ({
+    ...e, departmentId: CRD, assignments: e.id === "BS-1001" ? [open, closed] : [], evaluations: [],
+    backfilledProjects: e.id === "BS-1001" ? [newer, past(), withdrawn] : [],
+  }));
+
+  async function openWork(role: "admin" | "manager" = "admin") {
+    const user = userEvent.setup();
+    const result = await show(<Portal role={role} employees={list()} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    const items = within(screen.getByRole("list", { name: "Work history" })).getAllByRole("listitem");
+    return { items, ...result };
+  }
+
+  for (const role of ["admin", "manager"] as const) {
+    it(`lists closed assignments and backfilled entries together, newest completion first, each marked (${role})`, async () => {
+      const { items } = await openWork(role);
+      expect(items.map(i => within(i).getByRole("heading", { level: 3 }).textContent))
+        .toEqual(["Mobile wallet", "Legacy migration", "Core banking audit", "Abandoned pilot"]);
+      expect(within(items[0]).getByText("Self-reported")).toBeInTheDocument();
+      expect(within(items[1]).getByText("Manager-created")).toBeInTheDocument();
+      expect(within(items[1]).queryByText("Self-reported")).not.toBeInTheDocument();
+      expect(within(items[2]).getByText("Self-reported")).toBeInTheDocument();
+      expect(within(items[3]).getByText("Self-reported")).toBeInTheDocument();
+      expect(within(items[3]).getByText("Withdrawn")).toBeInTheDocument();
+      expect(within(items[2]).queryByText("Withdrawn")).not.toBeInTheDocument();
+      // Department names and D MMM YYYY dates.
+      expect(within(items[2]).getByText("Completed 15 Dec 2025 · L&D")).toBeInTheDocument();
+      expect(within(items[2]).getByText("Delivered the audit report.")).toBeInTheDocument();
+    });
+  }
+
+  it("offers no edit, withdraw or evaluation control on backfilled rows", async () => {
+    const { items } = await openWork();
+    for (const item of [items[0], items[2], items[3]]) {
+      expect(item.querySelectorAll("input, textarea, button, select, form, details")).toHaveLength(0);
+      expect(within(item).queryByText(/evaluation/i)).not.toBeInTheDocument();
+    }
+    // The closed assignment keeps its evaluation form.
+    expect(within(items[1]).getByRole("form", { name: "Write evaluation for Legacy migration" })).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations with the mixed history", async () => {
+    const { container } = await openWork();
     expect(await axe(container)).toHaveNoViolations();
   });
 });

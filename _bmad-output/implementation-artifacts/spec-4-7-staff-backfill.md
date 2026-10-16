@@ -2,7 +2,7 @@
 title: 'Story 4.7: Staff backfills a past project'
 type: 'feature'
 created: '2026-10-16'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: 'f8987f64f080616a99d0cfdfbf3176b02745021c'
 review_loop_iteration: 0
 followup_review_recommended: false

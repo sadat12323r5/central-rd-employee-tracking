@@ -12,6 +12,10 @@ const { addInterviewAction, updateInterviewAction, withdrawInterviewAction } = v
   addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn(),
 }));
 vi.mock("@/server/interviews-actions", () => ({ addInterviewAction, updateInterviewAction, withdrawInterviewAction }));
+const { addBackfillAction, editBackfillAction, withdrawBackfillAction } = vi.hoisted(() => ({
+  addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn(),
+}));
+vi.mock("@/server/backfill-actions", () => ({ addBackfillAction, editBackfillAction, withdrawBackfillAction }));
 
 import StaffAttendance from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
@@ -338,7 +342,7 @@ describe("StaffAttendance My assignments (Story 4.6)", () => {
   const openOne: Assignment = {
     id: "5e000000-0000-4000-8000-000000000001", employeeId: employee.id, departmentId: "d-1", client: "Northwind (fictional)",
     projectName: "Portal rebuild", role: "Developer", allocation: 60, startDate: "2026-10-01", latestUpdate: "Sprint two under way.",
-    status: "open", completionDate: null, createdAt: "2026-10-01T00:00:00Z", closedAt: null,
+    status: "open", completionDate: null, createdAt: "2026-10-01T00:00:00Z", closedAt: null, provenance: "assignment",
   };
   const evaluated: Assignment = {
     ...openOne, id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)",
@@ -379,17 +383,163 @@ describe("StaffAttendance My assignments (Story 4.6)", () => {
     expect(within(items[2]).getByText("Not evaluated yet.")).toBeInTheDocument();
   });
 
-  it("is read-only: no input, textarea, button or form in the section", async () => {
-    const { container } = await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} />);
-    const area = section();
+  it("is read-only for assignments: no input, textarea, button or form on any assignment", async () => {
+    // Story 4.7 adds the past-project form to the section; the assignments themselves stay read-only.
+    const { container } = await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} departmentOptions={[]} />);
+    const area = within(section()).getByRole("list", { name: "Your assignments" });
     expect(area.querySelectorAll("input, textarea, button, select, form, details")).toHaveLength(0);
     expect(within(area).queryByRole("button")).not.toBeInTheDocument();
     expect(within(area).queryByRole("textbox")).not.toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("marks each assignment Manager-created", async () => {
+    await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} />);
+    const items = within(within(section()).getByRole("list", { name: "Your assignments" })).getAllByRole("listitem");
+    for (const item of items) expect(within(item).getByText("Manager-created")).toBeInTheDocument();
+  });
+
   it("says when no assignment has been recorded", async () => {
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
     expect(within(section()).getByText("No assignments have been recorded for you yet.")).toBeInTheDocument();
+  });
+});
+
+describe("StaffAttendance past projects (Story 4.7)", () => {
+  type Past = (typeof employee)["backfilledProjects"][number];
+  const CRD = "de9a0000-0000-4000-8000-000000000002";
+  const LND = "de9a0000-0000-4000-8000-000000000001";
+  const options = [{ id: CRD, name: "Central R&D" }, { id: LND, name: "L&D" }];
+  const active: Past = {
+    id: "bf000000-0000-4000-8000-000000000001", employeeId: employee.id, departmentId: LND, client: "Old Bank (fictional)",
+    projectName: "Core banking audit", completionDate: "2025-12-15", outcome: "Delivered the audit report.", status: "active",
+    createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z", withdrawnAt: null, provenance: "backfilled",
+  };
+  const withdrawn: Past = {
+    ...active, id: "bf000000-0000-4000-8000-000000000002", projectName: "Abandoned pilot", completionDate: "2024-05-01",
+    status: "withdrawn", withdrawnAt: "2026-09-02T00:00:00Z",
+  };
+  const withPast = { ...employee, backfilledProjects: [active, withdrawn] };
+  const section = () => screen.getByRole("heading", { name: "My assignments" }).closest("section")!;
+  const pastList = () => within(section()).getByRole("list", { name: "Past projects you added" });
+  const addForm = () => within(section()).getByRole("form", { name: "Add a past project" });
+
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now)); });
+  afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+  it("lists the employee's past projects under My assignments with the department name, Self-reported, and D MMM YYYY", async () => {
+    await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    const items = within(pastList()).getAllByRole("listitem");
+    expect(items.map(i => within(i).getByRole("heading", { level: 4 }).textContent)).toEqual(["Core banking audit", "Abandoned pilot"]);
+    expect(within(items[0]).getByText("Self-reported")).toBeInTheDocument();
+    expect(within(items[0]).getByText("Old Bank (fictional) · L&D")).toBeInTheDocument();
+    expect(within(items[0]).getByText("Completed 15 Dec 2025")).toBeInTheDocument();
+    expect(within(items[0]).getByText("Delivered the audit report.", { selector: ".callout" })).toBeInTheDocument();
+    expect(within(items[0]).queryByText("Withdrawn")).not.toBeInTheDocument();
+  });
+
+  it("keeps a withdrawn entry listed with a Withdrawn label and no controls; an active one has edit and withdraw", async () => {
+    await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    const [first, second] = within(pastList()).getAllByRole("listitem");
+    expect(within(second).getByText("Withdrawn")).toBeInTheDocument();
+    expect(within(second).getByText("Self-reported")).toBeInTheDocument();
+    expect(second.querySelectorAll("input, textarea, button, select, form, details")).toHaveLength(0);
+    expect(within(first).getByText("Edit")).toBeInTheDocument();
+    expect(within(first).getByRole("button", { name: "Withdraw past project: Core banking audit, 15 Dec 2025" })).toBeInTheDocument();
+  });
+
+  it("adds a past project by keyboard: the department comes from the list, and the owner is never sent", async () => {
+    addBackfillAction.mockResolvedValue({ error: "", message: "Past project added." });
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    const form = addForm();
+    const select = within(form).getByLabelText("Department");
+    expect(within(select).getAllByRole("option").map(o => o.textContent)).toEqual(["Choose a department", "Central R&D", "L&D"]);
+    await user.selectOptions(select, CRD);
+    await user.type(within(form).getByLabelText("Client"), "Old Bank (fictional)");
+    await user.type(within(form).getByLabelText("Project name"), "Core banking audit");
+    await user.type(within(form).getByLabelText("Completion date"), "2025-12-15");
+    await user.type(within(form).getByLabelText("Outcome"), "Delivered the audit report.");
+    expect(within(form).getByLabelText("Completion date")).toHaveAttribute("max", "2026-09-28");
+    await user.click(within(form).getByRole("button", { name: "Add past project" }));
+    expect(addBackfillAction).toHaveBeenCalledTimes(1);
+    expect(Object.fromEntries((addBackfillAction.mock.calls[0][1] as FormData).entries())).toEqual({
+      departmentId: CRD, client: "Old Bank (fictional)", projectName: "Core banking audit", completionDate: "2025-12-15",
+      outcome: "Delivered the audit report.",
+    });
+    expect(await within(section()).findByText("Past project added.")).toBeInTheDocument();
+  });
+
+  it("keeps what was typed when the add is refused", async () => {
+    addBackfillAction.mockResolvedValue({ error: "The completion date can't be in the future.", message: "" });
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    await user.selectOptions(within(addForm()).getByLabelText("Department"), LND);
+    await user.type(within(addForm()).getByLabelText("Client"), "Kept client");
+    await user.type(within(addForm()).getByLabelText("Project name"), "Kept project");
+    await user.type(within(addForm()).getByLabelText("Completion date"), "2025-01-01");
+    await user.type(within(addForm()).getByLabelText("Outcome"), "Kept outcome");
+    await user.click(within(addForm()).getByRole("button", { name: "Add past project" }));
+    expect(await within(addForm()).findByRole("alert")).toHaveTextContent("The completion date can't be in the future.");
+    expect(within(addForm()).getByLabelText("Department")).toHaveValue(LND);
+    expect(within(addForm()).getByLabelText("Client")).toHaveValue("Kept client");
+    expect(within(addForm()).getByLabelText("Project name")).toHaveValue("Kept project");
+    expect(within(addForm()).getByLabelText("Completion date")).toHaveValue("2025-01-01");
+    expect(within(addForm()).getByLabelText("Outcome")).toHaveValue("Kept outcome");
+  });
+
+  it("edits an active entry, prefilled, and keeps the typed values on a refusal", async () => {
+    editBackfillAction.mockResolvedValueOnce({ error: "Choose a department from the list.", message: "" });
+    editBackfillAction.mockResolvedValueOnce({ error: "", message: "Past project updated." });
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    const [first] = within(pastList()).getAllByRole("listitem");
+    await user.click(within(first).getByText("Edit"));
+    const form = within(first).getByRole("form", { name: "Edit past project: Core banking audit, 15 Dec 2025" });
+    expect(within(form).getByLabelText(/^Department/)).toHaveValue(LND);
+    expect(within(form).getByLabelText(/^Client/)).toHaveValue("Old Bank (fictional)");
+    expect(within(form).getByLabelText(/^Outcome/)).toHaveValue("Delivered the audit report.");
+    const outcome = within(form).getByLabelText(/^Outcome/);
+    await user.clear(outcome);
+    await user.type(outcome, "Revised outcome.");
+    await user.click(within(form).getByRole("button", { name: "Save changes" }));
+    expect(Object.fromEntries((editBackfillAction.mock.calls[0][1] as FormData).entries())).toEqual({
+      id: active.id, departmentId: LND, client: "Old Bank (fictional)", projectName: "Core banking audit", completionDate: "2025-12-15",
+      outcome: "Revised outcome.",
+    });
+    expect(await within(first).findByRole("alert")).toHaveTextContent("Choose a department from the list.");
+    expect(within(first).getByLabelText(/^Outcome/)).toHaveValue("Revised outcome.");
+    await user.click(within(first).getByRole("button", { name: "Save changes" }));
+    expect(await within(first).findByText("Past project updated.")).toBeInTheDocument();
+  });
+
+  it("withdraws an active entry through the withdraw action, naming only the entry", async () => {
+    withdrawBackfillAction.mockResolvedValue({ error: "", message: "Past project withdrawn." });
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    const [first] = within(pastList()).getAllByRole("listitem");
+    await user.click(within(first).getByText("Edit"));
+    await user.click(within(first).getByRole("button", { name: "Withdraw past project: Core banking audit, 15 Dec 2025" }));
+    expect(Object.fromEntries((withdrawBackfillAction.mock.calls[0][1] as FormData).entries())).toEqual({ id: active.id });
+    expect(await within(section()).findByText("Past project withdrawn.")).toBeInTheDocument();
+  });
+
+  it("says the department list is unavailable rather than offering an empty select", async () => {
+    await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={null} />);
+    expect(within(section()).queryByRole("form", { name: "Add a past project" })).not.toBeInTheDocument();
+    expect(within(section()).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(section()).getAllByText(/department list is unavailable/).length).toBeGreaterThan(0);
+    // The entries themselves are still listed.
+    expect(within(pastList()).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("says when no past project has been added", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    expect(within(section()).getByText("You have not added any past projects yet.")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations with past projects and the add form", async () => {
+    const { container } = await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

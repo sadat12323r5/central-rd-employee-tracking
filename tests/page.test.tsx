@@ -2,9 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor, loginProps, attendanceListFor, currentFor, portalProps, staffProps, listDepartments } = vi.hoisted(() => ({
+const { getSession, listFor, getFor, loginProps, attendanceListFor, currentFor, portalProps, staffProps, listDepartments, departmentOptions } = vi.hoisted(() => ({
   getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), attendanceListFor: vi.fn(async (..._args: unknown[]) => [] as unknown[]),
   currentFor: vi.fn(), portalProps: vi.fn(), staffProps: vi.fn(), listDepartments: vi.fn(async () => [] as unknown[]),
+  departmentOptions: vi.fn(async () => [] as { id: string; name: string }[]),
 }));
 
 vi.mock("@/server/auth", () => ({ getSession }));
@@ -21,6 +22,11 @@ vi.mock("@/server/departments-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/departments-store")>()),
   // Story 4.3: the page reads department names through the session-aware listFor.
   departmentsStore: { list: vi.fn(), listFor: listDepartments, create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: vi.fn() },
+}));
+vi.mock("@/server/backfilled-project-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/server/backfilled-project-store")>()),
+  // Story 4.7: the staff portal's department options for the backfill form.
+  backfilledProjectStore: { listFor: vi.fn(), departmentOptions, add: vi.fn(), edit: vi.fn(), withdraw: vi.fn() },
 }));
 vi.mock("@/server/training-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/training-store")>()),
@@ -186,6 +192,62 @@ describe("Home routing by role", () => {
     const staff = staffProps.mock.calls.at(-1)?.[0] as { employee: { evaluations: unknown[] } };
     expect(staff.employee.evaluations).toEqual([evaluation]);
     expect(getFor).toHaveBeenLastCalledWith({ role: "staff", employeeId: "BS-1001" }, "BS-1001");
+  });
+
+  it("passes each employee's backfilled projects through to both portals (Story 4.7)", async () => {
+    const { employees } = await import("@/data/employees");
+    const backfilled = {
+      id: "bp-1", employeeId: "BS-1001", departmentId: "d-1", client: "Old client", projectName: "Past work", completionDate: "2025-06-30",
+      outcome: "Delivered.", status: "active", createdAt: "2026-10-16T00:00:00Z", updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null,
+      provenance: "backfilled",
+    };
+    const listed = [{ ...employees[0], backfilledProjects: [backfilled] }];
+    for (const session of [{ role: "admin" }, { role: "manager", employeeId: "BS-1008", userId: "u-1" }]) {
+      getSession.mockResolvedValue(session);
+      listFor.mockResolvedValue(listed);
+      currentFor.mockResolvedValue({ status: "unavailable" });
+      portalProps.mockClear();
+      render(await Home());
+      const props = portalProps.mock.calls.at(-1)?.[0] as { employees: { backfilledProjects: unknown[] }[] };
+      expect(props.employees[0].backfilledProjects).toEqual([backfilled]);
+    }
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1001" });
+    getFor.mockResolvedValue(listed[0]);
+    staffProps.mockClear();
+    render(await Home());
+    const staff = staffProps.mock.calls.at(-1)?.[0] as { employee: { backfilledProjects: unknown[] } };
+    expect(staff.employee.backfilledProjects).toEqual([backfilled]);
+  });
+
+  it("passes the department options (id and name) to the staff portal, or null when they are unavailable (Story 4.7)", async () => {
+    const { employees } = await import("@/data/employees");
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1001" });
+    getFor.mockResolvedValue(employees[0]);
+    currentFor.mockResolvedValue({ status: "unavailable" });
+    const options = [{ id: "d-1", name: "Central R&D" }, { id: "d-2", name: "L&D" }];
+    departmentOptions.mockResolvedValueOnce(options);
+    staffProps.mockClear();
+    render(await Home());
+    expect((staffProps.mock.calls.at(-1)?.[0] as { departmentOptions: unknown }).departmentOptions).toEqual(options);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    departmentOptions.mockRejectedValueOnce(new Error("PGRST202"));
+    staffProps.mockClear();
+    render(await Home());
+    expect((staffProps.mock.calls.at(-1)?.[0] as { departmentOptions: unknown }).departmentOptions).toBeNull();
+    expect(screen.getAllByText("Staff portal").length).toBeGreaterThan(0);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("never reads department options for the management portals (Story 4.7)", async () => {
+    departmentOptions.mockClear();
+    for (const session of [{ role: "admin" }, { role: "manager", employeeId: "BS-1008", userId: "u-1" }]) {
+      getSession.mockResolvedValue(session);
+      listFor.mockResolvedValue([]);
+      render(await Home());
+    }
+    expect(departmentOptions).not.toHaveBeenCalled();
   });
 
   it("passes no role (the Administrator portal) for an admin", async () => {

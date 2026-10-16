@@ -7,6 +7,19 @@ export type Assignment = {
   id: string; employeeId: string; departmentId: string; client: string; projectName: string; role: string;
   allocation: number; startDate: string; latestUpdate: string; status: "open" | "closed";
   completionDate: string | null; createdAt: string; closedAt: string | null;
+  /** Story 4.7: materialized by assignments-store (`toAssignment`): a manager-created record. Never inferred in the UI. */
+  provenance: "assignment";
+};
+
+/**
+ * Story 4.7: a past project the employee added themselves (a separate record, AD-2). Only the owner adds,
+ * edits and withdraws it; a withdrawn entry stays in history (`status` "withdrawn", `withdrawnAt` set).
+ * `completionDate` is a calendar date; `provenance` is materialized by backfilled-project-store.
+ */
+export type BackfilledProject = {
+  id: string; employeeId: string; departmentId: string; client: string; projectName: string; completionDate: string;
+  outcome: string; status: "active" | "withdrawn"; createdAt: string; updatedAt: string; withdrawnAt: string | null;
+  provenance: "backfilled";
 };
 
 /**
@@ -57,6 +70,12 @@ export type Employee = {
    * `assignmentId`). The fixture's own list is always empty.
    */
   evaluations: AssignmentEvaluation[];
+  /**
+   * Story 4.7: the employee's self-reported past projects, read through backfilled-project-store from the
+   * `backfilled_projects` table (newest completion first), withdrawn ones included and marked. The
+   * fixture's own list is always empty.
+   */
+  backfilledProjects: BackfilledProject[];
   /**
    * External interviews (Story 2.1): read from the `external_interviews` table, newest first.
    * `withdrawn` (Story 2.2) marks an entry its author withdrew: it leaves active views but stays in history.
@@ -198,6 +217,7 @@ export const employees: Employee[] = people.map((p, index) => {
     training: [{ id: trainingSeedId(id, 0), name: `${skillOne} · practical foundations`, provider: "BS23 Learning & Development", progress: 100, date: "2026-08-20", result: junior ? "Completed · mentor reviewed" : "Completed · assessment passed" }, { id: trainingSeedId(id, 1), name: junior ? "Professional communication" : "Technical leadership & collaboration", provider: "BS23 Learning & Development", progress: 60 + (index % 3) * 10, date: "2026-09-28", result: "In progress" }],
     assignments: [],
     evaluations: [],
+    backfilledProjects: [],
     interviews: index === 2 || index === 5 ? [] : [{ id: interviewSeedId(id, 0), company: ["Northstar Labs", "Orbit Analytics", "", "Cedar Software", "Canvas Digital", "", "Summit Cloud", "Harbour Systems"][index] + " (fictional)", role: title, date: index === 0 ? "2026-09-23" : "2026-09-16", stage: index === 0 ? "Technical interview" : "Technical round completed", outcome: index === 0 ? "Scheduled" : index === 3 ? "Not selected" : "Awaiting feedback", feedback: index === 3 ? "Needs more practice explaining test strategy. Mentor follow-up planned." : "Preparation focus: project examples, technical reasoning and communication. No offer recorded.", withdrawn: false }],
     attendance: { scheduled: 14, worked: index === 2 ? 11 : 12, leave: index === 2 ? 2 : 1, unrecorded: 1, records: [{ date: "2026-09-10", type: "Leave", days: index === 2 ? 2 : 1, status: "Recorded" }, { date: "2026-09-17", type: "Attendance", days: 1, status: "Missing record" }] },
     review: { date: "2026-09-14", reviewer: "Ayesha Karim · L&D Manager", readiness: junior ? "Developing · mentor support" : "Ready for role-matched interviews", strengths: junior ? "Consistent learning progress, asks thoughtful questions and responds well to feedback." : "Clear technical reasoning, collaborative delivery and well-documented project contributions.", next: junior ? "Complete the capstone and practise a short technical presentation." : `Strengthen advanced ${skillTwo} skills and prepare two project case studies.` },

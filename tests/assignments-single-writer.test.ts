@@ -2,6 +2,8 @@
 // `completion_date` column or writes to the `assignments` table (insert, update, upsert or delete), so
 // only it can set an assignment's status or completion date.
 // Story 4.6: the evaluations store reads its target assignment but never writes the assignments table.
+// Story 4.7: backfilled_projects has its own completion_date column, so backfilled-project-store.ts also names
+// it; that store never touches the assignments table at all.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +11,7 @@ import { describe, expect, it } from "vitest";
 const root = join(import.meta.dirname, "..");
 const STORE = "src/server/assignments-store.ts";
 const EVALUATIONS_STORE = "src/server/assignment-evaluations-store.ts";
+const BACKFILL_STORE = "src/server/backfilled-project-store.ts";
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap(name => {
@@ -29,8 +32,13 @@ describe("assignments single writer", () => {
     expect(sources.length).toBeGreaterThan(10);
   });
 
-  it("mentions completion_date only in assignments-store.ts", () => {
-    expect(sources.filter(s => s.text.includes("completion_date")).map(s => s.file)).toEqual([STORE]);
+  it("mentions completion_date only in assignments-store.ts (and backfilled-project-store.ts, for its own table)", () => {
+    expect(sources.filter(s => s.text.includes("completion_date")).map(s => s.file).sort()).toEqual([STORE, BACKFILL_STORE].sort());
+  });
+
+  it("never names the assignments table in backfilled-project-store.ts", () => {
+    const text = sources.find(s => s.file === BACKFILL_STORE)!.text;
+    expect(text).not.toMatch(/["'`]assignments["'`]/);
   });
 
   it("writes the assignments table (status included) only in assignments-store.ts", () => {

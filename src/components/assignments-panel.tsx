@@ -1,12 +1,13 @@
 "use client";
 
 import { useActionState } from "react";
-import type { Assignment, AssignmentEvaluation } from "@/data/employees";
+import type { Assignment, AssignmentEvaluation, BackfilledProject } from "@/data/employees";
 import { formatDisplayDate } from "@/domain/dates";
 import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import type { ActionState } from "@/server/attendance-actions";
 import EvaluationView from "./evaluation-view";
+import ProvenanceLabel from "./provenance-label";
 
 // Story 4.5: the profile's Current work tab in the management portal (Administrator or a manager over
 // the employee's department). It shows the open assignment, with forms to edit its latest-update note and
@@ -14,6 +15,10 @@ import EvaluationView from "./evaluation-view";
 // read-only. The department is never chosen here: the server copies the employee's own.
 // Story 4.6: each closed assignment shows its evaluation (with the client's feedback and its authorship)
 // and a form to write it or, once written, to amend it. The open assignment is never offered one.
+// Story 4.7: the history also lists the employee's self-reported past projects, mixed with the closed
+// assignments, newest completion first. Each row carries a text marker read from its materialized
+// `provenance` ("Manager-created" or "Self-reported"), plus "Withdrawn" where it applies. Past projects
+// are read-only here: no edit, withdraw or evaluation control (only their owner changes them).
 
 /** A form's result, stamped so the panel can show the most recent one (forms unmount after a create or close). */
 type Stamped = ActionState & { at: number };
@@ -61,6 +66,33 @@ function StatusLabel({ status }: { status: Assignment["status"] }) {
 }
 
 const date = formatDisplayDate;
+
+/** Story 4.7: one history row, a closed assignment or a backfilled project, told apart by its stored provenance. */
+type HistoryRow = Assignment | BackfilledProject;
+
+/** Newest completion first; ties by creation time (newest first), then id. */
+function compareHistory(a: HistoryRow, b: HistoryRow): number {
+  const byCompletion = (b.completionDate ?? "").localeCompare(a.completionDate ?? "");
+  if (byCompletion !== 0) return byCompletion;
+  const byCreated = b.createdAt.localeCompare(a.createdAt);
+  return byCreated !== 0 ? byCreated : a.id.localeCompare(b.id);
+}
+
+/** Story 4.7: a self-reported past project, read-only in the management portal. */
+function BackfilledRow({ project, departmentName }: { project: BackfilledProject; departmentName: (id: string) => string }) {
+  return <>
+    <div className="panel-title">
+      <h3>{project.projectName}</h3>
+      <span className="history-markers">
+        <ProvenanceLabel provenance={project.provenance} />
+        {project.status === "withdrawn" && <span className="badge withdrawn"><span className="dot" />Withdrawn</span>}
+      </span>
+    </div>
+    <p>{project.client}</p>
+    <small>Completed {date(project.completionDate)} · {departmentName(project.departmentId)}</small>
+    <div className="callout backfill-outcome">{project.outcome}</div>
+  </>;
+}
 
 /** The evaluation form's result; a refused entry is kept so it can be shown again. */
 type EvaluationState = ActionState & { values?: { evaluation: string; clientFeedback: string }; attempt: number };
@@ -117,7 +149,7 @@ function ClosedEvaluation({ assignment, evaluation }: {
   </div>;
 }
 
-export default function AssignmentsPanel({ employeeId, name, assignments, departmentName, evaluations = [] }: {
+export default function AssignmentsPanel({ employeeId, name, assignments, departmentName, evaluations = [], backfilledProjects = [] }: {
   employeeId: string;
   /** The employee's name, for labels. */
   name: string;
@@ -127,12 +159,14 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
   departmentName: (id: string) => string;
   /** Story 4.6: the employee's assignment evaluations (joined to closed assignments by id). */
   evaluations?: AssignmentEvaluation[];
+  /** Story 4.7: the employee's self-reported past projects (withdrawn ones included), read-only here. */
+  backfilledProjects?: BackfilledProject[];
 }) {
   const [created, create, creating] = useActionState(submitCreate, createInitial);
   const [noted, note, noting] = useActionState(submitNote, keptInitial);
   const [closed, close, closing] = useActionState(submitClose, keptInitial);
   const open = assignments.find(a => a.status === "open");
-  const history = assignments.filter(a => a.status === "closed");
+  const history: HistoryRow[] = [...assignments.filter(a => a.status === "closed"), ...backfilledProjects].sort(compareHistory);
   const latest = [created, noted, closed].reduce((a, b) => (b.at > a.at ? b : a));
   const ids = (suffix: string) => `assignment-${suffix}-${employeeId}`;
 
@@ -199,14 +233,19 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
     </article>
     <article className="panel" aria-labelledby={ids("history-heading")}>
       <h2 id={ids("history-heading")}>Assignment history</h2>
-      <p className="muted">Closed assignments, newest completion first, each with its evaluation. Kept for the record.</p>
-      {history.length === 0 ? <p className="muted">No closed assignments yet.</p> : <ul className="assignment-history" aria-label="Closed assignments">
-        {history.map(a => <li key={a.id} className="interview-detail">
-          <div className="panel-title"><h3>{a.projectName}</h3><StatusLabel status="closed" /></div>
-          <p>{a.role} · {a.client} · {a.allocation}%</p>
-          <small>{date(a.startDate)} – {date(a.completionDate ?? "")} · {departmentName(a.departmentId)}</small>
-          {a.latestUpdate && <div className="callout">{a.latestUpdate}</div>}
-          <ClosedEvaluation assignment={a} evaluation={evaluations.find(e => e.assignmentId === a.id)} />
+      <p className="muted">Closed assignments and self-reported past projects, newest completion first. Kept for the record.</p>
+      {history.length === 0 ? <p className="muted">No closed assignments or past projects yet.</p> : <ul className="assignment-history" aria-label="Work history">
+        {history.map(row => <li key={`${row.provenance}-${row.id}`} className="interview-detail">
+          {row.provenance === "backfilled" ? <BackfilledRow project={row} departmentName={departmentName} /> : <>
+            <div className="panel-title">
+              <h3>{row.projectName}</h3>
+              <span className="history-markers"><ProvenanceLabel provenance={row.provenance} /><StatusLabel status="closed" /></span>
+            </div>
+            <p>{row.role} · {row.client} · {row.allocation}%</p>
+            <small>{date(row.startDate)} – {date(row.completionDate ?? "")} · {departmentName(row.departmentId)}</small>
+            {row.latestUpdate && <div className="callout">{row.latestUpdate}</div>}
+            <ClosedEvaluation assignment={row} evaluation={evaluations.find(e => e.assignmentId === row.id)} />
+          </>}
         </li>)}
       </ul>}
     </article>

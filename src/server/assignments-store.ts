@@ -121,6 +121,8 @@ export function toAssignment(row: AssignmentRow): Assignment {
     projectName: row.project_name, role: row.role, allocation: row.allocation, startDate: row.start_date,
     latestUpdate: row.latest_update, status: row.status, completionDate: row.completion_date ?? null,
     createdAt: row.created_at, closedAt: row.closed_at ?? null,
+    // Story 4.7: materialized here, so views never infer a row's origin from the list it came from.
+    provenance: "assignment",
   };
 }
 

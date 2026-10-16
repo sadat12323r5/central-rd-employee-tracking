@@ -47,3 +47,12 @@ export function formatDisplayDay(value: string): string {
   const parts = Object.fromEntries(DHAKA_PARTS.formatToParts(new Date(time)).map(p => [p.type, p.value]));
   return formatDisplayDate(`${parts.year}-${parts.month}-${parts.day}`);
 }
+
+/**
+ * Today's calendar date in the Asia/Dhaka org timezone, as `YYYY-MM-DD`, e.g. `2026-10-15T20:00:00Z` →
+ * `2026-10-16`.
+ */
+export function todayInDhaka(now: Date = new Date()): string {
+  const parts = Object.fromEntries(DHAKA_PARTS.formatToParts(now).map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}

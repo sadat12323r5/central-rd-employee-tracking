@@ -3,6 +3,7 @@ import Portal from "@/components/portal";
 import StaffAttendance from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
 import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
+import { backfilledProjectStore, type DepartmentOption } from "@/server/backfilled-project-store";
 import { departmentsStore, DepartmentsUnavailableError } from "@/server/departments-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
 import type { SessionIdentity } from "@/server/session";
@@ -20,8 +21,10 @@ export default async function Home() {
       if (!employee) return login;
       // Started before the attendance read and never awaited here: the page streams it (Story 3.2).
       const current = currentTraining(session, [employee.id]);
-      const entries = await attendanceStore.listFor(session, employee.id);
-      return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current} />;
+      // Story 4.7: the departments to pick from when backfilling; unavailable is a value (the form says so).
+      const [entries, departmentOptions] = await Promise.all([attendanceStore.listFor(session, employee.id), departmentOptionsFor()]);
+      return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current}
+        departmentOptions={departmentOptions} />;
     }
     if (session.role === "manager") {
       // Story 4.2: the management portal without Departments, interviews or account controls.
@@ -61,6 +64,19 @@ function currentTraining(session: SessionIdentity, employeeIds: string[]): Promi
       console.error("Current training unavailable.", error);
       return { status: "unavailable" };
     });
+}
+
+/**
+ * Story 4.7: the department list (id and name only) for the backfill form, read through the store. Any
+ * error becomes `null` (logged): the form then says the list is unavailable rather than offering an empty select.
+ */
+async function departmentOptionsFor(): Promise<DepartmentOption[] | null> {
+  try {
+    return await backfilledProjectStore.departmentOptions();
+  } catch (error) {
+    console.error("Department options unavailable.", error);
+    return null;
+  }
 }
 
 function EmployeesUnavailable() {

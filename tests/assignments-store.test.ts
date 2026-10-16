@@ -152,7 +152,7 @@ describe("assignments-store reads", () => {
     expect(toAssignment(row("BS-1001", OPEN_ID, { latest_update: "Note" }))).toEqual({
       id: OPEN_ID, employeeId: "BS-1001", departmentId: DEPT, client: "Client", projectName: `Project ${OPEN_ID}`, role: "Engineer",
       allocation: 80, startDate: "2026-09-14", latestUpdate: "Note", status: "open", completionDate: null,
-      createdAt: "2026-10-01T00:00:00Z", closedAt: null,
+      createdAt: "2026-10-01T00:00:00Z", closedAt: null, provenance: "assignment",
     });
   });
 

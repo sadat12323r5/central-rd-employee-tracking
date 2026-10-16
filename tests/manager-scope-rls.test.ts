@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAssignmentEvaluationsStore } from "@/server/assignment-evaluations-store";
 import { createAssignmentsStore } from "@/server/assignments-store";
 import { createAttendanceStore } from "@/server/attendance-store";
+import { createBackfilledProjectStore } from "@/server/backfilled-project-store";
 import { createDepartmentsStore } from "@/server/departments-store";
 import { createEmployeesStore } from "@/server/employees-store";
 import { createInterviewsStore } from "@/server/interviews-store";
@@ -257,7 +258,8 @@ describe.skipIf(!configured)("manager scope RLS (shared Supabase project)", () =
     const training = createTrainingStore({ userClient, lms: createStubLmsClient({ userClient }), scope });
     const assignments = createAssignmentsStore({ userClient, scope });
     const evaluations = createAssignmentEvaluationsStore({ userClient, scope });
-    const employees = createEmployeesStore({ userClient, interviews: createInterviewsStore({ userClient }), training, assignments, evaluations, scope });
+    const backfilled = createBackfilledProjectStore({ userClient, scope });
+    const employees = createEmployeesStore({ userClient, interviews: createInterviewsStore({ userClient }), training, assignments, evaluations, backfilled, scope });
     const list = await employees.listFor(session);
     expect(list.map(e => e.id).sort()).toEqual([childEmployee, staffId].sort());
     expect(list.every(e => e.departmentId === childId && e.interviews.length === 0)).toBe(true);

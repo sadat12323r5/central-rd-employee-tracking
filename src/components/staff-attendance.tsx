@@ -1,17 +1,20 @@
 "use client";
 
 import { Suspense, use, useActionState, useEffect, useState } from "react";
-import type { Employee } from "@/data/employees";
+import type { BackfilledProject, Employee } from "@/data/employees";
 import {
   WORK_MODES, entryStatus, formatDuration, todaysEntry, workedMinutes, summariseEntries, type TimesheetEntry,
 } from "@/domain/timesheet";
-import { formatDisplayDate } from "@/domain/dates";
+import { formatDisplayDate, todayInDhaka } from "@/domain/dates";
 import { clockInAction, clockOutAction, saveLogAction, type ActionState } from "@/server/attendance-actions";
+import { addBackfillAction, editBackfillAction, withdrawBackfillAction } from "@/server/backfill-actions";
+import type { DepartmentOption } from "@/server/backfilled-project-store";
 import { addInterviewAction, updateInterviewAction, withdrawInterviewAction } from "@/server/interviews-actions";
 import { signOut } from "@/server/auth";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
 import EvaluationView from "./evaluation-view";
+import ProvenanceLabel from "./provenance-label";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -112,23 +115,164 @@ function CompletedWithLms({ stored, current, employeeId }: { stored: Training[];
   return <CompletedTable entries={[...stored, ...fromLms]} />;
 }
 
+/** Story 4.7: what a past-project form holds; a refused entry is kept so it can be shown again. */
+type BackfillValues = { departmentId: string; client: string; projectName: string; completionDate: string; outcome: string };
+type BackfillState = ActionState & { values?: BackfillValues; attempt: number };
+const backfillInitial: BackfillState = { error: "", message: "", attempt: 0 };
+
+function keptValues(form: FormData): BackfillValues {
+  const text = (key: string) => {
+    const value = form.get(key);
+    return typeof value === "string" ? value : "";
+  };
+  return {
+    departmentId: text("departmentId"), client: text("client"), projectName: text("projectName"),
+    completionDate: text("completionDate"), outcome: text("outcome"),
+  };
+}
+
+async function submitAddBackfill(previous: BackfillState, form: FormData): Promise<BackfillState> {
+  const result = await addBackfillAction({ error: previous.error, message: previous.message }, form);
+  return { ...result, attempt: previous.attempt + 1, values: result.error ? keptValues(form) : undefined };
+}
+
+async function submitEditBackfill(previous: BackfillState, form: FormData): Promise<BackfillState> {
+  const result = await editBackfillAction({ error: previous.error, message: previous.message }, form);
+  return { ...result, attempt: previous.attempt + 1, values: result.error ? keptValues(form) : undefined };
+}
+
+const DEPARTMENTS_UNAVAILABLE = "The department list is unavailable right now, so past projects can't be added or edited. Please refresh the page in a moment.";
+
+/** The fields of a past project (department from the list, client, project, completion date, outcome). */
+function BackfillFields({ prefix, options, values, today, context }: {
+  prefix: string; options: DepartmentOption[]; values: Partial<BackfillValues>; today: string;
+  /** Appended to each label for screen readers, so several editors on one page are distinguishable. */
+  context?: string;
+}) {
+  const id = (name: string) => `${prefix}-${name}`;
+  const more = context ? <span className="sr-only"> · {context}</span> : null;
+  return <>
+    <div className="staff-field">
+      <label htmlFor={id("department")}>Department{more}</label>
+      <select id={id("department")} name="departmentId" required defaultValue={values.departmentId ?? ""}>
+        <option value="" disabled>Choose a department</option>
+        {options.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+      </select>
+    </div>
+    <div className="staff-field">
+      <label htmlFor={id("client")}>Client{more}</label>
+      <input id={id("client")} name="client" maxLength={200} required defaultValue={values.client ?? ""} />
+    </div>
+    <div className="staff-field">
+      <label htmlFor={id("project")}>Project name{more}</label>
+      <input id={id("project")} name="projectName" maxLength={200} required defaultValue={values.projectName ?? ""} />
+    </div>
+    <div className="staff-field">
+      <label htmlFor={id("completion")}>Completion date{more}</label>
+      <input id={id("completion")} name="completionDate" type="date" max={today} required defaultValue={values.completionDate ?? ""} />
+    </div>
+    <div className="staff-field">
+      <label htmlFor={id("outcome")}>Outcome{more}</label>
+      <textarea id={id("outcome")} name="outcome" rows={3} maxLength={2000} required defaultValue={values.outcome ?? ""} />
+    </div>
+  </>;
+}
+
+/**
+ * Story 4.7: one active past project's editor (every field can change) and a separate form to withdraw it.
+ * The withdraw state is owned by the list: a withdrawn entry loses its controls (this editor unmounts).
+ */
+function PastProjectEditor({ project, options, today, withdrawAction, withdrawPending }: {
+  project: BackfilledProject; options: DepartmentOption[] | null; today: string;
+  withdrawAction: (form: FormData) => void; withdrawPending: boolean;
+}) {
+  const [state, submit, saving] = useActionState(submitEditBackfill, backfillInitial);
+  const name = `${project.projectName}, ${formatDisplayDate(project.completionDate)}`;
+  return <details className="backfill-editor">
+    <summary aria-label={`Edit past project: ${name}`}>Edit</summary>
+    {options === null ? <p role="status" className="form-error">{DEPARTMENTS_UNAVAILABLE}</p>
+      : <form key={`${state.attempt}-${project.updatedAt}`} action={submit} className="staff-log" aria-label={`Edit past project: ${name}`}>
+        <input type="hidden" name="id" value={project.id} />
+        <BackfillFields prefix={`backfill-${project.id}`} options={options} today={today} context={project.projectName}
+          values={state.values ?? project} />
+        <div className="staff-actions">
+          <button className="primary" disabled={saving}>{saving ? "Saving…" : "Save changes"}</button>
+        </div>
+        <Feedback state={state} />
+      </form>}
+    <form action={withdrawAction} className="staff-actions">
+      <input type="hidden" name="id" value={project.id} />
+      <button className="secondary" disabled={withdrawPending} aria-label={`Withdraw past project: ${name}`}>
+        {withdrawPending ? "Withdrawing…" : "Withdraw past project"}
+      </button>
+      <small>Withdrawn entries stay in your history, marked, and cannot be changed again.</small>
+    </form>
+  </details>;
+}
+
+/**
+ * Story 4.7: the employee's own past projects (self-reported), newest completion first: active ones with
+ * edit and withdraw controls, withdrawn ones listed with a "Withdrawn" label and no controls; then the
+ * form to add one. The owner is always the signed-in employee (the server takes it from the session).
+ */
+function MyPastProjects({ projects, options, today }: { projects: BackfilledProject[]; options: DepartmentOption[] | null; today: string }) {
+  const [added, add, adding] = useActionState(submitAddBackfill, backfillInitial);
+  const [withdrawState, withdrawAction, withdrawPending] = useActionState(withdrawBackfillAction, initial);
+  const departmentName = (id: string) => options?.find(d => d.id === id)?.name ?? "Department not shown";
+  return <div className="staff-backfill">
+    <h3 id="past-projects-heading">Past projects you added</h3>
+    <p className="muted">Projects from before this system, or that were never tracked. Only you can change them; your managers and the L&D Administrator can see them.</p>
+    {projects.length === 0 ? <p className="muted">You have not added any past projects yet.</p> : <ul className="assignment-history" aria-labelledby="past-projects-heading">
+      {projects.map(p => <li key={p.id} className="interview-detail">
+        <div className="panel-title">
+          <h4>{p.projectName}</h4>
+          <span className="history-markers">
+            <ProvenanceLabel provenance={p.provenance} />
+            {p.status === "withdrawn" && <span className="badge withdrawn"><span className="dot" />Withdrawn</span>}
+          </span>
+        </div>
+        <p>{p.client} · {departmentName(p.departmentId)}</p>
+        <small>Completed {formatDisplayDate(p.completionDate)}</small>
+        <div className="callout backfill-outcome">{p.outcome}</div>
+        {p.status === "active" && <PastProjectEditor project={p} options={options} today={today} withdrawAction={withdrawAction} withdrawPending={withdrawPending} />}
+      </li>)}
+    </ul>}
+    <Feedback state={withdrawState} />
+
+    <h3 id="add-past-project-heading">Add a past project</h3>
+    {options === null ? <p role="status" className="form-error">{DEPARTMENTS_UNAVAILABLE}</p>
+      : options.length === 0 ? <p className="muted">No departments are listed yet, so past projects can&apos;t be added.</p>
+      : <form key={`add-${added.attempt}`} action={add} className="staff-log" aria-labelledby="add-past-project-heading">
+        <BackfillFields prefix="backfill-new" options={options} today={today} values={added.values ?? {}} />
+        <div className="staff-actions">
+          <button className="primary" disabled={adding}>{adding ? "Adding…" : "Add past project"}</button>
+        </div>
+        <Feedback state={added} />
+      </form>}
+  </div>;
+}
+
 /**
  * Story 4.6: the employee's own assignments, read-only: the open one, then history, each closed one with
- * its evaluation and the client's feedback. No form control: Staff never write assignments or evaluations.
+ * its evaluation and the client's feedback. No form control on them: Staff never write assignments or
+ * evaluations. Story 4.7: then the employee's own past projects, which they add, edit and withdraw.
  */
-function MyAssignments({ employee }: { employee: Employee }) {
+function MyAssignments({ employee, departmentOptions, today }: { employee: Employee; departmentOptions: DepartmentOption[] | null; today: string }) {
   const assignments = employee.assignments ?? [];
   const evaluations = employee.evaluations ?? [];
   return <section className="panel staff-assignments" aria-labelledby="my-assignments-heading">
     <h2 id="my-assignments-heading">My assignments</h2>
-    <p className="muted">Your current assignment and your assignment history, with your manager&apos;s evaluations. Read-only.</p>
+    <p className="muted">Your current assignment and your assignment history, with your manager&apos;s evaluations (read-only), and the past projects you added yourself.</p>
     {assignments.length === 0 ? <p className="muted">No assignments have been recorded for you yet.</p> : <ul className="assignment-history" aria-label="Your assignments">
       {assignments.map(a => <li key={a.id} className="interview-detail">
         <div className="panel-title">
           <h3>{a.projectName}</h3>
-          {a.status === "open"
-            ? <span className="badge green"><span className="dot" />Open</span>
-            : <span className="badge withdrawn"><span className="dot" />Closed</span>}
+          <span className="history-markers">
+            <ProvenanceLabel provenance={a.provenance} />
+            {a.status === "open"
+              ? <span className="badge green"><span className="dot" />Open</span>
+              : <span className="badge withdrawn"><span className="dot" />Closed</span>}
+          </span>
         </div>
         <p>{a.role} · {a.client} · {a.allocation}%</p>
         <small>{a.status === "open" ? `Since ${formatDisplayDate(a.startDate)}` : `${formatDisplayDate(a.startDate)} – ${formatDisplayDate(a.completionDate ?? "")}`}</small>
@@ -136,13 +280,16 @@ function MyAssignments({ employee }: { employee: Employee }) {
         {a.status === "closed" && <EvaluationView evaluation={evaluations.find(e => e.assignmentId === a.id)} projectName={a.projectName} />}
       </li>)}
     </ul>}
+    <MyPastProjects projects={employee.backfilledProjects ?? []} options={departmentOptions} today={today} />
   </section>;
 }
 
-export default function StaffAttendance({ employee, entries, serverNow, current }: {
+export default function StaffAttendance({ employee, entries, serverNow, current, departmentOptions = null }: {
   employee: Employee; entries: TimesheetEntry[]; serverNow: string;
   /** Story 3.2: LMS enrolments, streamed (always resolves; `unavailable` is a value). */
   current: Promise<CurrentTraining>;
+  /** Story 4.7: the departments to pick from when backfilling (id and name only); null when unavailable. */
+  departmentOptions?: DepartmentOption[] | null;
 }) {
   const [now, setNow] = useState(() => new Date(serverNow));
   const [inState, inAction, inPending] = useActionState(clockInAction, initial);
@@ -288,7 +435,7 @@ export default function StaffAttendance({ employee, entries, serverNow, current 
         </table></div>}
       </section>
 
-      <MyAssignments employee={employee} />
+      <MyAssignments employee={employee} departmentOptions={departmentOptions} today={todayInDhaka(now)} />
 
       <section className="panel staff-training" aria-labelledby="current-training-heading">
         <h2 id="current-training-heading">Current enrolments</h2>

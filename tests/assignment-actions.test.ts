@@ -45,6 +45,7 @@ const valid = { employeeId: "BS-1001", client: " Northwind (fictional) ", projec
 const sample: Assignment = {
   id: ID, employeeId: "BS-1001", departmentId: "d-1", client: "Northwind (fictional)", projectName: "Portal rebuild", role: "Developer",
   allocation: 60, startDate: "2026-10-01", latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null,
+  provenance: "assignment",
 };
 
 beforeEach(() => {

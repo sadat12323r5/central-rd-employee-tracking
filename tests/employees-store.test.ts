@@ -9,6 +9,7 @@ import type { SessionIdentity } from "@/server/session";
 import { TrainingUnavailableError, type TrainingEntry, type TrainingStore } from "@/server/training-store";
 import { AssignmentsUnavailableError, type Assignment, type AssignmentsStore } from "@/server/assignments-store";
 import { EvaluationsUnavailableError, type AssignmentEvaluation, type AssignmentEvaluationsStore } from "@/server/assignment-evaluations-store";
+import { BackfillUnavailableError, type BackfilledProject, type BackfilledProjectStore } from "@/server/backfilled-project-store";
 
 const rowFor = (id: string): EmployeeRow => {
   const e = fixture.find(x => x.id === id)!;
@@ -97,7 +98,8 @@ function fakeTraining(rows: TrainingEntry[] = fixtureTraining, fail = false) {
 
 const assignment = (employeeId: string, id: string, extra: Partial<Assignment> = {}): Assignment => ({
   id, employeeId, departmentId: "dept-1", client: "Not recorded", projectName: `Project ${id}`, role: "Engineer", allocation: 80,
-  startDate: "2026-09-14", latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null, ...extra,
+  startDate: "2026-09-14", latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null,
+  provenance: "assignment", ...extra,
 });
 const storedAssignments = [
   assignment("BS-1001", "a-1"),
@@ -142,11 +144,33 @@ function fakeEvaluations(rows: AssignmentEvaluation[] = storedEvaluations, fail 
   return { store, calls };
 }
 
+const backfilledProject = (employeeId: string, id: string, extra: Partial<BackfilledProject> = {}): BackfilledProject => ({
+  id, employeeId, departmentId: "dept-1", client: "Old client", projectName: `Past ${id}`, completionDate: "2025-06-30",
+  outcome: "Delivered.", status: "active", createdAt: "2026-10-16T00:00:00Z", updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null,
+  provenance: "backfilled", ...extra,
+});
+const storedBackfilled = [backfilledProject("BS-1001", "bp-0"), backfilledProject("BS-1002", "bp-9", { status: "withdrawn", withdrawnAt: "2026-10-16T01:00:00Z" })];
+
+/** Stand-in for backfilled-project-store: applies the same session scoping and records every call. */
+function fakeBackfilled(rows: BackfilledProject[] = storedBackfilled, fail = false) {
+  const calls: [SessionIdentity, string | undefined][] = [];
+  const store: Pick<BackfilledProjectStore, "listFor"> = {
+    async listFor(session, employeeId) {
+      calls.push([session, employeeId]);
+      if (fail) throw new BackfillUnavailableError({ cause: "connection refused" });
+      if (session.role === "staff" && employeeId !== undefined && employeeId !== session.employeeId) return [];
+      const scope = session.role === "staff" ? session.employeeId : employeeId;
+      return rows.filter(r => scope === undefined || r.employeeId === scope).map(r => ({ ...r }));
+    },
+  };
+  return { store, calls };
+}
+
 const both = (
   client: SupabaseClient, interviews = fakeInterviews().store, training = fakeTraining().store, assignments = fakeAssignments().store,
-  evaluations = fakeEvaluations().store,
+  evaluations = fakeEvaluations().store, backfilled = fakeBackfilled().store,
 ) => ({
-  userClient: async () => client, interviews, training, assignments, evaluations,
+  userClient: async () => client, interviews, training, assignments, evaluations, backfilled,
 });
 const withoutEmployee = ({ employeeId: _, ...rest }: ExternalInterview) => rest;
 
@@ -215,7 +239,7 @@ describe("employees-store and manager sessions (Story 4.3: scoped to the departm
     return { store, calls };
   };
   const storeWith = (client: SupabaseClient, scope: ManagerScope, interviews = fakeInterviews(), training = managerTraining()) =>
-    createEmployeesStore({ userClient: async () => client, interviews: interviews.store, training: training.store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store, scope });
+    createEmployeesStore({ userClient: async () => client, interviews: interviews.store, training: training.store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store, backfilled: fakeBackfilled([]).store, scope });
 
   it("lists only in-scope employees, archived ones flagged, with their department and never the account link", async () => {
     const { client, queries } = fakeClient(rows());
@@ -314,6 +338,7 @@ describe("employees-store data", () => {
       interviews: [withoutEmployee(stored[0]), withoutEmployee(stored[2])],
       assignments: [storedAssignments[0], storedAssignments[1]],
       evaluations: [storedEvaluations[0]],
+      backfilledProjects: [storedBackfilled[0]],
     });
   });
 
@@ -472,7 +497,7 @@ describe("employees-store unavailability", () => {
 
   it("throws EmployeesUnavailableError when Supabase is not configured", async () => {
     const unconfigured = () => { throw new Error("Supabase is not configured"); };
-    const store = createEmployeesStore({ userClient: async () => unconfigured(), interviews: fakeInterviews().store, training: fakeTraining().store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store });
+    const store = createEmployeesStore({ userClient: async () => unconfigured(), interviews: fakeInterviews().store, training: fakeTraining().store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store, backfilled: fakeBackfilled([]).store });
     for (const call of calls(store)) await expect(call()).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 
@@ -494,7 +519,7 @@ describe("employees-store unavailability", () => {
 describe("employees-store client and columns", () => {
   it("reads with the user's JWT client (RLS) for both roles; it has no service-role client to use", async () => {
     const user = fakeClient(seeded);
-    const store = createEmployeesStore({ userClient: async () => user.client, interviews: fakeInterviews().store, training: fakeTraining().store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store });
+    const store = createEmployeesStore({ userClient: async () => user.client, interviews: fakeInterviews().store, training: fakeTraining().store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store, backfilled: fakeBackfilled([]).store });
     await store.listFor(admin);
     await store.getFor(admin, "BS-1003");
     await store.listFor(staff);
@@ -556,7 +581,7 @@ describe("employees-store client and columns", () => {
   });
 
   it("reports the directory unavailable when the user client cannot be created", async () => {
-    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); }, interviews: fakeInterviews().store, training: fakeTraining().store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store });
+    const store = createEmployeesStore({ userClient: async () => { throw new Error("cookies unavailable"); }, interviews: fakeInterviews().store, training: fakeTraining().store, assignments: fakeAssignments().store, evaluations: fakeEvaluations([]).store, backfilled: fakeBackfilled([]).store });
     await expect(store.listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
     await expect(store.getFor(staff, "BS-1002")).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
@@ -612,7 +637,7 @@ describe("employees-store manager paging (Story 4.3 with Story 8.2)", () => {
   it("pages a manager's subtree past 1000 rows, never truncating it", async () => {
     const ids = many(2003, i => `BS-${String(i).padStart(4, "0")}`);
     const { client, ranges } = pagedClient([many(1000, rowAt), many(1000, rowAt, 1000), many(3, rowAt, 2000)]);
-    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, assignments: fakeAssignments([]).store, evaluations: fakeEvaluations([]).store, scope: scopeOf(ids) });
+    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, assignments: fakeAssignments([]).store, evaluations: fakeEvaluations([]).store, backfilled: fakeBackfilled([]).store, scope: scopeOf(ids) });
     const list = await store.listFor(manager);
     expect(list).toHaveLength(2003);
     expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
@@ -620,7 +645,7 @@ describe("employees-store manager paging (Story 4.3 with Story 8.2)", () => {
 
   it("throws the unavailable error when a later manager page fails", async () => {
     const { client } = pagedClient([many(1000, rowAt), "error"]);
-    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, assignments: fakeAssignments([]).store, evaluations: fakeEvaluations([]).store, scope: scopeOf(["BS-0001"]) });
+    const store = createEmployeesStore({ userClient: async () => client, interviews: fakeInterviews().store, training: noTraining, assignments: fakeAssignments([]).store, evaluations: fakeEvaluations([]).store, backfilled: fakeBackfilled([]).store, scope: scopeOf(["BS-0001"]) });
     await expect(store.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 });
@@ -742,6 +767,60 @@ describe("employees-store assignment evaluations (Story 4.6)", () => {
     const { client } = fakeClient(seeded);
     const bug = new TypeError("bug");
     const store = createEmployeesStore(both(client, undefined, undefined, undefined, { listFor: async () => { throw bug; } }));
+    await expect(store.listFor(admin)).rejects.toBe(bug);
+  });
+});
+
+describe("employees-store backfilled projects (Story 4.7)", () => {
+  const manager = { role: "manager", employeeId: "BS-1008", userId: "u-mgr" } as const;
+  const scopeOf = (ids: string[]): ManagerScope => ({ forManager: async () => ({ departmentIds: new Set(["dept-1"]), employeeIds: new Set(ids) }) });
+
+  it("gives each listed employee their own backfilled projects from one read (admin), withdrawn ones included", async () => {
+    const { client } = fakeClient(seeded);
+    const backfilled = fakeBackfilled();
+    const list = await createEmployeesStore(both(client, undefined, undefined, undefined, undefined, backfilled.store)).listFor(admin);
+    expect(list.find(e => e.id === "BS-1001")?.backfilledProjects.map(b => b.id)).toEqual(["bp-0"]);
+    expect(list.find(e => e.id === "BS-1002")?.backfilledProjects).toMatchObject([{ id: "bp-9", status: "withdrawn", provenance: "backfilled" }]);
+    expect(list.find(e => e.id === "BS-1003")?.backfilledProjects).toEqual([]);
+    expect(backfilled.calls).toEqual([[admin, undefined]]);
+  });
+
+  it("reads a profile's backfilled projects for that employee only", async () => {
+    const { client } = fakeClient(seeded);
+    const backfilled = fakeBackfilled();
+    const employee = await createEmployeesStore(both(client, undefined, undefined, undefined, undefined, backfilled.store)).getFor(admin, "BS-1001");
+    expect(employee?.backfilledProjects.map(b => b.id)).toEqual(["bp-0"]);
+    expect(backfilled.calls).toEqual([[admin, "BS-1001"]]);
+  });
+
+  it("gives Staff only their own, and a manager those of in-scope employees", async () => {
+    const { client } = fakeClient(seeded);
+    const store = createEmployeesStore(both(client));
+    expect((await store.listFor(staff)).map(e => [e.id, e.backfilledProjects.map(b => b.id)])).toEqual([["BS-1002", ["bp-9"]]]);
+    expect((await store.getFor(staff, "BS-1002"))?.backfilledProjects.map(b => b.id)).toEqual(["bp-9"]);
+    const backfilled = fakeBackfilled();
+    const managed = createEmployeesStore({ ...both(client, undefined, undefined, undefined, undefined, backfilled.store), scope: scopeOf(["BS-1001"]) });
+    expect((await managed.listFor(manager)).map(e => [e.id, e.backfilledProjects.map(b => b.id)])).toEqual([["BS-1001", ["bp-0"]]]);
+    expect((await managed.getFor(manager, "BS-1001"))?.backfilledProjects.map(b => b.id)).toEqual(["bp-0"]);
+    expect(backfilled.calls).toEqual([[manager, undefined], [manager, "BS-1001"]]);
+  });
+
+  it("makes the records unavailable (never a profile without past projects) when the backfilled read fails", async () => {
+    const { client } = fakeClient(seeded);
+    const failing = fakeBackfilled([], true).store;
+    const store = createEmployeesStore(both(client, undefined, undefined, undefined, undefined, failing));
+    await expect(store.listFor(admin)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(store.getFor(admin, "BS-1001")).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(store.listFor(staff)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    const managed = createEmployeesStore({ ...both(client, undefined, undefined, undefined, undefined, failing), scope: scopeOf(["BS-1001"]) });
+    await expect(managed.listFor(manager)).rejects.toBeInstanceOf(EmployeesUnavailableError);
+    await expect(managed.getFor(manager, "BS-1001")).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+
+  it("rethrows a non-availability error from the backfilled read unchanged", async () => {
+    const { client } = fakeClient(seeded);
+    const bug = new TypeError("bug");
+    const store = createEmployeesStore(both(client, undefined, undefined, undefined, undefined, { listFor: async () => { throw bug; } }));
     await expect(store.listFor(admin)).rejects.toBe(bug);
   });
 });

@@ -95,7 +95,7 @@ test("a manager creates, updates and closes an assignment; a second open one is 
     await close.getByLabel("Completion date").fill("2026-10-10");
     await close.getByRole("button", { name: "Close assignment" }).click();
     await expect(panel.getByRole("status")).toHaveText("Assignment closed.");
-    const item = panel.getByRole("list", { name: "Closed assignments" }).getByRole("listitem").filter({ has: page.getByRole("heading", { name: project }) });
+    const item = panel.getByRole("list", { name: "Work history" }).getByRole("listitem").filter({ has: page.getByRole("heading", { name: project }) });
     await expect(item).toContainText("Closed");
     await expect(item).toContainText("1 Oct 2026 – 10 Oct 2026");
     // No note edit or close control on a closed one (Story 4.6 adds only its evaluation form).

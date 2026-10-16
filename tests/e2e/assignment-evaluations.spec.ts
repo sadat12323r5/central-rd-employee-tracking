@@ -90,7 +90,7 @@ test("a manager evaluates a closed assignment and amends it; the employee sees i
     await expect(panel.getByRole("status").first()).toHaveText("Assignment closed.");
 
     // Write the evaluation with client feedback.
-    const item = panel.getByRole("list", { name: "Closed assignments" }).getByRole("listitem").filter({ has: page.getByRole("heading", { name: project }) });
+    const item = panel.getByRole("list", { name: "Work history" }).getByRole("listitem").filter({ has: page.getByRole("heading", { name: project }) });
     await expect(item.getByText("Not evaluated yet.")).toBeVisible();
     await item.getByText("Write evaluation").click();
     const write = item.getByRole("form", { name: `Write evaluation for ${project}` });
@@ -123,7 +123,8 @@ test("a manager evaluates a closed assignment and amends it; the employee sees i
     await expect(row).toContainText("Closed");
     await expect(row.getByText("Delivered the migration on time; documentation was thorough.")).toBeVisible();
     await expect(row.getByText("The client praised the hand-over.")).toBeVisible();
-    await expect(mine.locator("input, textarea, button, select, form")).toHaveCount(0);
+    // Story 4.7 adds the past-project form to the section; the assignments themselves stay read-only.
+    await expect(mine.getByRole("list", { name: "Your assignments" }).locator("input, textarea, button, select, form")).toHaveCount(0);
   } finally {
     await staffContext.close();
     await closeOpen(service).catch(error => console.error(error instanceof Error ? error.message : error));
