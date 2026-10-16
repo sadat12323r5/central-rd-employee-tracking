@@ -81,6 +81,8 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
   let closedId = "";
   let openId = "";
   let closedForStoreId = "";
+  /** A closed assignment of the subject that is never evaluated: the target of the refused inserts in the transfer case. */
+  let transferClosedId = "";
   let otherClosedId = "";
 
   async function createUser(email: string, app_metadata: Record<string, string>) {
@@ -160,6 +162,7 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
     if (employees.error) throw new Error(`Could not upsert test employees (${employees.error.code}): ${employees.error.message}`);
     closedId = await closedFor(subjectId);
     closedForStoreId = await closedFor(subjectId);
+    transferClosedId = await closedFor(subjectId);
     openId = await openFor(subjectId);
     otherClosedId = await closedFor(otherStaffId);
     // The other Staff member's evaluation, written by the service role (no JWT: the sent authors are kept).
@@ -234,11 +237,12 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
 
   it("refuses Staff writes, their own assignment included, and an outside manager's", async () => {
     const subject = await signedIn(subjectEmail);
-    expect((await subject.from("assignment_evaluations").insert(evaluationRow(closedForStoreId)).select("id")).error).not.toBeNull();
+    // closedForStoreId has no evaluation yet, so only RLS (42501) can refuse it, not the unique index or the guard.
+    expect((await subject.from("assignment_evaluations").insert(evaluationRow(closedForStoreId)).select("id")).error?.code).toBe("42501");
     const own = await subject.from("assignment_evaluations").update({ evaluation: "Staff edits own" }).eq("assignment_id", closedId).select("id");
     expect(own.data ?? []).toEqual([]);
     const outside = await signedIn(outsideManagerEmail);
-    expect((await outside.from("assignment_evaluations").insert(evaluationRow(closedForStoreId)).select("id")).error).not.toBeNull();
+    expect((await outside.from("assignment_evaluations").insert(evaluationRow(closedForStoreId)).select("id")).error?.code).toBe("42501");
     const amend = await outside.from("assignment_evaluations").update({ evaluation: "Outside edits" }).eq("assignment_id", closedId).select("id");
     expect(amend.data ?? []).toEqual([]);
     const { data } = await service.from("assignment_evaluations").select("evaluation").eq("assignment_id", closedId).single();
@@ -317,8 +321,9 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
       expect(read.data).toEqual([{ assignment_id: closedId }]);
       const update = await outside.from("assignment_evaluations").update({ evaluation: "Outside after transfer" }).eq("assignment_id", closedId).select("id");
       expect(update.data ?? []).toEqual([]);
-      const insert = await outside.from("assignment_evaluations").insert(evaluationRow(closedForStoreId)).select("id");
-      expect(insert.error).not.toBeNull();
+      // transferClosedId has no evaluation, so the refusal can only be RLS's.
+      const insert = await outside.from("assignment_evaluations").insert(evaluationRow(transferClosedId)).select("id");
+      expect(insert.error?.code).toBe("42501");
 
       const child = await signedIn(childManagerEmail);
       const amended = await child.from("assignment_evaluations").update({ evaluation: "Amended after the transfer." })

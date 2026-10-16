@@ -241,6 +241,23 @@ describe("assignment-evaluations-store create", () => {
     expect(db.writes()).toEqual([]);
   });
 
+  it("refuses a manager, or an employee-linked Administrator, on their own assignment, writing nothing (Story 4.10)", async () => {
+    const ownManager = { ...manager, employeeId: "BS-1001" } as const;
+    // An Administrator account linked to an employee (Story 4.10 identity shape).
+    const ownAdmin = { role: "admin", employeeId: "BS-1001" } as unknown as SessionIdentity;
+    for (const session of [ownManager, ownAdmin]) {
+      const db = fakeDb(world());
+      const error = await storeFor(db).create(session, CLOSED_ID, input).catch(e => e);
+      expect(error).toBeInstanceOf(EvaluationForbiddenError);
+      await expect(storeFor(db).amend(session, EVALUATED_ID, input)).rejects.toBeInstanceOf(EvaluationForbiddenError);
+      expect(db.writes()).toEqual([]);
+    }
+    // Someone else's assignment in scope is still allowed.
+    const state = world();
+    state.assignments.push(assignment("00000000-0000-4000-8000-0000000000c9", "BS-1002"));
+    await expect(storeFor(fakeDb(state)).create(ownManager, "00000000-0000-4000-8000-0000000000c9", input)).resolves.toMatchObject({ employeeId: "BS-1002" });
+  });
+
   it("refuses Staff, own assignment included, before anything is read or written", async () => {
     const db = fakeDb(world());
     await expect(storeFor(db).create(staff, CLOSED_ID, input)).rejects.toBeInstanceOf(EvaluationForbiddenError);

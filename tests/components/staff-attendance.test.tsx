@@ -369,6 +369,8 @@ describe("StaffAttendance My assignments (Story 4.6)", () => {
   it("shows each closed assignment's evaluation and client feedback, or that it is not evaluated yet", async () => {
     await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} />);
     const items = within(section()).getAllByRole("listitem");
+    // Each evaluation region is named after its project, so several in one history are distinguishable.
+    expect(within(items[1]).getByRole("region", { name: "Evaluation of Legacy migration" })).toBeInTheDocument();
     expect(within(items[1]).getByText("Delivered the migration on time.")).toBeInTheDocument();
     expect(within(items[1]).getByText("The client praised the hand-over.")).toBeInTheDocument();
     // The same stored-snapshot text as the management portal.

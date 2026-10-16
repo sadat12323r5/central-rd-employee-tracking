@@ -41,7 +41,7 @@ const valid = { assignmentId: ID, evaluation: "  Delivered on time.  ", clientFe
 const sample: AssignmentEvaluation = {
   id: "e-1", assignmentId: ID, employeeId: "BS-1001", departmentId: "d-1", evaluation: "Delivered on time.", clientFeedback: "Happy client.",
   createdBy: "u-1", createdAt: "2026-10-16T00:00:00Z", authoredBy: "u-1", updatedAt: "2026-10-16T00:00:00Z",
-  createdByName: null, createdByRole: "manager", authoredByName: null, authoredByRole: "manager", 
+  createdByName: null, createdByRole: "manager", authoredByName: null, authoredByRole: "manager",
 };
 
 beforeEach(() => {

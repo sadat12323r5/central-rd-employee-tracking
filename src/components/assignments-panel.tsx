@@ -91,7 +91,7 @@ function ClosedEvaluation({ assignment, evaluation }: {
   const id = (suffix: string) => `evaluation-${suffix}-${assignment.id}`;
   const label = evaluation ? "Amend evaluation" : "Write evaluation";
   return <div className="assignment-evaluation">
-    <EvaluationView evaluation={evaluation} />
+    <EvaluationView evaluation={evaluation} projectName={assignment.projectName} />
     {state.error ? <p role="alert" className="form-error">{state.error}</p> : state.message ? <p role="status" className="staff-status">{state.message}</p> : null}
     <details key={mode} className="evaluation-editor">
       <summary>{label}</summary>

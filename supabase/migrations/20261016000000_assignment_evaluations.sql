@@ -1,6 +1,7 @@
 -- Story 4.6: a manager evaluates a closed assignment; the employee sees it.
--- ADDITIVE only: a new table with its unique index, a guard function + triggers and RLS policies. No
--- existing table, column, constraint, function or policy is altered.
+-- ADDITIVE only: a new table with its indexes, a guard function + triggers, RLS policies on the new table,
+-- and one NEW select policy on the existing public.assignments table (assignments_select_department_managed,
+-- see "Transfer read path" below). No existing table, column, constraint, function or policy is altered.
 --
 -- * An evaluation is a separate record (AD-2): the assignments table gains no evaluation-shaped field and
 --   this migration never writes it. One evaluation per closed assignment (unique index
@@ -19,8 +20,12 @@
 --   on update like created_by. A service-role write keeps what it sent (role defaults to 'admin').
 -- * Transfer read path: a new select policy on assignments (assignments_select_department_managed,
 --   manages_department(department_id)) lets the assignment's own department manager read it after the
---   employee moved (4.8), so the store can still find the assignment to evaluate. Additive: no existing
---   policy is changed.
+--   employee moved (4.8), so the store can still find the assignment to evaluate. It is a new, additive
+--   policy; nothing existing changes. Until Story 4.8 adds a way to transfer an employee, this
+--   post-transfer path is reachable only through the database and the store (no app flow moves anyone).
+-- * Own record: nobody writes the evaluation of their own assignment (Story 4.10: one's own record keeps
+--   the Staff rules), so the write policies exclude rows whose employee is linked to auth.uid(), the
+--   Administrator included.
 -- * Why a trigger and not column grants: it follows the assignments_guard precedent; it is purely additive;
 --   it binds the service role too; and it can copy values from the assignment row.
 -- * The guard raises check_violation (23514) for any refused change. A BEFORE DELETE trigger always raises
@@ -34,8 +39,8 @@
 create table public.assignment_evaluations (
   id              uuid primary key default gen_random_uuid(),
   assignment_id   uuid not null references public.assignments (id) on delete restrict,
-  employee_id     text not null,
-  department_id   uuid not null,
+  employee_id     text not null references public.employees (employee_id) on delete restrict,
+  department_id   uuid not null references public.departments (id) on delete restrict,
   evaluation      text not null check (evaluation = btrim(evaluation) and char_length(evaluation) between 1 and 4000),
   client_feedback text not null default '' check (char_length(client_feedback) <= 2000),
   created_by      uuid not null,
@@ -158,15 +163,33 @@ create policy "assignment_evaluations_select" on public.assignment_evaluations
     )
   );
 
--- Write: the Administrator, or a manager over the assignment's department.
+-- Write: the Administrator, or a manager over the assignment's department; never on one's own assignment.
 create policy "assignment_evaluations_insert_authorized" on public.assignment_evaluations
   for insert to authenticated
-  with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id));
+  with check (
+    ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id))
+    and not exists (
+      select 1 from public.employees e
+      where e.employee_id = assignment_evaluations.employee_id and e.auth_user_id = (select auth.uid())
+    )
+  );
 
 create policy "assignment_evaluations_update_authorized" on public.assignment_evaluations
   for update to authenticated
-  using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id))
-  with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id));
+  using (
+    ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id))
+    and not exists (
+      select 1 from public.employees e
+      where e.employee_id = assignment_evaluations.employee_id and e.auth_user_id = (select auth.uid())
+    )
+  )
+  with check (
+    ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id))
+    and not exists (
+      select 1 from public.employees e
+      where e.employee_id = assignment_evaluations.employee_id and e.auth_user_id = (select auth.uid())
+    )
+  );
 
 -- No delete policy.
 

@@ -952,7 +952,7 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
   it("shows the saved evaluation with its authorship, and the form becomes Amend evaluation", async () => {
     const { item, rerender } = await openWork([]);
     await act(async () => { rerender(<Portal employees={list([evaluation()])} departments={departments} current={none()} />); });
-    const shown = within(item).getByRole("region", { name: "Recorded evaluation" });
+    const shown = within(item).getByRole("region", { name: "Evaluation of Legacy migration" });
     expect(within(shown).getByText("Delivered the migration on time.")).toBeInTheDocument();
     expect(within(shown).getByText("The client praised the hand-over.")).toBeInTheDocument();
     expect(within(item).getByText("Written by Arif Hasan on 16 Oct 2026")).toBeInTheDocument();

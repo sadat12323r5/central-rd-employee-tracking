@@ -98,7 +98,7 @@ test("a manager evaluates a closed assignment and amends it; the employee sees i
     await write.getByLabel("Client feedback (optional)").fill("The client praised the hand-over.");
     await write.getByRole("button", { name: "Save evaluation" }).click();
     await expect(item.getByRole("status")).toHaveText("Evaluation saved.");
-    const shown = item.getByRole("region", { name: "Recorded evaluation" });
+    const shown = item.getByRole("region", { name: `Evaluation of ${project}` });
     await expect(shown.getByText("Delivered the migration on time.")).toBeVisible();
     await expect(shown.getByText("The client praised the hand-over.")).toBeVisible();
     await expect(shown.getByText(/^Written by .+ on \d{1,2} [A-Z][a-z]{2} \d{4}$/)).toBeVisible();

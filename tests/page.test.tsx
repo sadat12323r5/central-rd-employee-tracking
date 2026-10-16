@@ -167,7 +167,7 @@ describe("Home routing by role", () => {
     const evaluation = {
       id: "ev-1", assignmentId: "a-0", employeeId: "BS-1001", departmentId: "d-1", evaluation: "Delivered on time.", clientFeedback: "Happy client.",
       createdBy: "u-1", createdAt: "2026-10-16T00:00:00Z", authoredBy: "u-1", updatedAt: "2026-10-16T00:00:00Z",
-      createdByName: null, createdByRole: "manager", authoredByName: null, authoredByRole: "manager", 
+      createdByName: null, createdByRole: "manager", authoredByName: null, authoredByRole: "manager",
     };
     const listed = [{ ...employees[0], evaluations: [evaluation] }];
     for (const session of [{ role: "admin" }, { role: "manager", employeeId: "BS-1008", userId: "u-1" }]) {

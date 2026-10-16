@@ -2,7 +2,7 @@
 title: 'Story 4.6: Manager evaluates a closed assignment; employee sees it'
 type: 'feature'
 created: '2026-10-16'
-status: 'in-review'
+status: 'done'
 baseline_revision: '6df80d84bbc0c41b66e8877c72ceea93e3d7d660'
 review_loop_iteration: 1
 followup_review_recommended: false
@@ -256,3 +256,31 @@ Assumptions, which are conservative and recorded so the owner can revisit them: 
 
 **Manual checks:**
 - The migration has no `alter` or `drop` of existing objects and no delete policy, and its header says ADDITIVE.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** a new `assignment_evaluations` table, added by the ADDITIVE migration `20261016000000_assignment_evaluations.sql`.
+- **The table:** one row per closed assignment, with a unique index and foreign keys. A guard trigger copies the employee and department from the assignment, records `created_by`/`authored_by` and a name/role snapshot on every write, and locks the identifying fields. A no-delete trigger blocks deletes. RLS covers the admin, the manager chain of the assignment's department and the employee's own rows; writes are refused on one's own record. A new additive select policy on `assignments` lets the assignment's department manager read it after a transfer.
+- **Code:** a single-writer store (`assignment-evaluations-store.ts`) and actions (`assignment-evaluation-actions.ts`).
+- **Management portal:** the Current work history shows each evaluation and a Write/Amend form. The open assignment gets no form.
+- **Staff portal:** a read-only "My assignments" section with the evaluations.
+
+**Files:** the migration; `src/server/assignment-evaluations-store.ts`, `src/server/assignment-evaluation-actions.ts`, `src/domain/evaluations.ts`, `src/components/evaluation-view.tsx` (new); `src/components/assignments-panel.tsx`, `portal.tsx`, `staff-attendance.tsx`, `src/server/employees-store.ts`, `src/server/assignments-store.ts` (exports the column list), `src/data/employees.ts`, `src/domain/dates.ts` (`formatDisplayDay`), `src/app/styles.css`, `docs/DEPLOYMENT.md`. Tests: the new store, actions, evaluations, single-writer, live RLS and e2e tests, plus updates to the existing ones.
+
+**Review:** two passes.
+- **Pass 1:** one bad_spec loop. The authorship snapshot replaced the viewer-dependent name resolver; it was applied as a delta with KEEP everything (see the Spec Change Log). Patches: the transfer read policy and its index, revalidating on stale refusals, CRLF normalization, the transfer RLS case, and the single-writer test name.
+- **Pass 2:** patches: no evaluating one's own assignment (store and RLS), the foreign keys, documentation, distinct region names, 42501 assertions, and whitespace.
+- **Deferred:** 2 (amendment history; the form shown after a 4.8 transfer).
+- **Rejected:** the rest, with reasons in the triage log.
+
+**Follow-up review recommended:** false. Pass 2 patched 1 medium and 5 low findings, and no high.
+
+**Verification:**
+- `npm run typecheck` passes and `npm run build` passes.
+- `npm test`: 1156 passed and 43 skipped. Four live RLS files fail, only with PGRST205.
+- e2e on Chromium (local `executablePath` override): 8 passed and 20 failed. Every failure comes from the schema-missing causes: PGRST205 or 42703, which surface as the "Employee records unavailable" or "Departments unavailable" page.
+- The implementer also applied all 14 migrations to a scratch Postgres 16 and checked the guard and RLS rules there.
+
+**Residual risk:** the database rules are verified only on a scratch database until the migrations are applied to the shared project.

@@ -219,11 +219,15 @@ export function createAssignmentEvaluationsStore({ userClient, scope = managerSc
   /**
    * The assignment a write targets, authorized against its own department. One the session cannot see
    * (missing, or hidden by RLS) is refused the same way as one outside the scope. Read only.
+   * Story 4.10: one's own record keeps the Staff rules, so nobody (a manager, or an Administrator linked to
+   * an employee) evaluates their own assignment.
    */
   async function assignmentFor(session: SessionIdentity, assignmentId: string): Promise<AssignmentRow> {
     if (session.role === "staff") throw new EvaluationForbiddenError();
     const row = await read<AssignmentRow>("assignments", t => t.select(ASSIGNMENT_COLUMNS).eq("id", assignmentId).maybeSingle<AssignmentRow>());
     if (!row) throw new EvaluationForbiddenError();
+    const own = "employeeId" in session ? (session as { employeeId?: string }).employeeId : undefined;
+    if (own !== undefined && own === row.employee_id) throw new EvaluationForbiddenError();
     return row;
   }
 

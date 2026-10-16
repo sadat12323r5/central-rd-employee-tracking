@@ -133,7 +133,7 @@ function MyAssignments({ employee }: { employee: Employee }) {
         <p>{a.role} · {a.client} · {a.allocation}%</p>
         <small>{a.status === "open" ? `Since ${formatDisplayDate(a.startDate)}` : `${formatDisplayDate(a.startDate)} – ${formatDisplayDate(a.completionDate ?? "")}`}</small>
         {a.latestUpdate && <div className="callout">{a.latestUpdate}</div>}
-        {a.status === "closed" && <EvaluationView evaluation={evaluations.find(e => e.assignmentId === a.id)} />}
+        {a.status === "closed" && <EvaluationView evaluation={evaluations.find(e => e.assignmentId === a.id)} projectName={a.projectName} />}
       </li>)}
     </ul>}
   </section>;
