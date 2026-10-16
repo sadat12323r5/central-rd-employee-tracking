@@ -178,16 +178,11 @@ function BackfillFields({ prefix, options, values, today, context }: {
   </>;
 }
 
-/**
- * Story 4.7: one active past project's editor (every field can change) and a separate form to withdraw it.
- * The withdraw state is owned by the list: a withdrawn entry loses its controls (this editor unmounts).
- */
-function PastProjectEditor({ project, options, today, withdrawAction, withdrawPending }: {
-  project: BackfilledProject; options: DepartmentOption[] | null; today: string;
-  withdrawAction: (form: FormData) => void; withdrawPending: boolean;
+/** Story 4.7: one active past project's editor (every field can change), inside a `<details>`. */
+function PastProjectEditor({ project, options, today, name }: {
+  project: BackfilledProject; options: DepartmentOption[] | null; today: string; name: string;
 }) {
   const [state, submit, saving] = useActionState(submitEditBackfill, backfillInitial);
-  const name = `${project.projectName}, ${formatDisplayDate(project.completionDate)}`;
   return <details className="backfill-editor">
     <summary aria-label={`Edit past project: ${name}`}>Edit</summary>
     {options === null ? <p role="status" className="form-error">{DEPARTMENTS_UNAVAILABLE}</p>
@@ -200,14 +195,40 @@ function PastProjectEditor({ project, options, today, withdrawAction, withdrawPe
         </div>
         <Feedback state={state} />
       </form>}
-    <form action={withdrawAction} className="staff-actions">
-      <input type="hidden" name="id" value={project.id} />
-      <button className="secondary" disabled={withdrawPending} aria-label={`Withdraw past project: ${name}`}>
-        {withdrawPending ? "Withdrawing…" : "Withdraw past project"}
-      </button>
-      <small>Withdrawn entries stay in your history, marked, and cannot be changed again.</small>
-    </form>
   </details>;
+}
+
+/**
+ * Story 4.7: one past project. An active one shows its edit (`<details>`) and withdraw controls; a
+ * withdrawn one only its "Withdrawn" label. Each entry owns its withdraw state, so withdrawing one never
+ * disables another's button, and its message stays next to it (this item stays mounted once withdrawn).
+ */
+function PastProjectItem({ project: p, options, today }: { project: BackfilledProject; options: DepartmentOption[] | null; today: string }) {
+  const [withdrawState, withdrawAction, withdrawPending] = useActionState(withdrawBackfillAction, initial);
+  const name = `${p.projectName}, ${formatDisplayDate(p.completionDate)}`;
+  return <li className="interview-detail">
+    <div className="panel-title">
+      <h4>{p.projectName}</h4>
+      <span className="history-markers">
+        <ProvenanceLabel provenance={p.provenance} />
+        {p.status === "withdrawn" && <span className="badge withdrawn"><span className="dot" />Withdrawn</span>}
+      </span>
+    </div>
+    <p>{p.client} · {p.departmentName}</p>
+    <small>Completed {formatDisplayDate(p.completionDate)}</small>
+    <div className="callout backfill-outcome">{p.outcome}</div>
+    {p.status === "active" && <>
+      <PastProjectEditor project={p} options={options} today={today} name={name} />
+      <form action={withdrawAction} className="staff-actions">
+        <input type="hidden" name="id" value={p.id} />
+        <button className="secondary" disabled={withdrawPending} aria-label={`Withdraw past project: ${name}`}>
+          {withdrawPending ? "Withdrawing…" : "Withdraw past project"}
+        </button>
+        <small>Withdrawn entries stay in your history, marked, and cannot be changed again.</small>
+      </form>
+    </>}
+    {(withdrawState.error || withdrawState.message) && <Feedback state={withdrawState} />}
+  </li>;
 }
 
 /**
@@ -217,27 +238,12 @@ function PastProjectEditor({ project, options, today, withdrawAction, withdrawPe
  */
 function MyPastProjects({ projects, options, today }: { projects: BackfilledProject[]; options: DepartmentOption[] | null; today: string }) {
   const [added, add, adding] = useActionState(submitAddBackfill, backfillInitial);
-  const [withdrawState, withdrawAction, withdrawPending] = useActionState(withdrawBackfillAction, initial);
-  const departmentName = (id: string) => options?.find(d => d.id === id)?.name ?? "Department not shown";
   return <div className="staff-backfill">
     <h3 id="past-projects-heading">Past projects you added</h3>
     <p className="muted">Projects from before this system, or that were never tracked. Only you can change them; your managers and the L&D Administrator can see them.</p>
     {projects.length === 0 ? <p className="muted">You have not added any past projects yet.</p> : <ul className="assignment-history" aria-labelledby="past-projects-heading">
-      {projects.map(p => <li key={p.id} className="interview-detail">
-        <div className="panel-title">
-          <h4>{p.projectName}</h4>
-          <span className="history-markers">
-            <ProvenanceLabel provenance={p.provenance} />
-            {p.status === "withdrawn" && <span className="badge withdrawn"><span className="dot" />Withdrawn</span>}
-          </span>
-        </div>
-        <p>{p.client} · {departmentName(p.departmentId)}</p>
-        <small>Completed {formatDisplayDate(p.completionDate)}</small>
-        <div className="callout backfill-outcome">{p.outcome}</div>
-        {p.status === "active" && <PastProjectEditor project={p} options={options} today={today} withdrawAction={withdrawAction} withdrawPending={withdrawPending} />}
-      </li>)}
+      {projects.map(p => <PastProjectItem key={p.id} project={p} options={options} today={today} />)}
     </ul>}
-    <Feedback state={withdrawState} />
 
     <h3 id="add-past-project-heading">Add a past project</h3>
     {options === null ? <p role="status" className="form-error">{DEPARTMENTS_UNAVAILABLE}</p>

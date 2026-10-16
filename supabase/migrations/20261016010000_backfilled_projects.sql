@@ -13,8 +13,10 @@
 -- * The guard (SECURITY DEFINER, empty search_path, BEFORE INSERT OR UPDATE) makes the database the
 --   authority on the lifecycle: an insert is always active with database timestamps; on update, a withdrawn
 --   row is frozen, id / employee_id / created_at are locked, active -> withdrawn stamps withdrawn_at, and
---   updated_at is always the database's clock. Refusals raise check_violation (23514). It follows the
---   assignments_guard precedent and binds the service role too.
+--   updated_at is always the database's clock. A completion date after today (Asia/Dhaka) is refused on
+--   insert and on any update that changes it, so a direct write cannot store a future "past" project; and a
+--   withdrawal changes nothing but the status (the content columns must stay as they were). Refusals raise
+--   check_violation (23514). It follows the assignments_guard precedent and binds the service role too.
 -- * A BEFORE DELETE trigger always raises (service role included), and there is no delete policy.
 -- * Department choice: a backfilled entry names a department from the list (FK, on delete restrict). Staff
 --   cannot read public.departments (it holds manager_user_id and is Administrator/manager-only, 4.1/4.3),
@@ -40,6 +42,8 @@ create table public.backfilled_projects (
 
 -- Profiles read backfilled projects per employee.
 create index backfilled_projects_employee_id_idx on public.backfilled_projects (employee_id);
+-- Backs the on-delete-restrict foreign key to departments.
+create index backfilled_projects_department_id_idx on public.backfilled_projects (department_id);
 
 create or replace function public.backfilled_projects_guard()
 returns trigger
@@ -48,6 +52,11 @@ security definer
 set search_path = ''
 as $$
 begin
+  if (tg_op = 'INSERT' or new.completion_date is distinct from old.completion_date)
+     and new.completion_date > (now() at time zone 'Asia/Dhaka')::date then
+    raise exception 'the completion date of a past project cannot be in the future' using errcode = '23514';
+  end if;
+
   if tg_op = 'INSERT' then
     -- Always a new, active entry with the database's timestamps, whatever the caller sent.
     new.status := 'active';
@@ -67,7 +76,14 @@ begin
     raise exception 'the identifying fields of a backfilled project cannot be changed' using errcode = '23514';
   end if;
   if new.status = 'withdrawn' then
-    -- active -> withdrawn: the withdrawal time is the database's.
+    -- active -> withdrawn: only the status changes; the withdrawal time is the database's.
+    if new.department_id is distinct from old.department_id
+       or new.client is distinct from old.client
+       or new.project_name is distinct from old.project_name
+       or new.completion_date is distinct from old.completion_date
+       or new.outcome is distinct from old.outcome then
+      raise exception 'withdrawing a past project cannot change its values' using errcode = '23514';
+    end if;
     new.withdrawn_at := now();
   else
     new.withdrawn_at := null;

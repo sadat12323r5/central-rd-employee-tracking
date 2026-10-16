@@ -2,10 +2,10 @@
 title: 'Story 4.7: Staff backfills a past project'
 type: 'feature'
 created: '2026-10-16'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'f8987f64f080616a99d0cfdfbf3176b02745021c'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-4-6-assignment-evaluation.md'
@@ -217,3 +217,33 @@ Assumptions (conservative, recorded): the completion date may not be in the futu
 
 **Manual checks:**
 - The migration does no `alter` or `drop` of existing objects, has no delete policy and no admin or manager write policy, and its header says ADDITIVE.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** a new employee-authored `backfilled_projects` table, created by the ADDITIVE migration `20261016010000_backfilled_projects.sql`.
+- **Guard rules:** the guard refuses future completion dates, changes to withdrawn rows, content changes made while withdrawing, and edits to locked fields. A separate trigger blocks every delete. RLS lets only the owner write; the admin, managers and the owner can read.
+- **`department_options()`:** a SECURITY DEFINER function that returns only department ids and names, so Staff have a list to pick from.
+- **Code:** a single-writer store (`backfilled-project-store.ts`) and actions (`backfill-actions.ts`).
+- **Staff portal:** add, edit and withdraw controls inside "My assignments".
+- **Management portal:** the Current work "Work history" mixes closed assignments with past projects. Each row carries a materialized marker: "Manager-created" or "Self-reported", plus "Withdrawn" or "Edited" where they apply.
+
+**Review:** one pass, 30 findings.
+- **Patched:** 4 medium and 10 low. The changes:
+  - the database refuses future dates and content changes made during withdrawal;
+  - an index on `department_id`;
+  - each entry gets its own withdraw state, with the withdraw control outside the Edit disclosure;
+  - department names come from the store;
+  - "Work history" heading and the "Edited" marker;
+  - DEPLOYMENT.md notes and tests.
+- **Deferred:** 2, recorded in frontmatter.
+- **Rejected:** the rest, with reasons in the triage log.
+
+**Follow-up review recommended:** true. This pass patched 4 medium findings. The unverified risk is the new guard rules (future date, withdraw-only transition). They were checked only on a scratch Postgres 16 and in live tests that cannot run until the migrations are applied. A follow-up pass after the migrations land should confirm `tests/backfill-rls.test.ts` passes.
+
+**Verification:**
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `npm test`: 1235 passed, 54 skipped. 5 live RLS files fail, all with PGRST205.
+- e2e on Chromium: 8 passed, 21 failed. Every failure is a schema-missing error: PGRST205, PGRST202 (`department_options` missing) or 42703.

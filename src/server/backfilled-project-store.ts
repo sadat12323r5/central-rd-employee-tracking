@@ -107,9 +107,16 @@ export type BackfilledProjectRow = {
 const TABLE = "backfilled_projects";
 const COLUMNS = "id,employee_id,department_id,client,project_name,completion_date,outcome,status,created_at,updated_at,withdrawn_at";
 
-export function toBackfilledProject(row: BackfilledProjectRow): BackfilledProject {
+/** Shown when a department id is not in the department list (never expected: the foreign key holds). */
+export const UNKNOWN_DEPARTMENT_NAME = "Unknown department";
+
+/**
+ * A row as a BackfilledProject. `departmentName` is resolved from department_options() by the store, so
+ * every viewer sees the stored department's own name (not one looked up in the viewer's department list).
+ */
+export function toBackfilledProject(row: BackfilledProjectRow, departmentName = UNKNOWN_DEPARTMENT_NAME): BackfilledProject {
   return {
-    id: row.id, employeeId: row.employee_id, departmentId: row.department_id, client: row.client, projectName: row.project_name,
+    id: row.id, employeeId: row.employee_id, departmentId: row.department_id, departmentName, client: row.client, projectName: row.project_name,
     completionDate: row.completion_date, outcome: row.outcome, status: row.status, createdAt: row.created_at,
     updatedAt: row.updated_at, withdrawnAt: row.withdrawn_at ?? null,
     provenance: "backfilled",
@@ -249,6 +256,14 @@ export function createBackfilledProjectStore({ userClient, scope = managerScope,
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
 
+  /** Every department's name by id, from department_options() (one rpc). */
+  async function departmentNames(): Promise<Map<string, string>> {
+    return new Map((await departmentOptions()).map(d => [d.id, d.name]));
+  }
+
+  const named = (names: Map<string, string>) => (row: BackfilledProjectRow) =>
+    toBackfilledProject(row, names.get(row.department_id) ?? UNKNOWN_DEPARTMENT_NAME);
+
   /** The owner of a write: always the session's own employee. */
   function ownerOf(session: SessionIdentity): string {
     const owner = employeeIdOf(session);
@@ -256,11 +271,12 @@ export function createBackfilledProjectStore({ userClient, scope = managerScope,
     return owner;
   }
 
-  /** The values, validated, with a department that is in the list. */
-  async function checked(input: BackfillInput): Promise<BackfillInput> {
+  /** The values, validated, with a department that is in the list; and the department names. */
+  async function checked(input: BackfillInput): Promise<{ values: BackfillInput; names: Map<string, string> }> {
     const values = validateBackfillInput(input, todayInDhaka(now()));
-    if (!(await departmentOptions()).some(d => d.id === values.departmentId)) throw new BackfillDepartmentError();
-    return values;
+    const names = await departmentNames();
+    if (!names.has(values.departmentId)) throw new BackfillDepartmentError();
+    return { values, names };
   }
 
   /**
@@ -288,42 +304,42 @@ export function createBackfilledProjectStore({ userClient, scope = managerScope,
         // Out of scope (or nothing in scope): nothing, without a query.
         if (employeeId !== undefined && !ids.has(employeeId)) return [];
         if (ids.size === 0) return [];
-        const rows = await readRows(employeeId === undefined ? [...ids] : [employeeId]);
+        const [rows, names] = await Promise.all([readRows(employeeId === undefined ? [...ids] : [employeeId]), departmentNames()]);
         // Defence in depth: only rows of in-scope employees (and of the one asked for).
-        return sorted(rows.filter(r => ids.has(r.employee_id) && (employeeId === undefined || r.employee_id === employeeId)).map(toBackfilledProject));
+        return sorted(rows.filter(r => ids.has(r.employee_id) && (employeeId === undefined || r.employee_id === employeeId)).map(named(names)));
       }
       // Staff only ever see their own; asking for anyone else's returns nothing, without a query.
       if (session.role === "staff" && employeeId !== undefined && employeeId !== session.employeeId) return [];
       const only = session.role === "admin" ? employeeId : session.employeeId;
-      const rows = await readRows(only === undefined ? undefined : [only]);
-      return sorted(rows.filter(r => only === undefined || r.employee_id === only).map(toBackfilledProject));
+      const [rows, names] = await Promise.all([readRows(only === undefined ? undefined : [only]), departmentNames()]);
+      return sorted(rows.filter(r => only === undefined || r.employee_id === only).map(named(names)));
     },
 
     departmentOptions,
 
     async add(session, input) {
       const owner = ownerOf(session);
-      const values = await checked(input);
+      const { values, names } = await checked(input);
       // The guard sets the status (active) and the timestamps; the owner is the session's, never the form's.
       const row = await write<BackfilledProjectRow>(t => t.insert({
         employee_id: owner, department_id: values.departmentId, client: values.client, project_name: values.projectName,
         completion_date: values.completionDate, outcome: values.outcome,
       }).select(COLUMNS).single<BackfilledProjectRow>());
       if (!row) throw new BackfillUnavailableError({ cause: "no data returned" });
-      return toBackfilledProject(row);
+      return named(names)(row);
     },
 
     async edit(session, id, input) {
       const owner = ownerOf(session);
       const values = validateBackfillInput(input, todayInDhaka(now()));
       await target(owner, id);
-      await checked(values);
+      const { names } = await checked(values);
       const row = await write<BackfilledProjectRow>(t => t.update({
         department_id: values.departmentId, client: values.client, project_name: values.projectName,
         completion_date: values.completionDate, outcome: values.outcome,
       }).eq("id", id).eq("employee_id", owner).eq("status", "active").select(COLUMNS).maybeSingle<BackfilledProjectRow>());
       if (!row) return noRowUpdated(id);
-      return toBackfilledProject(row);
+      return named(names)(row);
     },
 
     async withdraw(session, id) {
@@ -333,7 +349,7 @@ export function createBackfilledProjectStore({ userClient, scope = managerScope,
       const row = await write<BackfilledProjectRow>(t => t.update({ status: "withdrawn" })
         .eq("id", id).eq("employee_id", owner).eq("status", "active").select(COLUMNS).maybeSingle<BackfilledProjectRow>());
       if (!row) return noRowUpdated(id);
-      return toBackfilledProject(row);
+      return named(await departmentNames())(row);
     },
   };
 }

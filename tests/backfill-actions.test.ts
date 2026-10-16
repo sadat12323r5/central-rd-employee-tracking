@@ -48,7 +48,7 @@ const parsed: BackfillInput = {
   departmentId: DEPT, client: "Harbour Systems (fictional)", projectName: "Data migration", completionDate: "2025-12-15", outcome: "Migrated 40 services.",
 };
 const sample: BackfilledProject = {
-  id: ID, employeeId: "BS-1001", departmentId: DEPT, client: "Harbour Systems (fictional)", projectName: "Data migration",
+  id: ID, employeeId: "BS-1001", departmentId: DEPT, departmentName: "Central R&D", client: "Harbour Systems (fictional)", projectName: "Data migration",
   completionDate: "2025-12-15", outcome: "Migrated 40 services.", status: "active", createdAt: "2026-10-16T00:00:00Z",
   updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null, provenance: "backfilled",
 };

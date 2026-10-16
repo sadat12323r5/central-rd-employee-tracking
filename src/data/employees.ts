@@ -17,7 +17,10 @@ export type Assignment = {
  * `completionDate` is a calendar date; `provenance` is materialized by backfilled-project-store.
  */
 export type BackfilledProject = {
-  id: string; employeeId: string; departmentId: string; client: string; projectName: string; completionDate: string;
+  id: string; employeeId: string; departmentId: string;
+  /** The department's name, resolved by the store from the full department list (whoever is viewing). */
+  departmentName: string;
+  client: string; projectName: string; completionDate: string;
   outcome: string; status: "active" | "withdrawn"; createdAt: string; updatedAt: string; withdrawnAt: string | null;
   provenance: "backfilled";
 };

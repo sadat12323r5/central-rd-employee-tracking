@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import type { Assignment, AssignmentEvaluation, BackfilledProject } from "@/data/employees";
-import { formatDisplayDate } from "@/domain/dates";
+import { formatDisplayDate, formatDisplayDay } from "@/domain/dates";
 import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import type { ActionState } from "@/server/attendance-actions";
@@ -79,7 +79,7 @@ function compareHistory(a: HistoryRow, b: HistoryRow): number {
 }
 
 /** Story 4.7: a self-reported past project, read-only in the management portal. */
-function BackfilledRow({ project, departmentName }: { project: BackfilledProject; departmentName: (id: string) => string }) {
+function BackfilledRow({ project }: { project: BackfilledProject }) {
   return <>
     <div className="panel-title">
       <h3>{project.projectName}</h3>
@@ -89,7 +89,9 @@ function BackfilledRow({ project, departmentName }: { project: BackfilledProject
       </span>
     </div>
     <p>{project.client}</p>
-    <small>Completed {date(project.completionDate)} · {departmentName(project.departmentId)}</small>
+    <small>Completed {date(project.completionDate)} · {project.departmentName}</small>
+    {/* A withdrawal stamps updated_at and withdrawn_at with the same database time: that is not an edit. */}
+    {project.updatedAt !== project.createdAt && project.updatedAt !== project.withdrawnAt && <small className="spaced">Edited {formatDisplayDay(project.updatedAt)}</small>}
     <div className="callout backfill-outcome">{project.outcome}</div>
   </>;
 }
@@ -232,11 +234,11 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
       </>}
     </article>
     <article className="panel" aria-labelledby={ids("history-heading")}>
-      <h2 id={ids("history-heading")}>Assignment history</h2>
+      <h2 id={ids("history-heading")}>Work history</h2>
       <p className="muted">Closed assignments and self-reported past projects, newest completion first. Kept for the record.</p>
-      {history.length === 0 ? <p className="muted">No closed assignments or past projects yet.</p> : <ul className="assignment-history" aria-label="Work history">
+      {history.length === 0 ? <p className="muted">No closed assignments or past projects yet.</p> : <ul className="assignment-history" aria-labelledby={ids("history-heading")}>
         {history.map(row => <li key={`${row.provenance}-${row.id}`} className="interview-detail">
-          {row.provenance === "backfilled" ? <BackfilledRow project={row} departmentName={departmentName} /> : <>
+          {row.provenance === "backfilled" ? <BackfilledRow project={row} /> : <>
             <div className="panel-title">
               <h3>{row.projectName}</h3>
               <span className="history-markers"><ProvenanceLabel provenance={row.provenance} /><StatusLabel status="closed" /></span>

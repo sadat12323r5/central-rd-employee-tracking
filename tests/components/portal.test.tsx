@@ -1022,7 +1022,7 @@ describe("Portal mixed work history (Story 4.7)", () => {
     startDate: "2026-03-01", completionDate: "2026-08-31", closedAt: "2026-09-01T00:00:00Z",
   };
   const past = (extra: Partial<BackfilledProject> = {}): BackfilledProject => ({
-    id: "bf000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: LND, client: "Old Bank (fictional)",
+    id: "bf000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: LND, departmentName: "L&D", client: "Old Bank (fictional)",
     projectName: "Core banking audit", completionDate: "2025-12-15", outcome: "Delivered the audit report.", status: "active",
     createdAt: "2026-10-16T00:00:00Z", updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null, provenance: "backfilled", ...extra,
   });
@@ -1062,6 +1062,38 @@ describe("Portal mixed work history (Story 4.7)", () => {
       expect(within(items[2]).getByText("Delivered the audit report.")).toBeInTheDocument();
     });
   }
+
+  it("titles the history Work history and shows the stored department name, even outside the viewer's departments", async () => {
+    const user = userEvent.setup();
+    const elsewhere = past({ id: "bf000000-0000-4000-8000-000000000009", departmentId: "de9a0000-0000-4000-8000-0000000000ee", departmentName: "Far Away Dept" });
+    const one = { ...list()[0], backfilledProjects: [elsewhere] };
+    await show(<Portal role="manager" employees={[one]} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    expect(screen.getByRole("heading", { name: "Work history" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Assignment history" })).not.toBeInTheDocument();
+    const item = within(screen.getByRole("list", { name: "Work history" })).getAllByRole("listitem")
+      .find(i => within(i).queryByRole("heading", { name: "Core banking audit" }))!;
+    expect(within(item).getByText("Completed 15 Dec 2025 · Far Away Dept")).toBeInTheDocument();
+  });
+
+  it("shows Edited D MMM YYYY on a backfilled row changed after it was added, not on an unchanged or just-withdrawn one", async () => {
+    const user = userEvent.setup();
+    const edited = past({ updatedAt: "2026-10-18T04:00:00Z" });
+    const justWithdrawn = past({
+      id: "bf000000-0000-4000-8000-000000000008", projectName: "Withdrawn only", status: "withdrawn",
+      updatedAt: "2026-10-19T04:00:00Z", withdrawnAt: "2026-10-19T04:00:00Z",
+    });
+    const one = { ...list()[0], assignments: [], backfilledProjects: [edited, newer, justWithdrawn] };
+    await show(<Portal employees={[one]} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    const items = within(screen.getByRole("list", { name: "Work history" })).getAllByRole("listitem");
+    const byName = (n: string) => items.find(i => within(i).queryByRole("heading", { name: n }))!;
+    expect(within(byName("Core banking audit")).getByText("Edited 18 Oct 2026")).toBeInTheDocument();
+    expect(within(byName("Mobile wallet")).queryByText(/^Edited/)).not.toBeInTheDocument();
+    expect(within(byName("Withdrawn only")).queryByText(/^Edited/)).not.toBeInTheDocument();
+  });
 
   it("offers no edit, withdraw or evaluation control on backfilled rows", async () => {
     const { items } = await openWork();

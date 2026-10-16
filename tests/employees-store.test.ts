@@ -145,7 +145,7 @@ function fakeEvaluations(rows: AssignmentEvaluation[] = storedEvaluations, fail 
 }
 
 const backfilledProject = (employeeId: string, id: string, extra: Partial<BackfilledProject> = {}): BackfilledProject => ({
-  id, employeeId, departmentId: "dept-1", client: "Old client", projectName: `Past ${id}`, completionDate: "2025-06-30",
+  id, employeeId, departmentId: "dept-1", departmentName: "Dept 1", client: "Old client", projectName: `Past ${id}`, completionDate: "2025-06-30",
   outcome: "Delivered.", status: "active", createdAt: "2026-10-16T00:00:00Z", updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null,
   provenance: "backfilled", ...extra,
 });

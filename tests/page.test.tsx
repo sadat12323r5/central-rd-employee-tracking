@@ -197,7 +197,7 @@ describe("Home routing by role", () => {
   it("passes each employee's backfilled projects through to both portals (Story 4.7)", async () => {
     const { employees } = await import("@/data/employees");
     const backfilled = {
-      id: "bp-1", employeeId: "BS-1001", departmentId: "d-1", client: "Old client", projectName: "Past work", completionDate: "2025-06-30",
+      id: "bp-1", employeeId: "BS-1001", departmentId: "d-1", departmentName: "Dept 1", client: "Old client", projectName: "Past work", completionDate: "2025-06-30",
       outcome: "Delivered.", status: "active", createdAt: "2026-10-16T00:00:00Z", updatedAt: "2026-10-16T00:00:00Z", withdrawnAt: null,
       provenance: "backfilled",
     };

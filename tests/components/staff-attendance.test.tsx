@@ -411,7 +411,7 @@ describe("StaffAttendance past projects (Story 4.7)", () => {
   const LND = "de9a0000-0000-4000-8000-000000000001";
   const options = [{ id: CRD, name: "Central R&D" }, { id: LND, name: "L&D" }];
   const active: Past = {
-    id: "bf000000-0000-4000-8000-000000000001", employeeId: employee.id, departmentId: LND, client: "Old Bank (fictional)",
+    id: "bf000000-0000-4000-8000-000000000001", employeeId: employee.id, departmentId: LND, departmentName: "L&D", client: "Old Bank (fictional)",
     projectName: "Core banking audit", completionDate: "2025-12-15", outcome: "Delivered the audit report.", status: "active",
     createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z", withdrawnAt: null, provenance: "backfilled",
   };
@@ -513,15 +513,43 @@ describe("StaffAttendance past projects (Story 4.7)", () => {
     expect(await within(first).findByText("Past project updated.")).toBeInTheDocument();
   });
 
-  it("withdraws an active entry through the withdraw action, naming only the entry", async () => {
+  it("withdraws an active entry through the withdraw action, naming only the entry; the message is next to it", async () => {
     withdrawBackfillAction.mockResolvedValue({ error: "", message: "Past project withdrawn." });
     const user = userEvent.setup({ advanceTimers: () => {} });
     await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
     const [first] = within(pastList()).getAllByRole("listitem");
-    await user.click(within(first).getByText("Edit"));
-    await user.click(within(first).getByRole("button", { name: "Withdraw past project: Core banking audit, 15 Dec 2025" }));
+    // The withdraw control is shown on the entry, outside the Edit <details>.
+    const withdraw = within(first).getByRole("button", { name: "Withdraw past project: Core banking audit, 15 Dec 2025" });
+    expect(withdraw.closest("details")).toBeNull();
+    await user.click(withdraw);
     expect(Object.fromEntries((withdrawBackfillAction.mock.calls[0][1] as FormData).entries())).toEqual({ id: active.id });
-    expect(await within(section()).findByText("Past project withdrawn.")).toBeInTheDocument();
+    expect(await within(first).findByText("Past project withdrawn.")).toBeInTheDocument();
+  });
+
+  it("withdrawing one entry leaves the other entries' controls enabled", async () => {
+    withdrawBackfillAction.mockReturnValue(new Promise(() => {}));
+    const second: Past = { ...active, id: "bf000000-0000-4000-8000-000000000003", projectName: "Mobile wallet", completionDate: "2025-11-01" };
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    await show(<StaffAttendance employee={{ ...employee, backfilledProjects: [active, second] }} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
+    const [first, other] = within(pastList()).getAllByRole("listitem");
+    await user.click(within(first).getByRole("button", { name: /^Withdraw past project: Core banking audit/ }));
+    expect(await within(first).findByRole("button", { name: /^Withdraw past project: Core banking audit/ })).toBeDisabled();
+    expect(within(other).getByRole("button", { name: /^Withdraw past project: Mobile wallet/ })).toBeEnabled();
+    await user.click(within(other).getByText("Edit"));
+    expect(within(other).getByRole("button", { name: "Save changes" })).toBeEnabled();
+  });
+
+  it("shows the stored department name even when the department list is unavailable", async () => {
+    await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={null} />);
+    const [first] = within(pastList()).getAllByRole("listitem");
+    expect(within(first).getByText("Old Bank (fictional) · L&D")).toBeInTheDocument();
+  });
+
+  it("says no departments are listed yet, with no add form or select, when the list is empty", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} departmentOptions={[]} />);
+    expect(within(section()).getByText("No departments are listed yet, so past projects can't be added.")).toBeInTheDocument();
+    expect(within(section()).queryByRole("form", { name: "Add a past project" })).not.toBeInTheDocument();
+    expect(within(section()).queryByRole("combobox")).not.toBeInTheDocument();
   });
 
   it("says the department list is unavailable rather than offering an empty select", async () => {

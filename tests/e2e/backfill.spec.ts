@@ -85,11 +85,9 @@ test("a Staff member adds, edits and withdraws a past project; a manager sees it
     await expect(row.locator(".callout")).toHaveText("Delivered the audit report; findings closed.");
 
     // Withdraws it: it stays listed, marked, with no controls.
-    const withdraw = row.getByRole("button", { name: `Withdraw past project: ${project}, 15 Dec 2025` });
-    // The editor stays open after a save; open it again only if it was closed.
-    if (!(await withdraw.isVisible())) await row.getByText("Edit", { exact: true }).click();
-    await withdraw.click();
-    await expect(mine.getByText("Past project withdrawn.")).toBeVisible();
+    // The withdraw control sits on the entry itself, outside the Edit <details>.
+    await row.getByRole("button", { name: `Withdraw past project: ${project}, 15 Dec 2025` }).click();
+    await expect(row.getByText("Past project withdrawn.")).toBeVisible();
     await expect(row).toContainText("Withdrawn");
     await expect(row.locator("input, textarea, button, select, form, details")).toHaveCount(0);
 
@@ -107,6 +105,7 @@ test("a Staff member adds, edits and withdraws a past project; a manager sees it
     await expect(item).toContainText("Self-reported");
     await expect(item).toContainText("Withdrawn");
     await expect(item).toContainText("Delivered the audit report; findings closed.");
+    await expect(item).toContainText(`Completed 15 Dec 2025 · ${DEPARTMENT}`);
     await expect(item.locator("input, textarea, button, select, form, details")).toHaveCount(0);
   } finally {
     await managerContext.close();

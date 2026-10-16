@@ -3,7 +3,8 @@
 // Rules under test (Story 4.7): only the owner (the employee linked to auth.uid()) adds, edits and
 // withdraws their backfilled projects; an insert is always active with the database's timestamps; a
 // withdrawn entry never changes again (23514), and id / employee_id / created_at are locked (23514); an
-// unknown department is refused by the foreign key (23503); nothing can be deleted, not even with the
+// unknown department is refused by the foreign key (23503); a completion date after today (Asia/Dhaka) and a
+// withdrawal that also rewrites a value are refused (23514); nothing can be deleted, not even with the
 // service role. The Administrator and a manager over the owner read the entries but never write them
 // (42501 on insert, 0 rows on update); another Staff member reads nothing and writes nothing.
 // public.department_options() gives a signed-in Staff member every department's id and name only.
@@ -150,6 +151,14 @@ describe.skipIf(!configured)("backfilled projects RLS (shared Supabase project)"
     withdrawnId = second.data!.id as string;
   });
 
+  it("refuses a completion date after today in Dhaka (23514), on insert and on an edit that sets one", async () => {
+    const owner = await signedIn(ownerEmail);
+    const insert = await owner.from("backfilled_projects").insert(entry(ownerId, managedId, { completion_date: "2099-01-01" })).select("id");
+    expect(insert.error?.code).toBe("23514");
+    const update = await owner.from("backfilled_projects").update({ completion_date: "2099-01-01" }).eq("id", entryId).select("id");
+    expect(update.error?.code).toBe("23514");
+  });
+
   it("refuses an unknown department (23503)", async () => {
     const owner = await signedIn(ownerEmail);
     const { error } = await owner.from("backfilled_projects").insert(entry(ownerId, UNKNOWN_DEPARTMENT)).select("id");
@@ -176,6 +185,11 @@ describe.skipIf(!configured)("backfilled projects RLS (shared Supabase project)"
 
   it("lets the owner withdraw: it stays, marked, and can never change again (23514)", async () => {
     const owner = await signedIn(ownerEmail);
+    // A withdrawal changes only the status: rewriting a value in the same request is refused.
+    for (const change of [{ outcome: "Rewritten while withdrawing." }, { department_id: managedId }, { client: "Other client" }]) {
+      const rewrite = await owner.from("backfilled_projects").update({ status: "withdrawn", ...change }).eq("id", withdrawnId).select("id");
+      expect(rewrite.error?.code, JSON.stringify(change)).toBe("23514");
+    }
     const { data, error } = await owner.from("backfilled_projects").update({ status: "withdrawn" }).eq("id", withdrawnId)
       .select("status,withdrawn_at").single();
     expect(error).toBeNull();
@@ -259,7 +273,7 @@ describe.skipIf(!configured)("backfilled projects RLS (shared Supabase project)"
     const added = await store.add(ownerSession, {
       departmentId: managedId, client: ` Store client ${run} `, projectName: "Store project", completionDate: "2025-01-15", outcome: " Store outcome. ",
     });
-    expect(added).toMatchObject({ employeeId: ownerId, client: `Store client ${run}`, outcome: "Store outcome.", status: "active", provenance: "backfilled" });
+    expect(added).toMatchObject({ employeeId: ownerId, departmentName: MANAGED_NAME, client: `Store client ${run}`, outcome: "Store outcome.", status: "active", provenance: "backfilled" });
     const edited = await store.edit(ownerSession, added.id, {
       departmentId: otherId, client: `Store client ${run}`, projectName: "Store project", completionDate: "2025-01-15", outcome: "Store edit.",
     });
@@ -270,7 +284,10 @@ describe.skipIf(!configured)("backfilled projects RLS (shared Supabase project)"
     const managerClient = async () => manager;
     const managerSession = { role: "manager", employeeId: managerId, userId: managerUserId } as const;
     const managerStore = createBackfilledProjectStore({ userClient: managerClient, scope: createManagerScope({ userClient: managerClient }) });
-    expect((await managerStore.listFor(managerSession, ownerId)).map(p => p.id)).toEqual(expect.arrayContaining([added.id, entryId]));
+    const managed = await managerStore.listFor(managerSession, ownerId);
+    expect(managed.map(p => p.id)).toEqual(expect.arrayContaining([added.id, entryId]));
+    // entryId now names OTHER_NAME, a department outside the manager's subtree: its name is still shown.
+    expect(managed.find(p => p.id === entryId)?.departmentName).toBe(OTHER_NAME);
     await expect(managerStore.withdraw(managerSession, added.id)).rejects.toBeInstanceOf(BackfillForbiddenError);
     const admin = await signedIn(adminEmail);
     const adminStore = createBackfilledProjectStore({ userClient: async () => admin });

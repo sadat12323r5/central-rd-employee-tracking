@@ -164,8 +164,8 @@ describe("backfilled-project-store reads", () => {
   });
 
   it("maps the row to the camel-cased BackfilledProject with a materialized provenance", () => {
-    expect(toBackfilledProject(row(OWN, "BS-1001"))).toEqual({
-      id: OWN, employeeId: "BS-1001", departmentId: LND, client: "Old Bank (fictional)", projectName: "Project 1", completionDate: "2025-06-30",
+    expect(toBackfilledProject(row(OWN, "BS-1001"), "L&D")).toEqual({
+      id: OWN, employeeId: "BS-1001", departmentId: LND, departmentName: "L&D", client: "Old Bank (fictional)", projectName: "Project 1", completionDate: "2025-06-30",
       outcome: "Delivered.", status: "active", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", withdrawnAt: null,
       provenance: "backfilled",
     });
@@ -180,9 +180,37 @@ describe("backfilled-project-store reads", () => {
     // The query asks the database for the same order.
     const db = fakeDb(world());
     await storeFor(db).listFor(admin);
-    expect(db.calls[0].filter(c => c.method === "order").map(c => c.args)).toEqual([
+    expect(db.calls.find(q => q.some(c => c.method === "select"))!.filter(c => c.method === "order").map(c => c.args)).toEqual([
       ["completion_date", { ascending: false }], ["created_at", { ascending: false }], ["id"],
     ]);
+  });
+
+  it("names each entry's department from department_options(), one rpc per read, whoever is viewing", async () => {
+    for (const session of [admin, manager, staff] as const) {
+      const db = fakeDb(world());
+      const listed = await storeFor(db, fakeScope(["BS-1001", "BS-1003"]).scope).listFor(session);
+      expect(listed.find(p => p.id === OWN)?.departmentName, session.role).toBe("L&D");
+      if (session.role !== "staff") expect(listed.find(p => p.id === OTHERS)?.departmentName, session.role).toBe("Central R&D");
+      expect(db.calls.flat().filter(c => c.table === "rpc"), session.role).toHaveLength(1);
+    }
+    // A department missing from the list (never expected: the foreign key holds) gets a plain word, never an id.
+    const state = world();
+    state.departments = state.departments.filter(d => d.id !== CRD);
+    expect((await storeFor(fakeDb(state)).listFor(admin, "BS-1003"))[0].departmentName).toBe("Unknown department");
+  });
+
+  it("is unavailable when the department names cannot be read (never an entry without its name)", async () => {
+    await expect(storeFor(fakeDb(world(), [{ method: "rpc", error: { code: "PGRST202", message: "missing" } }])).listFor(staff))
+      .rejects.toBeInstanceOf(BackfillUnavailableError);
+    await expect(storeFor(fakeDb(world(), [{ method: "rpc", error: { code: "PGRST202", message: "missing" } }])).listFor(manager))
+      .rejects.toBeInstanceOf(BackfillUnavailableError);
+  });
+
+  it("names the department on the entries writes return", async () => {
+    const db = fakeDb(world());
+    expect((await storeFor(db).add(staff, input)).departmentName).toBe("Central R&D");
+    expect((await storeFor(db).edit(staff, OWN, { ...input, departmentId: LND })).departmentName).toBe("L&D");
+    expect((await storeFor(db).withdraw(staff, OWN)).departmentName).toBe("L&D");
   });
 
   it("gives Staff only their own entries; anyone else's is [] without a query", async () => {
