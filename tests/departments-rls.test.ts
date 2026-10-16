@@ -203,7 +203,9 @@ describe.skipIf(!configured)("departments RLS (shared Supabase project)", () => 
       const manager = await signedIn(managerEmail);
       const read = await manager.from("departments").select("id,manager_user_id").like("name", `${PREFIX}%`);
       expect(read.error).toBeNull();
-      expect(read.data).toEqual([{ id: parentId, manager_user_id: managerUserId }]);
+      // Story 4.3: managing a department also reveals its subtree, so the child comes back too (unmanaged).
+      expect(read.data).toEqual(expect.arrayContaining([{ id: parentId, manager_user_id: managerUserId }, { id: childId, manager_user_id: null }]));
+      expect(read.data?.every(d => d.id === parentId || d.manager_user_id === null)).toBe(true);
       // The store's per-request check (auth.ts) through each user's own JWT.
       expect(await createDepartmentsStore({ userClient: async () => manager }).managesAny(managerUserId)).toBe(true);
       const staff = await signedIn(staffEmail);

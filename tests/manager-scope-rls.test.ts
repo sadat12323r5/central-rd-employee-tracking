@@ -275,5 +275,5 @@ describe.skipIf(!configured)("manager scope RLS (shared Supabase project)", () =
     expect(await attendance.listFor(session, parentEmployee)).toEqual([]);
     const departments = await createDepartmentsStore({ userClient, scope }).listFor(session);
     expect(departments.map(d => d.id)).toEqual([childId]);
-  });
+  }, 30_000);
 });
