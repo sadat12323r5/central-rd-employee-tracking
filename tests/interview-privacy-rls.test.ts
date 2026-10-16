@@ -1,5 +1,5 @@
 // Integration test against the shared Supabase project. Skipped unless the three Supabase env vars
-// are present. Uses its own throwaway auth users, departments (names carrying this run's id) and BS-91xx
+// are present. Uses its own throwaway auth users, departments (names carrying this run's id) and BS-84xx
 // employees (a range no other test uses), never the seeded demo data, and removes everything it created in
 // afterAll through the service role: interviews (employee FK is ON DELETE RESTRICT), then the employees'
 // department_id, then the departments (children first), then the employees, then the users.
@@ -26,9 +26,9 @@ const noSession = { auth: { persistSession: false, autoRefreshToken: false } };
 const run = randomBytes(4).toString("hex");
 const password = `Rls-${randomBytes(12).toString("hex")}!`;
 const PREFIX = `RLS IntPriv ${run}`;
-// One per-run slot of three consecutive ids (BS-9100..BS-9198): manager A, manager B, employee E.
+// One per-run slot of three consecutive ids (BS-8400..BS-8498): manager A, manager B, employee E.
 const base = randomInt(0, 33) * 3;
-const idAt = (offset: number) => `BS-91${String(base + offset).padStart(2, "0")}`;
+const idAt = (offset: number) => `BS-84${String(base + offset).padStart(2, "0")}`;
 const aEmployeeId = idAt(0);
 const bEmployeeId = idAt(1);
 const eEmployeeId = idAt(2);
@@ -145,8 +145,10 @@ describe.skipIf(!configured)("interview privacy for department managers (shared 
   it("sets up real department managers over a parent/child tree", async () => {
     const a = await signedIn(managerAEmail);
     const b = await signedIn(managerBEmail);
-    // Each manager reads the department it manages (departments_select_managed, Story 4.2).
-    expect((await a.from("departments").select("id").like("name", `${PREFIX}%`)).data).toEqual([{ id: parentId }]);
+    // Each manager reads the department it manages (departments_select_managed, Story 4.2); with Story 4.3's
+    // departments_select_managed_subtree, A (parent) also reads the child, B only the child.
+    const aDepartments = (await a.from("departments").select("id").like("name", `${PREFIX}%`)).data ?? [];
+    expect(aDepartments.map(d => d.id).sort()).toEqual([parentId, childId].sort());
     expect((await b.from("departments").select("id").like("name", `${PREFIX}%`)).data).toEqual([{ id: childId }]);
     const { data } = await service.from("employees").select("employee_id,department_id").in("employee_id", employeeIds);
     expect(data).toEqual(expect.arrayContaining([

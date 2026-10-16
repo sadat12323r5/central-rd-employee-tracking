@@ -1,6 +1,6 @@
 // Integration test against the shared Supabase project. Skipped unless the three Supabase env vars
 // are present. Uses its own throwaway auth users, departments (names carrying this run's id) and
-// employees (a per-run slot of BS-91xx, a range no other test uses), never the seeded demo data, and
+// employees (a per-run slot of BS-85xx, a range no other test uses), never the seeded demo data, and
 // removes everything it created in afterAll through the service role (archived rows are restored first;
 // audit_events rows are append-only and stay).
 // Rules under test (Story 4.9): public.manager_set_employee_archived, called with each user's own JWT,
@@ -24,9 +24,9 @@ const noSession = { auth: { persistSession: false, autoRefreshToken: false } };
 const run = randomBytes(4).toString("hex");
 const password = `Rls-${randomBytes(12).toString("hex")}!`;
 const PREFIX = `RLS Archive ${run}`;
-// One per-run slot of eight consecutive ids (BS-9100..BS-9195).
+// One per-run slot of eight consecutive ids (BS-8500..BS-8595).
 const base = randomInt(0, 12) * 8;
-const idAt = (offset: number) => `BS-91${String(base + offset).padStart(2, "0")}`;
+const idAt = (offset: number) => `BS-85${String(base + offset).padStart(2, "0")}`;
 const mPId = idAt(0);       // manager of P, employee in P
 const mCId = idAt(1);       // manager of C, employee in C
 const mGId = idAt(2);       // manager of G (grandchild under C), employee in C
