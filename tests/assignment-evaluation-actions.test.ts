@@ -41,6 +41,7 @@ const valid = { assignmentId: ID, evaluation: "  Delivered on time.  ", clientFe
 const sample: AssignmentEvaluation = {
   id: "e-1", assignmentId: ID, employeeId: "BS-1001", departmentId: "d-1", evaluation: "Delivered on time.", clientFeedback: "Happy client.",
   createdBy: "u-1", createdAt: "2026-10-16T00:00:00Z", authoredBy: "u-1", updatedAt: "2026-10-16T00:00:00Z",
+  createdByName: null, createdByRole: "manager", authoredByName: null, authoredByRole: "manager", 
 };
 
 beforeEach(() => {
@@ -101,12 +102,11 @@ describe("createEvaluationAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("maps the store's refusals to their messages and never revalidates on a refusal", async () => {
+  it("maps the store's refusals to their messages and does not revalidate on them", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const cases: [Error, string][] = [
       [new EvaluationForbiddenError(), FORBIDDEN],
       [new EvaluationAssignmentOpenError(), "Close the assignment before evaluating it."],
-      [new EvaluationExistsError(), "This assignment already has an evaluation. Amend it instead."],
       [new EvaluationInvalidError("The evaluation can't be changed that way."), "The evaluation can't be changed that way."],
       [new EvaluationsUnavailableError(), "Evaluations are temporarily unavailable. Nothing was saved."],
     ];
@@ -116,6 +116,26 @@ describe("createEvaluationAction", () => {
     }
     expect(revalidatePath).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("revalidates after an 'already evaluated' or 'not written yet' refusal, so a stale page shows the right form", async () => {
+    create.mockRejectedValueOnce(new EvaluationExistsError());
+    expect(await createEvaluationAction(blank, form(valid))).toEqual({ error: "This assignment already has an evaluation. Amend it instead.", message: "" });
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+    revalidatePath.mockClear();
+    amend.mockRejectedValueOnce(new EvaluationNotFoundError());
+    expect(await amendEvaluationAction(blank, form(valid))).toEqual({ error: "Write the evaluation first.", message: "" });
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("counts a CRLF line break as one character (as browsers submit textareas)", async () => {
+    // 3999 characters + one line break = 4000, within the limit; sent as CRLF it would be 4001.
+    const evaluation = `${"x".repeat(2000)}\r\n${"y".repeat(1999)}`;
+    const clientFeedback = `${"a".repeat(1000)}\r\n${"b".repeat(999)}`;
+    expect(await createEvaluationAction(blank, form({ assignmentId: ID, evaluation, clientFeedback }))).toEqual({ error: "", message: "Evaluation saved." });
+    expect(create).toHaveBeenCalledWith(ADMIN, ID, {
+      evaluation: `${"x".repeat(2000)}\n${"y".repeat(1999)}`, clientFeedback: `${"a".repeat(1000)}\n${"b".repeat(999)}`,
+    });
   });
 
   it("rethrows an unknown error", async () => {

@@ -1,38 +1,30 @@
+import type { AuthorRole } from "@/data/employees";
 import { formatDisplayDay } from "./dates";
-import type { Department } from "./departments";
 
 // Story 4.6: how an assignment evaluation's authorship is shown. Pure (no framework or database imports).
-// Authors are auth user ids; they are never shown raw. A name is shown when the account is a department's
-// manager whose linked employee the viewer can see; otherwise role words: a manager's account with no
-// visible employee is "a manager", a department's manager account with no employee row at all is an
-// Administrator's ("the Administrator"), and an account the viewer cannot place (for example Staff, who
-// see no departments, or an Administrator who manages nothing) is "a manager or the Administrator".
-
-/** Who an author id is, for display. */
-export type AuthorName = (userId: string) => string;
-
-export const UNKNOWN_AUTHOR = "a manager or the Administrator";
+// Authors are auth user ids and are never shown raw. The label comes only from the snapshot the database
+// stored with each write (the writer's display name and role at that time), so every viewer, Staff
+// included, sees the same text whatever departments they can see and whoever manages them now.
 
 /** The evaluation fields authorship needs. */
-type Authored = { createdBy: string; createdAt: string; authoredBy: string; updatedAt: string };
+type Authored = {
+  createdBy: string; createdByName: string | null; createdByRole: AuthorRole; createdAt: string;
+  authoredBy: string; authoredByName: string | null; authoredByRole: AuthorRole; updatedAt: string;
+};
 
-/** A resolver over what the viewer can see: the department list (managers' accounts) and the employees (names). */
-export function authorNames(
-  departments: Pick<Department, "managerUserId" | "managerEmployeeId">[], employees: { id: string; name: string }[],
-): AuthorName {
-  return userId => {
-    const managed = departments.find(d => d.managerUserId !== null && d.managerUserId === userId);
-    if (!managed) return UNKNOWN_AUTHOR;
-    if (managed.managerEmployeeId === null) return "the Administrator";
-    return employees.find(e => e.id === managed.managerEmployeeId)?.name ?? "a manager";
-  };
+/** The stored name, else the role words: "the Administrator" or "a manager". */
+export function authorLabel(name: string | null | undefined, role: AuthorRole): string {
+  const trimmed = name?.trim();
+  if (trimmed) return trimmed;
+  return role === "admin" ? "the Administrator" : "a manager";
 }
 
 /** True when the evaluation was changed after it was first written. */
 export const isAmended = (evaluation: Authored) => evaluation.updatedAt !== evaluation.createdAt || evaluation.authoredBy !== evaluation.createdBy;
 
 /** "Written by X on D MMM YYYY", plus " · amended by Y on D MMM YYYY" when it was amended. */
-export function authorshipText(evaluation: Authored, name: AuthorName = () => UNKNOWN_AUTHOR): string {
-  const written = `Written by ${name(evaluation.createdBy)} on ${formatDisplayDay(evaluation.createdAt)}`;
-  return isAmended(evaluation) ? `${written} · amended by ${name(evaluation.authoredBy)} on ${formatDisplayDay(evaluation.updatedAt)}` : written;
+export function authorshipText(evaluation: Authored): string {
+  const written = `Written by ${authorLabel(evaluation.createdByName, evaluation.createdByRole)} on ${formatDisplayDay(evaluation.createdAt)}`;
+  if (!isAmended(evaluation)) return written;
+  return `${written} · amended by ${authorLabel(evaluation.authoredByName, evaluation.authoredByRole)} on ${formatDisplayDay(evaluation.updatedAt)}`;
 }

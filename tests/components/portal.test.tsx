@@ -889,8 +889,9 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
   const MANAGER_USER = "aaaa0000-0000-4000-8000-0000000000a2";
   const ADMIN_USER = "aaaa0000-0000-4000-8000-0000000000ad";
   const departments = [
-    { id: CRD, name: "Central R&D", parentId: LND, managerUserId: MANAGER_USER, managerEmployeeId: "BS-1002" },
-    { id: LND, name: "L&D", parentId: null, managerUserId: ADMIN_USER, managerEmployeeId: null },
+    // Who manages what now never changes the label: it comes from the stored snapshot.
+    { id: CRD, name: "Central R&D", parentId: LND, managerUserId: null, managerEmployeeId: null },
+    { id: LND, name: "L&D", parentId: null, managerUserId: null, managerEmployeeId: null },
   ];
   const open: Assignment = {
     id: "5e000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: CRD, client: "Not recorded",
@@ -904,7 +905,8 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
   const evaluation = (extra: Partial<AssignmentEvaluation> = {}): AssignmentEvaluation => ({
     id: "e0000000-0000-4000-8000-000000000001", assignmentId: closed.id, employeeId: "BS-1001", departmentId: CRD,
     evaluation: "Delivered the migration on time.", clientFeedback: "The client praised the hand-over.",
-    createdBy: MANAGER_USER, createdAt: "2026-10-16T04:00:00Z", authoredBy: MANAGER_USER, updatedAt: "2026-10-16T04:00:00Z", ...extra,
+    createdBy: MANAGER_USER, createdByName: "Arif Hasan", createdByRole: "manager", createdAt: "2026-10-16T04:00:00Z",
+    authoredBy: MANAGER_USER, authoredByName: "Arif Hasan", authoredByRole: "manager", updatedAt: "2026-10-16T04:00:00Z", ...extra,
   });
   const list = (evaluations: AssignmentEvaluation[]) => employees.map(e => ({
     ...e, departmentId: CRD, assignments: e.id === "BS-1001" ? [open, closed] : [], evaluations: e.id === "BS-1001" ? evaluations : [],
@@ -961,7 +963,7 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
   });
 
   it("amends through the amend action and shows who amended it", async () => {
-    const amended = evaluation({ authoredBy: ADMIN_USER, updatedAt: "2026-10-17T05:00:00Z", clientFeedback: "" });
+    const amended = evaluation({ authoredBy: ADMIN_USER, authoredByName: null, authoredByRole: "admin", updatedAt: "2026-10-17T05:00:00Z", clientFeedback: "" });
     const { user, item } = await openWork([amended]);
     expect(within(item).getByText("Written by Arif Hasan on 16 Oct 2026 · amended by the Administrator on 17 Oct 2026")).toBeInTheDocument();
     expect(within(item).getByText("No client feedback recorded.")).toBeInTheDocument();
@@ -977,9 +979,11 @@ describe("Portal assignment evaluations (Story 4.6)", () => {
     expect(createEvaluationAction).not.toHaveBeenCalled();
   });
 
-  it("falls back to role words when the author cannot be named, never a raw id", async () => {
-    const { item } = await openWork([evaluation({ createdBy: "bbbb0000-0000-4000-8000-000000000001", authoredBy: "bbbb0000-0000-4000-8000-000000000001" })]);
-    expect(within(item).getByText("Written by a manager or the Administrator on 16 Oct 2026")).toBeInTheDocument();
+  it("falls back to the stored role's words when no name was stored, never a raw id", async () => {
+    const { item } = await openWork([evaluation({
+      createdBy: "bbbb0000-0000-4000-8000-000000000001", createdByName: null, authoredBy: "bbbb0000-0000-4000-8000-000000000001", authoredByName: null,
+    })]);
+    expect(within(item).getByText("Written by a manager on 16 Oct 2026")).toBeInTheDocument();
     expect(within(item).queryByText(/bbbb0000/)).not.toBeInTheDocument();
   });
 

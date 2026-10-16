@@ -3,7 +3,6 @@
 import { useActionState } from "react";
 import type { Assignment, AssignmentEvaluation } from "@/data/employees";
 import { formatDisplayDate } from "@/domain/dates";
-import { UNKNOWN_AUTHOR, type AuthorName } from "@/domain/evaluations";
 import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import type { ActionState } from "@/server/attendance-actions";
@@ -84,15 +83,15 @@ async function submitEvaluation(previous: EvaluationState, form: FormData): Prom
  * Story 4.6: a closed assignment's evaluation, then the form to write it (none yet) or amend it. The
  * form names only the assignment; the server takes the employee, department and author from elsewhere.
  */
-function ClosedEvaluation({ assignment, evaluation, authorName }: {
-  assignment: Assignment; evaluation: AssignmentEvaluation | undefined; authorName: AuthorName;
+function ClosedEvaluation({ assignment, evaluation }: {
+  assignment: Assignment; evaluation: AssignmentEvaluation | undefined;
 }) {
   const [state, submit, saving] = useActionState(submitEvaluation, evaluationInitial);
   const mode = evaluation ? "amend" : "create";
   const id = (suffix: string) => `evaluation-${suffix}-${assignment.id}`;
   const label = evaluation ? "Amend evaluation" : "Write evaluation";
   return <div className="assignment-evaluation">
-    <EvaluationView evaluation={evaluation} authorName={authorName} />
+    <EvaluationView evaluation={evaluation} />
     {state.error ? <p role="alert" className="form-error">{state.error}</p> : state.message ? <p role="status" className="staff-status">{state.message}</p> : null}
     <details key={mode} className="evaluation-editor">
       <summary>{label}</summary>
@@ -118,7 +117,7 @@ function ClosedEvaluation({ assignment, evaluation, authorName }: {
   </div>;
 }
 
-export default function AssignmentsPanel({ employeeId, name, assignments, departmentName, evaluations = [], authorName = () => UNKNOWN_AUTHOR }: {
+export default function AssignmentsPanel({ employeeId, name, assignments, departmentName, evaluations = [] }: {
   employeeId: string;
   /** The employee's name, for labels. */
   name: string;
@@ -128,8 +127,6 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
   departmentName: (id: string) => string;
   /** Story 4.6: the employee's assignment evaluations (joined to closed assignments by id). */
   evaluations?: AssignmentEvaluation[];
-  /** Story 4.6: who an evaluation's author is (never a raw id). */
-  authorName?: AuthorName;
 }) {
   const [created, create, creating] = useActionState(submitCreate, createInitial);
   const [noted, note, noting] = useActionState(submitNote, keptInitial);
@@ -209,7 +206,7 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
           <p>{a.role} · {a.client} · {a.allocation}%</p>
           <small>{date(a.startDate)} – {date(a.completionDate ?? "")} · {departmentName(a.departmentId)}</small>
           {a.latestUpdate && <div className="callout">{a.latestUpdate}</div>}
-          <ClosedEvaluation assignment={a} evaluation={evaluations.find(e => e.assignmentId === a.id)} authorName={authorName} />
+          <ClosedEvaluation assignment={a} evaluation={evaluations.find(e => e.assignmentId === a.id)} />
         </li>)}
       </ul>}
     </article>

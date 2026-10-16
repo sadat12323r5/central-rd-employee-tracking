@@ -122,7 +122,8 @@ function fakeAssignments(rows: Assignment[] = storedAssignments, fail = false) {
 
 const evaluation = (employeeId: string, id: string, assignmentId: string, extra: Partial<AssignmentEvaluation> = {}): AssignmentEvaluation => ({
   id, assignmentId, employeeId, departmentId: "dept-1", evaluation: `Evaluation ${id}`, clientFeedback: "",
-  createdBy: "u-1", createdAt: "2026-10-16T00:00:00Z", authoredBy: "u-1", updatedAt: "2026-10-16T00:00:00Z", ...extra,
+  createdBy: "u-1", createdAt: "2026-10-16T00:00:00Z", authoredBy: "u-1", updatedAt: "2026-10-16T00:00:00Z",
+  createdByName: null, createdByRole: "manager", authoredByName: null, authoredByRole: "manager", ...extra,
 });
 const storedEvaluations = [evaluation("BS-1001", "ev-0", "a-0"), evaluation("BS-1002", "ev-9", "a-9")];
 

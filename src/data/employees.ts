@@ -13,12 +13,17 @@ export type Assignment = {
  * Story 4.6: the evaluation of one closed assignment (a separate record, AD-2; at most one per assignment).
  * `employeeId` and `departmentId` are copied from the assignment, never caller-chosen. `createdBy` /
  * `createdAt` are the first writer; `authoredBy` / `updatedAt` the latest (an amendment). Both authors are
- * auth user ids taken from the writer's session by the database. Never deleted.
+ * auth user ids taken from the writer's session by the database, with a snapshot of the writer's display
+ * name (null when the account has no employee row) and role at the time of the write. Never deleted.
  */
 export type AssignmentEvaluation = {
   id: string; assignmentId: string; employeeId: string; departmentId: string; evaluation: string; clientFeedback: string;
-  createdBy: string; createdAt: string; authoredBy: string; updatedAt: string;
+  createdBy: string; createdByName: string | null; createdByRole: AuthorRole; createdAt: string;
+  authoredBy: string; authoredByName: string | null; authoredByRole: AuthorRole; updatedAt: string;
 };
+
+/** Story 4.6: the role an evaluation's writer had when writing it. */
+export type AuthorRole = "admin" | "manager";
 
 export type Employee = {
   id: string; name: string; title: string; team: string; type: string; email: string;

@@ -20,9 +20,12 @@ const NOT_FOUND = "Write the evaluation first.";
 const UNAVAILABLE = "Evaluations are temporarily unavailable. Nothing was saved.";
 
 const assignmentId = z.string({ error: "Choose an existing assignment." }).trim().uuid("Choose an existing assignment.");
-const evaluationText = z.string({ error: "Enter the evaluation." }).trim()
+/** Browsers submit textarea line breaks as CRLF; count them as one character, as the textarea's maxLength does. */
+const lines = (value: string) => value.replace(/\r\n/g, "\n");
+
+const evaluationText = z.string({ error: "Enter the evaluation." }).transform(lines).transform(value => value.trim())
   .pipe(z.string().min(1, "Enter the evaluation.").max(EVALUATION_MAX, `Keep the evaluation to ${EVALUATION_MAX} characters or fewer.`));
-const clientFeedback = z.string({ error: "Enter the client feedback as text." }).trim()
+const clientFeedback = z.string({ error: "Enter the client feedback as text." }).transform(lines).transform(value => value.trim())
   .pipe(z.string().max(CLIENT_FEEDBACK_MAX, `Keep the client feedback to ${CLIENT_FEEDBACK_MAX} characters or fewer.`));
 
 const evaluationForm = z.object({ assignmentId, evaluation: evaluationText, clientFeedback });
@@ -71,6 +74,8 @@ async function save(form: FormData, write: "create" | "amend", message: string):
   try {
     await assignmentEvaluationsStore[write](session, id, input);
   } catch (error) {
+    // The page is stale (an evaluation appeared, or is missing): refresh it so the form shows the right mode.
+    if (error instanceof EvaluationExistsError || error instanceof EvaluationNotFoundError) revalidatePath("/");
     return refusal(error);
   }
   revalidatePath("/");

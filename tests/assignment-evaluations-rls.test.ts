@@ -6,7 +6,9 @@
 // only for closed assignments (23514 otherwise), one per assignment (23505), with the employee and
 // department copied from the assignment; identifying fields are locked (23514); nothing can be deleted,
 // not even with the service role. Staff read only their own evaluations and never write one; a manager
-// outside the subtree sees and changes nothing.
+// outside the subtree sees and changes nothing. Each write snapshots the writer's name and role.
+// Transfer: when the employee moves to another department, that department's manager may read the
+// evaluation (manages_employee) but never write it, while the assignment's own department manager still can.
 //
 // Evaluations and assignments can never be deleted, so this test cannot remove what it creates. It reuses
 // a fixed slot of throwaway employees (BS-9130..BS-9153, a range no other test uses) and fixed-name
@@ -74,6 +76,7 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
   let childManagerUserId = "";
   let parentId = "";
   let childId = "";
+  let outsideId = "";
   /** This run's closed (to evaluate), open, and second closed assignments of the subject; the other Staff member's closed one. */
   let closedId = "";
   let openId = "";
@@ -145,7 +148,7 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
     const otherStaffUserId = await createUser(otherStaffEmail, { role: "staff", employee_id: otherStaffId });
     parentId = await ensureDepartment(PARENT_NAME, null, parentManagerUserId);
     childId = await ensureDepartment(CHILD_NAME, parentId, childManagerUserId);
-    await ensureDepartment(OUTSIDE_NAME, null, outsideManagerUserId);
+    outsideId = await ensureDepartment(OUTSIDE_NAME, null, outsideManagerUserId);
     await closeOpen(); // leftovers of an aborted run in the same slot
     const employees = await service.from("employees").upsert([
       employeeRow(subjectId, subjectUserId, childId),
@@ -168,6 +171,8 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
   afterAll(async () => {
     if (!service) return;
     try {
+      // Undo the transfer case if it was interrupted.
+      await service.from("employees").update({ department_id: childId }).eq("employee_id", subjectId);
       await closeOpen();
       // The rows stay (assignments and evaluations reference them); unlink and archive them so they are inert.
       await service.from("employees").update({ auth_user_id: null, archived_at: new Date().toISOString() }).in("employee_id", employeeIds);
@@ -185,6 +190,12 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
     expect(error).toBeNull();
     expect(data).toMatchObject({
       employee_id: subjectId, department_id: childId, created_by: childManagerUserId, authored_by: childManagerUserId, client_feedback: "Happy client.",
+    });
+    // The authorship snapshot: the writer's employee name and role, whatever was sent.
+    const snapshot = await service.from("assignment_evaluations")
+      .select("created_by_name,created_by_role,authored_by_name,authored_by_role").eq("assignment_id", closedId).single();
+    expect(snapshot.data).toEqual({
+      created_by_name: `RLS Eval ${childManagerId}`, created_by_role: "manager", authored_by_name: `RLS Eval ${childManagerId}`, authored_by_role: "manager",
     });
     expect(data?.created_at).toBe(data?.updated_at);
   });
@@ -238,11 +249,14 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
     const before = await service.from("assignment_evaluations").select("updated_at").eq("assignment_id", closedId).single();
     const parent = await signedIn(parentManagerEmail);
     const { data, error } = await parent.from("assignment_evaluations")
-      .update({ evaluation: "Amended by the parent manager.", client_feedback: "", authored_by: adminUserId })
-      .eq("assignment_id", closedId).select("evaluation,client_feedback,created_by,authored_by,updated_at").single();
+      .update({ evaluation: "Amended by the parent manager.", client_feedback: "", authored_by: adminUserId, authored_by_name: "Forged", authored_by_role: "admin" })
+      .eq("assignment_id", closedId)
+      .select("evaluation,client_feedback,created_by,authored_by,updated_at,created_by_name,created_by_role,authored_by_name,authored_by_role").single();
     expect(error).toBeNull();
     expect(data).toMatchObject({
       evaluation: "Amended by the parent manager.", client_feedback: "", created_by: childManagerUserId, authored_by: parentManagerUserId,
+      created_by_name: `RLS Eval ${childManagerId}`, created_by_role: "manager",
+      authored_by_name: `RLS Eval ${parentManagerId}`, authored_by_role: "manager",
     });
     expect(Date.parse(data!.updated_at as string)).toBeGreaterThan(Date.parse(before.data!.updated_at as string));
   });
@@ -251,7 +265,7 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
     const admin = await signedIn(adminEmail);
     const changes: Record<string, unknown>[] = [
       { assignment_id: otherClosedId }, { employee_id: otherStaffId }, { department_id: parentId }, { created_by: adminUserId },
-      { created_at: "2026-01-01T00:00:00Z" },
+      { created_at: "2026-01-01T00:00:00Z" }, { created_by_name: "Changed" }, { created_by_role: "admin" },
     ];
     for (const change of changes) {
       const { error } = await admin.from("assignment_evaluations").update(change).eq("assignment_id", closedId).select("id");
@@ -291,5 +305,34 @@ describe.skipIf(!configured)("assignment evaluations RLS (shared Supabase projec
     const outsideSession = { role: "manager", employeeId: outsideManagerId, userId: outsideUserId } as const;
     expect(await outsideStore.listFor(outsideSession, subjectId)).toEqual([]);
     await expect(outsideStore.amend(outsideSession, closedId, { evaluation: "x", clientFeedback: "" })).rejects.toBeInstanceOf(EvaluationForbiddenError);
+  });
+
+  it("after a transfer, the new department's manager reads but never writes; the assignment's own manager still writes", async () => {
+    const moved = await service.from("employees").update({ department_id: outsideId }).eq("employee_id", subjectId);
+    if (moved.error) throw new Error(`Could not transfer the test employee (${moved.error.code}): ${moved.error.message}`);
+    try {
+      const outside = await signedIn(outsideManagerEmail);
+      const read = await outside.from("assignment_evaluations").select("assignment_id").eq("assignment_id", closedId);
+      expect(read.error).toBeNull();
+      expect(read.data).toEqual([{ assignment_id: closedId }]);
+      const update = await outside.from("assignment_evaluations").update({ evaluation: "Outside after transfer" }).eq("assignment_id", closedId).select("id");
+      expect(update.data ?? []).toEqual([]);
+      const insert = await outside.from("assignment_evaluations").insert(evaluationRow(closedForStoreId)).select("id");
+      expect(insert.error).not.toBeNull();
+
+      const child = await signedIn(childManagerEmail);
+      const amended = await child.from("assignment_evaluations").update({ evaluation: "Amended after the transfer." })
+        .eq("assignment_id", closedId).select("evaluation,authored_by");
+      expect(amended.error).toBeNull();
+      expect(amended.data).toEqual([{ evaluation: "Amended after the transfer.", authored_by: childManagerUserId }]);
+      // The store finds the assignment through assignments_select_department_managed (manages_employee no longer holds).
+      const userClient = async () => child;
+      const store = createAssignmentEvaluationsStore({ userClient, scope: createManagerScope({ userClient }) });
+      const session = { role: "manager", employeeId: childManagerId, userId: childManagerUserId } as const;
+      await expect(store.amend(session, closedId, { evaluation: "Store amendment after the transfer.", clientFeedback: "" }))
+        .resolves.toMatchObject({ evaluation: "Store amendment after the transfer.", departmentId: childId, employeeId: subjectId });
+    } finally {
+      await service.from("employees").update({ department_id: childId }).eq("employee_id", subjectId);
+    }
   });
 });

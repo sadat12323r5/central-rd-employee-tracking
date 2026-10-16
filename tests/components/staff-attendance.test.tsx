@@ -347,8 +347,9 @@ describe("StaffAttendance My assignments (Story 4.6)", () => {
   const notEvaluated: Assignment = { ...evaluated, id: "5e000000-0000-4000-8000-000000000003", projectName: "Data audit", completionDate: "2026-02-28", startDate: "2026-01-10" };
   const evaluation: Evaluation = {
     id: "e-1", assignmentId: evaluated.id, employeeId: employee.id, departmentId: "d-1", evaluation: "Delivered the migration on time.",
-    clientFeedback: "The client praised the hand-over.", createdBy: "u-mgr", createdAt: "2026-10-16T04:00:00Z", authoredBy: "u-mgr",
-    updatedAt: "2026-10-16T04:00:00Z",
+    clientFeedback: "The client praised the hand-over.", createdBy: "u-mgr", createdByName: "Arif Hasan", createdByRole: "manager",
+    createdAt: "2026-10-16T04:00:00Z", authoredBy: "u-admin", authoredByName: null, authoredByRole: "admin",
+    updatedAt: "2026-10-17T04:00:00Z",
   };
   const withWork = { ...employee, assignments: [openOne, evaluated, notEvaluated], evaluations: [evaluation] };
   const section = () => screen.getByRole("heading", { name: "My assignments" }).closest("section")!;
@@ -370,7 +371,8 @@ describe("StaffAttendance My assignments (Story 4.6)", () => {
     const items = within(section()).getAllByRole("listitem");
     expect(within(items[1]).getByText("Delivered the migration on time.")).toBeInTheDocument();
     expect(within(items[1]).getByText("The client praised the hand-over.")).toBeInTheDocument();
-    expect(within(items[1]).getByText(/^Written by .+ on 16 Oct 2026$/)).toBeInTheDocument();
+    // The same stored-snapshot text as the management portal.
+    expect(within(items[1]).getByText("Written by Arif Hasan on 16 Oct 2026 · amended by the Administrator on 17 Oct 2026")).toBeInTheDocument();
     expect(within(items[1]).queryByText(/u-mgr/)).not.toBeInTheDocument();
     expect(within(items[2]).getByText("Not evaluated yet.")).toBeInTheDocument();
   });

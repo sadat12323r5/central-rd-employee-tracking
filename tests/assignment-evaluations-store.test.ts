@@ -20,7 +20,11 @@ const TRANSFERRED_CLOSED = "00000000-0000-4000-8000-0000000000c4";
 
 type Call = { table: string; method: string; args: unknown[] };
 type Failure = { table?: string; method: string; error: { code?: string; message: string } };
-type State = { assignments: AssignmentRow[]; evaluations: AssignmentEvaluationRow[]; uid: string };
+type State = {
+  assignments: AssignmentRow[]; evaluations: AssignmentEvaluationRow[]; uid: string;
+  /** The writer's snapshot the trigger records (the employees name linked to the JWT, and its role). */
+  name: string | null; role: "admin" | "manager";
+};
 
 /**
  * Minimal in-memory stand-in for the supabase-js query builder over `assignments` (read) and
@@ -56,6 +60,7 @@ function fakeDb(state: State, fail: Failure[] = []) {
             id: `e0000000-0000-4000-8000-${String(seq).padStart(12, "0")}`, client_feedback: "", ...(input as object),
             employee_id: assignment.employee_id, department_id: assignment.department_id,
             created_by: state.uid, authored_by: state.uid, created_at: at, updated_at: at,
+            created_by_name: state.name, created_by_role: state.role, authored_by_name: state.name, authored_by_role: state.role,
           } as AssignmentEvaluationRow;
           state.evaluations.push(row);
           return { data: [row], error: null };
@@ -63,7 +68,9 @@ function fakeDb(state: State, fail: Failure[] = []) {
         if (op === "update") {
           const changes = query.find(c => c.method === "update")!.args[0] as Record<string, unknown>;
           const hit = rows.filter(matches);
-          for (const row of hit) Object.assign(row, changes, { authored_by: state.uid, updated_at: "2026-10-17T00:00:00Z" });
+          for (const row of hit) Object.assign(row, changes, {
+            authored_by: state.uid, authored_by_name: state.name, authored_by_role: state.role, updated_at: "2026-10-17T00:00:00Z",
+          });
           return { data: hit.map(r => ({ ...r })), error: null };
         }
         let data = rows.filter(matches).map(r => ({ ...r }));
@@ -108,12 +115,13 @@ const assignment = (id: string, employee_id: string, extra: Partial<AssignmentRo
 });
 const evaluationRow = (id: string, assignment_id: string, employee_id: string, extra: Partial<AssignmentEvaluationRow> = {}): AssignmentEvaluationRow => ({
   id, assignment_id, employee_id, department_id: DEPT, evaluation: "Solid delivery.", client_feedback: "", created_by: "u-first",
-  created_at: "2026-09-01T00:00:00Z", authored_by: "u-first", updated_at: "2026-09-01T00:00:00Z", ...extra,
+  created_by_name: "First Writer", created_by_role: "manager", created_at: "2026-09-01T00:00:00Z", authored_by: "u-first",
+  authored_by_name: "First Writer", authored_by_role: "manager", updated_at: "2026-09-01T00:00:00Z", ...extra,
 });
 
-function world(uid = "u-writer"): State {
+function world(uid = "u-writer", name: string | null = null, role: "admin" | "manager" = "manager"): State {
   return {
-    uid,
+    uid, name, role,
     assignments: [
       assignment(CLOSED_ID, "BS-1001"),
       assignment(EVALUATED_ID, "BS-1001"),
@@ -160,7 +168,8 @@ describe("assignment-evaluations-store reads", () => {
   it("maps the row to the camel-cased AssignmentEvaluation", () => {
     expect(toAssignmentEvaluation(evaluationRow("e-1", EVALUATED_ID, "BS-1001", { client_feedback: "Good." }))).toEqual({
       id: "e-1", assignmentId: EVALUATED_ID, employeeId: "BS-1001", departmentId: DEPT, evaluation: "Solid delivery.", clientFeedback: "Good.",
-      createdBy: "u-first", createdAt: "2026-09-01T00:00:00Z", authoredBy: "u-first", updatedAt: "2026-09-01T00:00:00Z",
+      createdBy: "u-first", createdByName: "First Writer", createdByRole: "manager", createdAt: "2026-09-01T00:00:00Z",
+      authoredBy: "u-first", authoredByName: "First Writer", authoredByRole: "manager", updatedAt: "2026-09-01T00:00:00Z",
     });
   });
 
@@ -195,17 +204,20 @@ describe("assignment-evaluations-store reads", () => {
 
 describe("assignment-evaluations-store create", () => {
   it("saves the Administrator's evaluation, texts trimmed, authored by the JWT's user, with subject and department from the assignment", async () => {
-    const state = world("u-admin");
+    const state = world("u-admin", null, "admin");
     const db = fakeDb(state);
     const saved = await storeFor(db).create(admin, CLOSED_ID, input);
     expect(saved).toMatchObject({
       assignmentId: CLOSED_ID, employeeId: "BS-1001", departmentId: DEPT, evaluation: "Delivered the migration on time.",
       clientFeedback: "Client was happy with the service.", createdBy: "u-admin", authoredBy: "u-admin",
+      createdByName: null, createdByRole: "admin", authoredByName: null, authoredByRole: "admin",
     });
     expect(saved.createdAt).toBe(saved.updatedAt);
     const insert = db.writes().find(c => c.method === "insert")!.args[0] as Record<string, unknown>;
     // The author is never sent: the trigger takes it from the JWT.
     expect(insert).not.toHaveProperty("created_by");
+    expect(insert).not.toHaveProperty("created_by_name");
+    expect(insert).not.toHaveProperty("created_by_role");
     expect(insert).not.toHaveProperty("authored_by");
     expect(insert).toMatchObject({ assignment_id: CLOSED_ID, employee_id: "BS-1001", department_id: DEPT });
   });
@@ -294,10 +306,12 @@ describe("assignment-evaluations-store create", () => {
 
 describe("assignment-evaluations-store amend", () => {
   it("lets another authorized account amend: texts updated, authored_by/updated_at the amender, created_by kept", async () => {
-    const state = world("u-other-mgr");
+    const state = world("u-other-mgr", "Other Manager", "manager");
     const db = fakeDb(state);
     const saved = await storeFor(db).amend({ ...manager, userId: "u-other-mgr" }, EVALUATED_ID, { evaluation: "Revised.", clientFeedback: "" });
     expect(saved).toMatchObject({ evaluation: "Revised.", clientFeedback: "", createdBy: "u-first", authoredBy: "u-other-mgr", updatedAt: "2026-10-17T00:00:00Z" });
+    // The snapshot: the first writer's name/role kept, the amender's recorded.
+    expect(saved).toMatchObject({ createdByName: "First Writer", createdByRole: "manager", authoredByName: "Other Manager", authoredByRole: "manager" });
     expect(saved.createdAt).toBe("2026-09-01T00:00:00Z");
     // Only the texts are sent (feedback may be cleared on amend).
     expect(db.writes().map(c => [c.table, c.method, c.args[0]])).toEqual([["assignment_evaluations", "update", { evaluation: "Revised.", client_feedback: "" }]]);

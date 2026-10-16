@@ -96,17 +96,20 @@ export class EvaluationsUnavailableError extends Error {
 
 export type AssignmentEvaluationRow = {
   id: string; assignment_id: string; employee_id: string; department_id: string; evaluation: string; client_feedback: string;
-  created_by: string; created_at: string; authored_by: string; updated_at: string;
+  created_by: string; created_by_name: string | null; created_by_role: "admin" | "manager"; created_at: string;
+  authored_by: string; authored_by_name: string | null; authored_by_role: "admin" | "manager"; updated_at: string;
 };
 
 const TABLE = "assignment_evaluations";
-const COLUMNS = "id,assignment_id,employee_id,department_id,evaluation,client_feedback,created_by,created_at,authored_by,updated_at";
+const COLUMNS = "id,assignment_id,employee_id,department_id,evaluation,client_feedback,created_by,created_by_name,created_by_role,created_at,"
+  + "authored_by,authored_by_name,authored_by_role,updated_at";
 
 export function toAssignmentEvaluation(row: AssignmentEvaluationRow): AssignmentEvaluation {
   return {
     id: row.id, assignmentId: row.assignment_id, employeeId: row.employee_id, departmentId: row.department_id,
-    evaluation: row.evaluation, clientFeedback: row.client_feedback ?? "", createdBy: row.created_by, createdAt: row.created_at,
-    authoredBy: row.authored_by, updatedAt: row.updated_at,
+    evaluation: row.evaluation, clientFeedback: row.client_feedback ?? "", createdBy: row.created_by,
+    createdByName: row.created_by_name ?? null, createdByRole: row.created_by_role, createdAt: row.created_at,
+    authoredBy: row.authored_by, authoredByName: row.authored_by_name ?? null, authoredByRole: row.authored_by_role, updatedAt: row.updated_at,
   };
 }
 
@@ -263,7 +266,7 @@ export function createAssignmentEvaluationsStore({ userClient, scope = managerSc
       await authorize(session, assignment.department_id);
       if (await existing(assignmentId)) throw new EvaluationExistsError();
       // The trigger copies employee_id and department_id from the assignment (whatever is sent) and sets
-      // created_by / authored_by from the JWT: the author is never sent.
+      // the authors and their name/role snapshot from the JWT: the author is never sent.
       const row = await write<AssignmentEvaluationRow>(t => t.insert({
         assignment_id: assignmentId, employee_id: assignment.employee_id, department_id: assignment.department_id,
         evaluation: values.evaluation, client_feedback: values.clientFeedback,

@@ -39,7 +39,9 @@ describe("assignments single writer", () => {
     expect(WRITES_ASSIGNMENTS.test(`client.from("assignments")\n  .update({ status: "closed" })`)).toBe(true);
   });
 
-  it("is the only module that names the assignments table at all", () => {
+  it("binds a write helper to the assignments table only in assignments-store.ts", () => {
+    // `.from("assignments")` or `TABLE = "assignments"` (the target of a store's write helper) appears only in
+    // assignments-store.ts; the evaluations store reads assignments through its read() helper (checked below).
     expect(sources.filter(s => /from\(\s*["'`]assignments["'`]|TABLE\s*=\s*["'`]assignments["'`]/.test(s.text)).map(s => s.file)).toEqual([STORE]);
   });
 

@@ -13,6 +13,14 @@
 -- * Authorship: created_by is the first writer and never changes; authored_by and updated_at are the latest
 --   writer (an amendment by another manager is recorded without a history table). Both come from the
 --   signed-in user's JWT (auth.uid()); only a service-role write (no JWT) keeps what it sent.
+-- * Authorship snapshot: each write also records the writer's display name (the employees row linked to
+--   auth.uid(), null when none) and role ('admin' from the JWT's app_metadata, else 'manager'), so the
+--   label shown never depends on the viewer or on later manager changes. created_by_name/_role are locked
+--   on update like created_by. A service-role write keeps what it sent (role defaults to 'admin').
+-- * Transfer read path: a new select policy on assignments (assignments_select_department_managed,
+--   manages_department(department_id)) lets the assignment's own department manager read it after the
+--   employee moved (4.8), so the store can still find the assignment to evaluate. Additive: no existing
+--   policy is changed.
 -- * Why a trigger and not column grants: it follows the assignments_guard precedent; it is purely additive;
 --   it binds the service role too; and it can copy values from the assignment row.
 -- * The guard raises check_violation (23514) for any refused change. A BEFORE DELETE trigger always raises
@@ -31,8 +39,12 @@ create table public.assignment_evaluations (
   evaluation      text not null check (evaluation = btrim(evaluation) and char_length(evaluation) between 1 and 4000),
   client_feedback text not null default '' check (char_length(client_feedback) <= 2000),
   created_by      uuid not null,
+  created_by_name text null,
+  created_by_role text not null check (created_by_role in ('admin', 'manager')),
   created_at      timestamptz not null default now(),
   authored_by     uuid not null,
+  authored_by_name text null,
+  authored_by_role text not null check (authored_by_role in ('admin', 'manager')),
   updated_at      timestamptz not null default now()
 );
 
@@ -40,6 +52,8 @@ create table public.assignment_evaluations (
 create unique index assignment_evaluations_one_per_assignment on public.assignment_evaluations (assignment_id);
 -- Profiles read evaluations per employee.
 create index assignment_evaluations_employee_id_idx on public.assignment_evaluations (employee_id);
+-- Manager reads and the write policies filter by the assignment's department.
+create index assignment_evaluations_department_id_idx on public.assignment_evaluations (department_id);
 
 create or replace function public.assignment_evaluations_guard()
 returns trigger
@@ -51,7 +65,15 @@ declare
   v_employee   text;
   v_department uuid;
   v_status     text;
+  v_uid        uuid := auth.uid();
+  v_name       text;
+  v_role       text;
 begin
+  if v_uid is not null then
+    select e.name into v_name from public.employees e where e.auth_user_id = v_uid;
+    v_role := case when (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' then 'admin' else 'manager' end;
+  end if;
+
   if tg_op = 'INSERT' then
     select a.employee_id, a.department_id, a.status into v_employee, v_department, v_status
       from public.assignments a where a.id = new.assignment_id;
@@ -61,8 +83,16 @@ begin
     -- The assignment's subject and department, whatever the caller sent.
     new.employee_id := v_employee;
     new.department_id := v_department;
-    new.created_by := coalesce(auth.uid(), new.created_by);
+    new.created_by := coalesce(v_uid, new.created_by);
+    if v_uid is not null then
+      new.created_by_name := v_name;
+      new.created_by_role := v_role;
+    else
+      new.created_by_role := coalesce(new.created_by_role, 'admin');
+    end if;
     new.authored_by := new.created_by;
+    new.authored_by_name := new.created_by_name;
+    new.authored_by_role := new.created_by_role;
     new.created_at := now();
     new.updated_at := new.created_at;
     return new;
@@ -74,10 +104,16 @@ begin
      or new.employee_id is distinct from old.employee_id
      or new.department_id is distinct from old.department_id
      or new.created_by is distinct from old.created_by
+     or new.created_by_name is distinct from old.created_by_name
+     or new.created_by_role is distinct from old.created_by_role
      or new.created_at is distinct from old.created_at then
     raise exception 'the identifying fields of an evaluation cannot be changed' using errcode = '23514';
   end if;
-  new.authored_by := coalesce(auth.uid(), new.authored_by);
+  new.authored_by := coalesce(v_uid, new.authored_by);
+  if v_uid is not null then
+    new.authored_by_name := v_name;
+    new.authored_by_role := v_role;
+  end if;
   new.updated_at := now();
   return new;
 end;
@@ -133,3 +169,9 @@ create policy "assignment_evaluations_update_authorized" on public.assignment_ev
   with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' or public.manages_department(department_id));
 
 -- No delete policy.
+
+-- Transfer read path: the assignment's own department manager (and ancestors) reads it even after the
+-- employee moved to another department, so its evaluation can still be written and amended.
+create policy "assignments_select_department_managed" on public.assignments
+  for select to authenticated
+  using (public.manages_department(department_id));
