@@ -62,7 +62,7 @@ development_status:
   4-2-administrator-assigns-a-department-manager: review
   4-3-managers-see-only-their-own-department: review
   4-4-interview-privacy-holds-for-managers: backlog
-  4-5-managers-create-and-close-assignments: in-progress
+  4-5-managers-create-and-close-assignments: review
   4-6-manager-evaluates-a-closed-assignment-employee-sees-it: backlog
   4-7-staff-backfills-a-past-project: backlog
   4-8-higher-manager-transfers-an-employee-between-departments: backlog

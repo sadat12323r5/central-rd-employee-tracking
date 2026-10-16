@@ -34,12 +34,20 @@ async function submitCreate(previous: CreateState, form: FormData): Promise<Crea
   return { ...result, at: stamp(), values, attempt: previous.attempt + 1 };
 }
 
-async function submitNote(previous: Stamped, form: FormData): Promise<Stamped> {
-  return { ...(await updateAssignmentNoteAction(previous, form)), at: stamp() };
+/** The note and close forms keep their refused value too, so a refusal never throws away what was typed. */
+type KeptState = Stamped & { kept?: string; attempt: number };
+const keptInitial: KeptState = { ...initial, attempt: 0 };
+
+async function submitNote(previous: KeptState, form: FormData): Promise<KeptState> {
+  const result = await updateAssignmentNoteAction(previous, form);
+  const value = form.get("note");
+  return { ...result, at: stamp(), kept: result.error && typeof value === "string" ? value : undefined, attempt: previous.attempt + 1 };
 }
 
-async function submitClose(previous: Stamped, form: FormData): Promise<Stamped> {
-  return { ...(await closeAssignmentAction(previous, form)), at: stamp() };
+async function submitClose(previous: KeptState, form: FormData): Promise<KeptState> {
+  const result = await closeAssignmentAction(previous, form);
+  const value = form.get("completionDate");
+  return { ...result, at: stamp(), kept: result.error && typeof value === "string" ? value : undefined, attempt: previous.attempt + 1 };
 }
 
 function StatusLabel({ status }: { status: Assignment["status"] }) {
@@ -60,8 +68,8 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
   departmentName: (id: string) => string;
 }) {
   const [created, create, creating] = useActionState(submitCreate, createInitial);
-  const [noted, note, noting] = useActionState(submitNote, initial);
-  const [closed, close, closing] = useActionState(submitClose, initial);
+  const [noted, note, noting] = useActionState(submitNote, keptInitial);
+  const [closed, close, closing] = useActionState(submitClose, keptInitial);
   const open = assignments.find(a => a.status === "open");
   const history = assignments.filter(a => a.status === "closed");
   const latest = [created, noted, closed].reduce((a, b) => (b.at > a.at ? b : a));
@@ -82,19 +90,19 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
           <div><dt>Latest update</dt><dd>{open.latestUpdate || "No update yet."}</dd></div>
         </dl>
         <div className="assignment-forms">
-        <form key={`note-${open.id}-${open.latestUpdate}`} action={note} className="staff-log" aria-label="Edit the latest update">
+        <form key={`note-${open.id}-${open.latestUpdate}-${noted.attempt}`} action={note} className="staff-log" aria-label="Edit the latest update">
           <input type="hidden" name="id" value={open.id} />
           <div className="staff-field">
             <label htmlFor={ids("note")}>Latest update</label>
-            <textarea id={ids("note")} name="note" maxLength={2000} rows={3} defaultValue={open.latestUpdate} />
+            <textarea id={ids("note")} name="note" maxLength={2000} rows={3} defaultValue={noted.kept ?? open.latestUpdate} />
           </div>
           <div className="staff-actions"><button className="primary" disabled={noting}>{noting ? "Saving…" : "Save update"}</button></div>
         </form>
-        <form key={`close-${open.id}`} action={close} className="staff-log" aria-label="Close the assignment">
+        <form key={`close-${open.id}-${closed.attempt}`} action={close} className="staff-log" aria-label="Close the assignment">
           <input type="hidden" name="id" value={open.id} />
           <div className="staff-field">
             <label htmlFor={ids("completion")}>Completion date</label>
-            <input id={ids("completion")} name="completionDate" type="date" min={open.startDate} required />
+            <input id={ids("completion")} name="completionDate" type="date" min={open.startDate} required defaultValue={closed.kept} />
           </div>
           <div className="staff-actions"><button className="secondary" disabled={closing}>{closing ? "Closing…" : "Close assignment"}</button></div>
         </form>

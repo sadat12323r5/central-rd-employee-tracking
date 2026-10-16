@@ -801,6 +801,24 @@ describe("Portal Current work tab (Story 4.5)", () => {
     expect(within(panel).getByLabelText("Client")).toHaveValue("Northwind (fictional)");
   });
 
+  it("keeps a refused latest update and completion date in their fields", async () => {
+    vi.mocked(updateAssignmentNoteAction).mockResolvedValueOnce({ error: "This assignment is closed and can't be changed.", message: "" });
+    vi.mocked(closeAssignmentAction).mockResolvedValueOnce({ error: "The completion date can't be before the start date.", message: "" });
+    const { user } = await openWork([assignment()]);
+    const panel = screen.getByRole("tabpanel");
+    const note = within(panel).getByLabelText("Latest update");
+    await user.clear(note);
+    await user.type(note, "Unsaved words.");
+    await user.click(within(panel).getByRole("button", { name: "Save update" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("This assignment is closed and can't be changed.");
+    expect(within(panel).getByLabelText("Latest update")).toHaveValue("Unsaved words.");
+
+    await user.type(within(panel).getByLabelText("Completion date"), "2026-10-10");
+    await user.click(within(panel).getByRole("button", { name: "Close assignment" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("The completion date can't be before the start date.");
+    expect(within(panel).getByLabelText("Completion date")).toHaveValue("2026-10-10");
+  });
+
   it("saves the latest update and closes the assignment by its id only", async () => {
     const { user } = await openWork([assignment()]);
     const panel = screen.getByRole("tabpanel");

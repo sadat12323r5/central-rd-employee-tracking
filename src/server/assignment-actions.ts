@@ -41,7 +41,7 @@ const newAssignment = z.object({
 });
 const noteChange = z.object({
   id: assignmentId,
-  note: z.string().default("").transform(value => value.trim())
+  note: z.string({ error: "Enter the latest update." }).transform(value => value.trim())
     .pipe(z.string().max(ASSIGNMENT_NOTE_MAX, `Keep the latest update to ${ASSIGNMENT_NOTE_MAX} characters or fewer.`)),
 });
 const closing = z.object({ id: assignmentId, completionDate: calendarDate("completion date") });

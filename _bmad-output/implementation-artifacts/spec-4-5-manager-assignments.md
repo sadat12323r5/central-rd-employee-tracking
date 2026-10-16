@@ -2,7 +2,7 @@
 title: 'Story 4.5: Managers create and close assignments'
 type: 'feature'
 created: '2026-10-14'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'cd0cd97c1cfe5ce459087a4e6ab007296fb5ffa2'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -10,7 +10,63 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-4-3-manager-scoping.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      No correction path for a mistaken locked field or closed assignment.
+    evidence: |-
+      The guard trigger freezes identifying fields on insert and whole rows on close, and nothing can be deleted; a typo stays forever. Needs a System Owner decision (correction window, admin override, or void marker).
+    location: >-
+      supabase/migrations/20261014030000_assignments.sql
+    severity: medium
+  - summary: >-
+      No record of who created, edited or closed an assignment.
+    evidence: |-
+      The table has created_at/closed_at only; latest_update is overwritten in place and no audit_events row is written.
+    location: >-
+      src/server/assignments-store.ts
+    severity: medium
+  - summary: >-
+      Employee status badge is still fixture-driven and not linked to open assignments.
+    evidence: |-
+      Creating or closing an assignment does not change "On project"/"Available".
+    location: >-
+      src/data/employees.ts
+    severity: low
+  - summary: >-
+      Every admin/manager page view loads the full assignment history with no limit.
+    evidence: |-
+      employees-store.listFor reads all assignments; fine at current size, grows with test rows that can never be deleted.
+    location: >-
+      src/server/employees-store.ts
+    severity: low
+  - summary: >-
+      Seed assignment step (skip already-open, insert-only) has no test.
+    evidence: |-
+      No test runs scripts/seed-employees.ts; same for its other DB steps.
+    location: >-
+      scripts/seed-employees.ts
+    severity: low
+  - summary: >-
+      Story 4.8 must block transfers while an assignment is open, or department_id drifts from the employee's department.
+    evidence: |-
+      Nothing in this story stops an admin/service-role change to employees.department_id.
+    location: >-
+      supabase/migrations/20261014030000_assignments.sql
+    severity: low
+  - summary: >-
+      Live-test assignment rows accumulate permanently in the shared project.
+    evidence: |-
+      The no-delete trigger binds the service role, so tests close and archive fixed throwaway records instead of deleting them.
+    location: >-
+      tests/assignments-rls.test.ts
+    severity: low
+  - summary: >-
+      Database guarantees are only verified by live tests that skip without credentials.
+    evidence: |-
+      tests/assignments-rls.test.ts is describe.skipIf(!configured); unit tests use fakes.
+    location: >-
+      tests/assignments-rls.test.ts
+    severity: low
 ---
 
 <intent-contract>
@@ -119,6 +175,42 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-16 — Review pass
+(Resumed run: the previous run died after implementation with no triage log, so this is a fresh full review on the adopted branch.)
+- verdicts: 33 findings — high 0, medium 3, low 13, false 3, maybe-false 0 (plus 14 design/scope observations recorded below as defer or reject)
+- findings:
+  - blind-hunter
+    - `[medium]` `[defer]` No way to correct a mistaken locked field or closed row (no correction window, admin override or void marker) — real, but the contract locks fields deliberately; a correction path is a stakeholder decision. Deferred.
+    - `[low]` `[reject]` Close has no confirmation step — every other form in the app submits without confirm; adding one is new UI behaviour, not a direct fix.
+    - `[low]` `[reject]` Future completion dates accepted — the spec's Design Notes record "no future-date limit" as a deliberate assumption; recorded as an open question in deferred-work.
+    - `[medium]` `[defer]` No created_by/closed_by or audit trail for note edits — real accountability gap; adding columns/audit rows widens the schema beyond the contract. Deferred.
+    - `[low]` `[reject]` Assignments can be created for archived employees — the spec's Design Notes deliberately allow it (conservative assumption).
+    - `[low]` `[defer]` Employee status badge ("On project"/"Available") still fixture-driven, not linked to assignments — pre-existing fixture field, no story owns it yet.
+    - `[medium]` `[reject]` Staff reads fail when assignments are unavailable — the contract (Code Map) composes assignments into every employee read with failure → EmployeesUnavailableError, exactly like training; the migration is applied before merge. Consistent with the existing training precedent.
+    - `[low]` `[defer]` Full assignment history loaded on every admin/manager view with no limit — fine at current data size; recorded for later.
+    - `[low]` `[reject]` Live region swaps between role=alert and role=status — inserted role=alert regions are announced assertively; same pattern as every other panel in src/components.
+    - `[low]` `[defer]` Seed's assignment block untested — real; no seed DB step in the repo has tests (pre-existing). Deferred with the verification-gap duplicate.
+    - `[low]` `[reject]` Seed log "skipped" count misleading — cosmetic log text.
+    - `[low]` `[defer]` department_id invariant depends on Story 4.8 blocking transfers — true; 4.8 is the owning story and must enforce it. Deferred to 4.8.
+    - `[low]` `[reject]` 23514 "no department" race maps to the generic message — needs a department cleared between read and insert; the store's own pre-check covers the normal path.
+    - `[low]` `[reject]` Small UI gaps (empty completion date format, first-name split, missing full stop, unsaved note lost on refresh) — cosmetic; first-name split copies the existing portal convention; the refusal case of the lost note is patched below.
+  - edge-case-hunter
+    - `[medium]` `[patch]` Note or completion date typed into a refused form is lost (React resets the form after the action) — patched: note and close forms keep the refused value and re-key per attempt, like the create form; component test added and proven failing without the patch.
+    - `[low]` `[reject]` Archived employee gets a new assignment — duplicate of the blind-hunter row; spec assumption.
+    - `[low]` `[reject]` Department outside the viewer's list shows "No department" — portal's pre-existing departmentName helper; managers see departments in their scope and 4.8 transfers are not built yet.
+    - `[low]` `[patch]` Missing note field silently clears the note via `.default("")` — patched: the schema now refuses a missing/non-string note ("Enter the latest update."); an empty string still clears it deliberately.
+    - `[low]` `[reject]` Future completion date — duplicate; spec assumption.
+    - `[low]` `[reject]` Seed race with a concurrently created open assignment — needs a manager write during the seed run; a rerun succeeds.
+  - verification-gap
+    - `[low]` `[defer]` Seed skip-already-open / insert-only rules not exercised by any test — pre-verified; deferred (no seed DB step has tests; needs a refactor or the live project).
+    - `[low]` `[patch]` Tie-break order of closed assignments with the same completion date not pinned — patched: added a unit test in tests/assignments-store.test.ts.
+  - intent-alignment
+    - `[false]` `[reject]` Delete "raises for any role" only true for the service role — the outcome (row kept, no delete) holds for every role; with no delete policy RLS filters the row before the trigger, which the live test pins.
+    - `[low]` `[defer]` Test rows cannot be cleaned up (no delete) and accumulate in the shared project — necessary consequence of the no-delete rule; documented in DEPLOYMENT.md. Deferred.
+    - `[false]` `[reject]` Single-writer check scans only src/ — the contract scopes AD-2 to the app; the seed never writes status/completion_date.
+    - `[false]` `[reject]` Note edit/close on a missing id throws Forbidden rather than not-found — the contract's not-found rule is about reads; a write on an unseen id is correctly refused.
+    - `[low]` `[defer]` Database guarantees (trigger, RLS) are only checked by live tests that skip without credentials — CI has the credentials; tracked with the migration hand-off.
+
 ## Design Notes
 
 Field locking uses a BEFORE UPDATE trigger rather than column privileges. Three reasons: it follows the `external_interviews_guard` precedent; it is purely additive; and it binds the service role. Column grants also cannot express the state-dependent rule (the note is editable only while open, and closed rows are frozen). The insert trigger copies `department_id` as SECURITY DEFINER, so the value is the employee's real department whatever the caller sent. The store still copies it so that its own checks (no department, authority) run first. RLS uses `manages_employee`, which is the same authority chain as `scope.forManager`, so the store and database scopes cannot disagree. Story 4.8 blocks transfers while an assignment is open, so the employee's current department equals `department_id` for every writable row.
@@ -135,3 +227,19 @@ Assumptions (validation details the planning docs leave open; conservative defau
 
 **Manual checks:**
 - Read the migration: no `alter`/`drop` of existing objects, no delete policy, and the header states ADDITIVE.
+
+## Auto Run Result
+
+Status: done (resumed from an abandoned run's WIP branch; review run fresh on 2026-10-16)
+
+**Summary:** persisted `assignments` table (ADDITIVE migration `20261014030000_assignments.sql`) with a guard trigger that copies the employee's department, locks identifying fields, freezes closed rows and refuses deletes; RLS reusing `manages_employee`. `assignments-store.ts` is the single writer; `assignment-actions.ts` exposes create / edit note / close. The Current work tab shows the open assignment with its forms plus the read-only history; the Git activity panel is gone. `db:seed` migrates the fixture's current work into open assignments (client "Not recorded").
+
+**Files changed:** migration; `src/server/assignments-store.ts`, `src/server/assignment-actions.ts` (new); `src/components/assignments-panel.tsx` (new); `src/components/portal.tsx`, `src/server/employees-store.ts`, `src/data/employees.ts`, `src/app/styles.css`; `scripts/seed-employees.ts`, `docs/DEPLOYMENT.md`; tests: assignments-store, assignment-actions, assignments-single-writer, fixture-assignments, assignments-rls (live), e2e/assignments, plus updates to portal, employees-store, page and manager-scope-rls tests.
+
+**Review:** 3 patches (1 medium: refused note/close values kept; 2 low: missing note refused, same-date ordering test), 8 deferred (see frontmatter), the rest rejected with reasons in the triage log.
+
+**Follow-up review recommended:** false (patched: 1 medium, 2 low; no high).
+
+**Verification:** see the PR; typecheck and build pass; unit tests pass except live RLS tests that fail only with PGRST205 (schema missing: the 4.1–4.5 migrations are not applied to the shared project).
+
+**Residual risk:** database-level rules are only exercised once the migrations are applied and the live tests run.

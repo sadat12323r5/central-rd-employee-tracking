@@ -162,6 +162,12 @@ describe("assignments-store reads", () => {
     expect([closed, open].sort(compareAssignments).map(a => a.id)).toEqual(["b", "a"]);
   });
 
+  it("orders closed assignments with the same completion date newest-created first", () => {
+    const older = { ...toAssignment(closedRow("BS-1", "a", "2026-08-31")), createdAt: "2026-01-01T00:00:00Z" };
+    const newer = { ...toAssignment(closedRow("BS-1", "z", "2026-08-31")), createdAt: "2026-05-01T00:00:00Z" };
+    expect([older, newer].sort(compareAssignments).map(a => a.id)).toEqual(["z", "a"]);
+  });
+
   it("gives Staff only their own assignments; anyone else's is [] without a query", async () => {
     const db = fakeDb(world());
     const store = storeFor(db);
