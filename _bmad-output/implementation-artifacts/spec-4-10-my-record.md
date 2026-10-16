@@ -2,8 +2,8 @@
 title: 'Story 4.10: Managers use "My record" for their own self-service'
 type: 'feature'
 created: '2026-10-16'
-status: 'ready-for-dev'
-baseline_revision: ''
+status: 'in-progress'
+baseline_revision: 'cab115b16487e881b5ae413f341ff344a35188b2'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
