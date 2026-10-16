@@ -144,7 +144,8 @@ describe("Home routing by role", () => {
     expect(currentFor).toHaveBeenCalledWith(manager, scoped.map(e => e.id));
     const props = portalProps.mock.calls.at(-1)?.[0] as { role: string; employees: unknown[]; departments?: unknown };
     expect(props.role).toBe("manager");
-    expect(props.employees).toEqual(scoped);
+    // Story 4.4: interviews are stripped server-side before a manager portal ever sees them.
+    expect(props.employees).toEqual(scoped.map(e => ({ ...e, interviews: [] })));
     expect(props.departments).toEqual(departments);
   });
 
