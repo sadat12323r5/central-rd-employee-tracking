@@ -72,3 +72,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-4-interview-privacy.md`
   summary: Once Story 4.3 lands, add a page-level or live test that a manager's in-scope employee arrives with training, attendance and work intact and interviews empty (AC3 data path).
   evidence: Story 4.4 was built on the 4.3 claim branch before 4.3's scoping existed, so AC3 is proven only at the Portal component level.
+
+## Blocked: Story 8.4 (recorded 2026-10-16 by the unattended story loop)
+
+Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the activity export and depends on Epic 5 Stories 5.2–5.3 (epics.md). Those need Story 5.1's holiday calendar, which is blocked on the System Owner-approved calendar (sprint-status action item). Building only the assignment and evaluation rows would leave AC3 unbuildable and would split the story without a stakeholder decision. 8.4 stays `backlog` with a `# blocked` note until 5.1–5.3 are unblocked. Spec: `spec-8-4-exports-assignments-evaluations-leave.md`.
