@@ -1110,3 +1110,109 @@ describe("Portal mixed work history (Story 4.7)", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 });
+
+describe("Interview privacy for managers (Story 4.4)", () => {
+  const nadia = employees.find(e => e.id === "BS-1001")!;
+  const meera = employees.find(e => e.id !== "BS-1001" && e.interviews.length > 0);
+  if (!meera) throw new Error("Fixture changed: no second employee with interviews for the Story 4.4 tests.");
+  // Distinctive markers, so any leak of interview text into the rendered page or the CSV is caught.
+  const SECRET = ["Privateco Interviews Ltd", "PRIVATE-ROLE-4-4", "PRIVATE-STAGE-4-4", "PRIVATE-FEEDBACK-4-4", "Withdrawnco Ltd", "PRIVATE-WITHDRAWN-4-4"];
+  const leaky = { ...nadia, interviews: [
+    { id: "5eed0000-0000-4000-8000-0000ffff4401", company: SECRET[0], role: SECRET[1], date: "2026-09-30", stage: SECRET[2], outcome: "Scheduled", feedback: SECRET[3], withdrawn: false },
+    { id: "5eed0000-0000-4000-8000-0000ffff4402", company: SECRET[4], role: "Engineer", date: "2026-09-01", stage: "Screening", outcome: "", feedback: SECRET[5], withdrawn: true },
+    ...nadia.interviews,
+  ] };
+  const team = [leaky, meera];
+  const interviewText = [...SECRET, ...nadia.interviews.map(i => i.company), ...meera.interviews.map(i => i.company)];
+  const expectNoInterviewText = () => {
+    const text = document.body.textContent ?? "";
+    for (const secret of interviewText) expect(text).not.toContain(secret);
+    expect(text).not.toMatch(/External job interviews|Upcoming interviews|Withdrawn \(history\)|External opportunities/);
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (URL as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  it("shows no interview text in any section a manager can reach, even when given employees that carry interviews", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={team} current={none()} />);
+    expectNoInterviewText();
+    const nav = within(screen.getByRole("navigation"));
+    for (const name of ["Employees", "Learning & development", "Attendance & leave", "Overview"]) {
+      await user.click(nav.getByRole("button", { name: new RegExp(name) }));
+      expectNoInterviewText();
+    }
+  });
+
+  it("keeps interviews out of a manager's CSV export", async () => {
+    let csvText: string | undefined;
+    class InspectableBlob extends Blob {
+      constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+        super(parts, options);
+        csvText = parts.join("");
+      }
+    }
+    vi.stubGlobal("Blob", InspectableBlob);
+    URL.createObjectURL = vi.fn(() => "blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={team} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /export directory/i }));
+    expect(csvText).toContain(leaky.name);
+    expect(csvText).toContain(meera.name);
+    for (const secret of interviewText) expect(csvText).not.toContain(secret);
+    expect(csvText).not.toMatch(/interview/i);
+  });
+
+  it("renders every other profile tab with its normal content; only interviews are excluded", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={team} current={none()} />);
+    await user.click(screen.getByRole("button", { name: `View ${leaky.name}'s profile` }));
+    const tabs = within(screen.getByRole("tablist", { name: "Employee details" }));
+    expect(tabs.getAllByRole("tab").map(t => t.textContent)).toEqual(["Overview", "Employment", "Training", "Skills & evaluation", "Current work", "Attendance"]);
+    const panel = () => within(screen.getByRole("tabpanel"));
+
+    expect(panel().getByText(leaky.summary)).toBeInTheDocument();
+    expect(panel().getByText(leaky.email)).toBeInTheDocument();
+    expectNoInterviewText();
+
+    await user.click(tabs.getByRole("tab", { name: "Employment" }));
+    expect(panel().getByRole("heading", { name: "Employment history" })).toBeInTheDocument();
+    expect(panel().getAllByText(leaky.history[0].company).length).toBeGreaterThan(0);
+    expectNoInterviewText();
+
+    await user.click(tabs.getByRole("tab", { name: "Training" }));
+    expect(panel().getByRole("heading", { name: "Training & development" })).toBeInTheDocument();
+    expect(panel().getAllByText(leaky.training[0].name).length).toBeGreaterThan(0);
+    expectNoInterviewText();
+
+    await user.click(tabs.getByRole("tab", { name: "Skills & evaluation" }));
+    expect(panel().getByText(leaky.skills[0].name)).toBeInTheDocument();
+    expect(panel().getByText(leaky.review.strengths)).toBeInTheDocument();
+    expectNoInterviewText();
+
+    await user.click(tabs.getByRole("tab", { name: "Current work" }));
+    // Story 4.5 replaced the fixture work sample with assignments; this employee has none open.
+    expect(panel().getByText("No open assignment")).toBeInTheDocument();
+    expectNoInterviewText();
+
+    await user.click(tabs.getByRole("tab", { name: "Attendance" }));
+    expect(panel().getByText("Scheduled days")).toBeInTheDocument();
+    expect(panel().getAllByRole("row")).toHaveLength(leaky.attendance.records.length + 1);
+    expectNoInterviewText();
+  });
+
+  it("still shows the same employee's interviews to the Administrator (control)", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={team} current={none()} />);
+    await user.click(screen.getByRole("button", { name: `View ${leaky.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Interviews" }));
+    expect(within(screen.getByRole("tabpanel")).getByText(SECRET[0])).toBeInTheDocument();
+    expect(within(screen.getByRole("tabpanel")).getByText(SECRET[4])).toBeInTheDocument();
+  });
+});

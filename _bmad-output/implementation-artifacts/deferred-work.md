@@ -69,3 +69,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-2-admin-bulk-exports-activity.md`
   summary: Store paging (src/server/paging.ts) is offset-based without a snapshot, so a row written or deleted between page requests can be duplicated or skipped in an export larger than 1000 rows per source.
   evidence: Separate .range() requests; attendance orders by work_date desc, so a clock-in during a multi-page read shifts later pages. Keyset paging on the total order (or a snapshot RPC) would remove it.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-4-interview-privacy.md`
+  summary: Once Story 4.3 lands, add a page-level or live test that a manager's in-scope employee arrives with training, attendance and work intact and interviews empty (AC3 data path).
+  evidence: Story 4.4 was built on the 4.3 claim branch before 4.3's scoping existed, so AC3 is proven only at the Portal component level.

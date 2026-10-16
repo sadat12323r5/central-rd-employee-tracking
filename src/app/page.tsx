@@ -29,7 +29,10 @@ export default async function Home() {
     if (session.role === "manager") {
       // Story 4.2: the management portal without Departments, interviews or account controls.
       // Story 4.3: everything is scoped to the manager's department subtree, worked out fresh by the stores.
-      const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
+      // Story 4.4: interviews are stripped here, server-side, so a manager's client payload can never carry
+      // them whatever the store returns (FR-3); hiding the views in the portal is not the guarantee.
+      const [scoped, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
+      const employees = withoutInterviews(scoped);
       return <Portal role="manager" employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
     }
     // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
@@ -51,6 +54,11 @@ export default async function Home() {
     }
     throw error;
   }
+}
+
+/** Every employee with `interviews: []`: what a manager session may receive (Story 4.4). Pure. */
+function withoutInterviews<T extends { interviews: unknown[] }>(employees: readonly T[]): T[] {
+  return employees.map(e => ({ ...e, interviews: [] }));
 }
 
 /**
