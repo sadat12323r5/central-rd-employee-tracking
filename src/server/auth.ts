@@ -3,8 +3,9 @@
 import { isAuthApiError, type SupabaseClient, type User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { departmentsStore } from "./departments-store";
 import { employeesStore, EmployeesUnavailableError } from "./employees-store";
-import { sessionHours, type SessionIdentity } from "./session";
+import { sessionHours, type SessionIdentity, type StaffIdentity } from "./session";
 import { getUserClient } from "./supabase";
 
 // Administrators and Staff sign in with named Supabase Auth accounts (email + password). The session
@@ -17,8 +18,11 @@ const EMPLOYEE_ID = /^BS-\d{4}$/;
 const INCORRECT = "The email or password is incorrect. Please try again.";
 const UNAVAILABLE = "Sign-in is temporarily unavailable. Please try again shortly.";
 
-/** The identity a Supabase user's `app_metadata` grants, or null for any other role or a malformed claim. */
-function identityFor(user: User | null | undefined): SessionIdentity | null {
+/**
+ * The identity a Supabase user's `app_metadata` grants, or null for any other role or a malformed claim.
+ * Never `manager`: that is derived per request from the departments the account manages (Story 4.2).
+ */
+function identityFor(user: User | null | undefined): { role: "admin" } | StaffIdentity | null {
   const metadata = user?.app_metadata ?? {};
   if (metadata.role === "admin") return { role: "admin" };
   if (metadata.role === "staff" && typeof metadata.employee_id === "string" && EMPLOYEE_ID.test(metadata.employee_id)) {
@@ -88,7 +92,18 @@ async function supabaseSession(): Promise<Actor | null> {
         await signOutSupabase(client);
         return null;
       }
+      // Story 4.2: a Staff account that manages at least one department is a `manager` for this request.
+      // Derived fresh every time (never stored or cached). A failed read is never proof of managing:
+      // the session stays the less-privileged plain Staff identity.
+      let manages = false;
+      try {
+        manages = await departmentsStore.managesAny(data.user.id);
+      } catch (error) {
+        console.error("Manager check failed: departments unavailable; continuing as Staff.", error instanceof Error ? error.name : "unknown error");
+      }
+      if (manages) return { identity: { role: "manager", employeeId: identity.employeeId, userId: data.user.id }, userId: data.user.id };
     }
+    // An Administrator account stays `admin` even when it manages a department.
     return { identity, userId: data.user.id };
   } catch (error) {
     console.error("Session check failed.", error instanceof Error ? error.name : "unknown error");

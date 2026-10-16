@@ -3,6 +3,8 @@ import Portal from "@/components/portal";
 import StaffAttendance from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
 import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
+import { backfilledProjectStore, type DepartmentOption } from "@/server/backfilled-project-store";
+import { departmentsStore, DepartmentsUnavailableError } from "@/server/departments-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
 import type { SessionIdentity } from "@/server/session";
 import { trainingStore, type CurrentTraining } from "@/server/training-store";
@@ -19,16 +21,32 @@ export default async function Home() {
       if (!employee) return login;
       // Started before the attendance read and never awaited here: the page streams it (Story 3.2).
       const current = currentTraining(session, [employee.id]);
-      const entries = await attendanceStore.listForEmployee(employee.id);
-      return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current} />;
+      // Story 4.7: the departments to pick from when backfilling; unavailable is a value (the form says so).
+      const [entries, departmentOptions] = await Promise.all([attendanceStore.listFor(session, employee.id), departmentOptionsFor()]);
+      return <StaffAttendance employee={employee} entries={entries} serverNow={new Date().toISOString()} current={current}
+        departmentOptions={departmentOptions} />;
     }
-    const employees = await employeesStore.listFor(session);
-    return <Portal employees={employees} current={currentTraining(session, employees.map(e => e.id))} />;
+    if (session.role === "manager") {
+      // Story 4.2: the management portal without Departments, interviews or account controls.
+      // Story 4.3: everything is scoped to the manager's department subtree, worked out fresh by the stores.
+      // Story 4.4: interviews are stripped here, server-side, so a manager's client payload can never carry
+      // them whatever the store returns (FR-3); hiding the views in the portal is not the guarantee.
+      const [scoped, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
+      const employees = withoutInterviews(scoped);
+      return <Portal role="manager" employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
+    }
+    // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
+    const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
+    return <Portal employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
   } catch (error) {
     // Never fall back to an empty or partial list: say plainly that records could not be loaded.
     if (error instanceof EmployeesUnavailableError) {
       console.error("Employee records unavailable.", error, { cause: error.cause });
       return <EmployeesUnavailable />;
+    }
+    if (error instanceof DepartmentsUnavailableError) {
+      console.error("Departments unavailable.", error, { cause: error.cause });
+      return <DepartmentsUnavailable />;
     }
     if (error instanceof AttendanceUnavailableError) {
       console.error("Attendance unavailable.", error, { cause: error.cause });
@@ -36,6 +54,11 @@ export default async function Home() {
     }
     throw error;
   }
+}
+
+/** Every employee with `interviews: []`: what a manager session may receive (Story 4.4). Pure. */
+function withoutInterviews<T extends { interviews: unknown[] }>(employees: readonly T[]): T[] {
+  return employees.map(e => ({ ...e, interviews: [] }));
 }
 
 /**
@@ -51,12 +74,36 @@ function currentTraining(session: SessionIdentity, employeeIds: string[]): Promi
     });
 }
 
+/**
+ * Story 4.7: the department list (id and name only) for the backfill form, read through the store. Any
+ * error becomes `null` (logged): the form then says the list is unavailable rather than offering an empty select.
+ */
+async function departmentOptionsFor(): Promise<DepartmentOption[] | null> {
+  try {
+    return await backfilledProjectStore.departmentOptions();
+  } catch (error) {
+    console.error("Department options unavailable.", error);
+    return null;
+  }
+}
+
 function EmployeesUnavailable() {
   return (
     <main className="content">
       <div className="panel empty" role="alert">
         <h1>Employee records are unavailable</h1>
         <p>The employee database could not be reached, so no records are shown. Please refresh the page in a moment.</p>
+      </div>
+    </main>
+  );
+}
+
+function DepartmentsUnavailable() {
+  return (
+    <main className="content">
+      <div className="panel empty" role="alert">
+        <h1>Departments are unavailable</h1>
+        <p>The department list could not be reached, so no records are shown. Please refresh the page in a moment.</p>
       </div>
     </main>
   );

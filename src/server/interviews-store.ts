@@ -29,7 +29,7 @@ const EDITABLE: readonly string[] = ["stage", "outcome", "feedback"] satisfies (
 export interface InterviewsStore {
   /**
    * Interviews the session may see, newest first: every interview for an Administrator, only the
-   * session's own for staff. `employeeId` narrows the list to one employee (staff: only their own).
+   * session's own for staff, none for a manager session (Story 4.2). `employeeId` narrows the list to one employee (staff: only their own).
    */
   listFor(session: SessionIdentity, employeeId?: string): Promise<ExternalInterview[]>;
   /** Adds an interview for the session's own employee. Only a staff session can add. */
@@ -145,6 +145,9 @@ export function createInterviewsStore({ userClient }: InterviewsStoreClients): I
 
   return {
     async listFor(session, employeeId) {
+      // Story 4.2: a manager session never reads interviews through the management portal (not even its
+      // own): nothing, without a query. Managers use the Staff own-record paths for their own (Story 4.10).
+      if (session.role === "manager") return [];
       // Staff only ever see their own interviews; asking for anyone else's returns nothing, without a query.
       const scope = session.role === "admin" ? employeeId : session.employeeId;
       if (session.role !== "admin" && employeeId !== undefined && employeeId !== session.employeeId) return [];

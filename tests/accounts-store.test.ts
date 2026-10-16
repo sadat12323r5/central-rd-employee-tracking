@@ -2,9 +2,11 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { AuthApiError, createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveSelfError, createAccountsStore,
-  seedFirstAdministrator,
+  AccountExistsError, AccountStateError, AccountsUnavailableError, AccountValidationError, ArchiveNotAuthorizedError, ArchiveRankError,
+  ArchiveSelfError, createAccountsStore, createManagerAccessStore, seedFirstAdministrator,
 } from "@/server/accounts-store";
+import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
+import type { ManagerIdentity } from "@/server/session";
 
 type CreateArgs = { email: string; password: string; email_confirm: boolean; app_metadata: Record<string, unknown> };
 type Mode = "ok" | "error" | "throw";
@@ -399,6 +401,117 @@ describe("accounts-store.archive and restore", () => {
     const store = createAccountsStore(() => { throw new Error("Supabase is not configured"); });
     await expect(store.archive({ employeeId: "BS-1003", actorId })).rejects.toBeInstanceOf(AccountsUnavailableError);
     await expect(store.restore({ employeeId: "BS-1003", actorId })).rejects.toBeInstanceOf(AccountsUnavailableError);
+  });
+});
+
+/**
+ * Stand-in for the manager's JWT client calling `rpc("manager_set_employee_archived")`. `reply` decides
+ * the database's answer (an error message, or the name); every call is recorded.
+ */
+function managerClient(reply: { data?: unknown; error?: { message: string; details?: string | null } } | "throw" = { data: "Meera Das" }) {
+  const calls: { fn: string; args: Record<string, unknown> }[] = [];
+  async function rpc(fn: string, args: Record<string, unknown>) {
+    calls.push({ fn, args });
+    if (reply === "throw") throw new TypeError("fetch failed");
+    return { data: reply.data ?? null, error: reply.error ? { code: "P0001", hint: null, details: null, ...reply.error } : null };
+  }
+  return { userClient: async () => ({ rpc }) as unknown as SupabaseClient, calls };
+}
+
+const manager: ManagerIdentity = { role: "manager", employeeId: "BS-2001", userId: "8b3f4e5a-0000-4000-8000-000000000003" };
+const scopeOf = (...employeeIds: string[]): ManagerScope & { calls: number } => {
+  const scope = {
+    calls: 0,
+    async forManager() {
+      scope.calls++;
+      return { departmentIds: new Set(["dept-1"]), employeeIds: new Set(employeeIds) };
+    },
+  };
+  return scope;
+};
+
+describe("createManagerAccessStore (Story 4.9)", () => {
+  it("archives an in-scope employee through one manager_set_employee_archived call on the user client", async () => {
+    const fake = managerClient();
+    const scope = scopeOf("BS-1003", "BS-2001");
+    const result = await createManagerAccessStore({ userClient: fake.userClient, scope }).archive(manager, " BS-1003 ");
+    expect(result).toEqual({ employeeId: "BS-1003", name: "Meera Das", archived: true });
+    expect(fake.calls).toEqual([{ fn: "manager_set_employee_archived", args: { p_employee_id: "BS-1003", p_archived: true } }]);
+    expect(scope.calls).toBe(1);
+  });
+
+  it("restores an in-scope employee, sending no actor (the database takes it from auth.uid())", async () => {
+    const fake = managerClient();
+    const result = await createManagerAccessStore({ userClient: fake.userClient, scope: scopeOf("BS-1003") }).restore(manager, "BS-1003");
+    expect(result).toEqual({ employeeId: "BS-1003", name: "Meera Das", archived: false });
+    expect(fake.calls).toEqual([{ fn: "manager_set_employee_archived", args: { p_employee_id: "BS-1003", p_archived: false } }]);
+  });
+
+  it.each(["archive", "restore"] as const)("%s rejects an out-of-scope employee with ArchiveNotAuthorizedError and no rpc", async method => {
+    const fake = managerClient();
+    const store = createManagerAccessStore({ userClient: fake.userClient, scope: scopeOf("BS-2001") });
+    await expect(store[method](manager, "BS-1003")).rejects.toBeInstanceOf(ArchiveNotAuthorizedError);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("rejects archiving the manager's own record with ArchiveSelfError before reading scope or calling rpc", async () => {
+    const fake = managerClient();
+    const scope = scopeOf("BS-2001");
+    await expect(createManagerAccessStore({ userClient: fake.userClient, scope }).archive(manager, "BS-2001")).rejects.toBeInstanceOf(ArchiveSelfError);
+    expect(fake.calls).toEqual([]);
+    expect(scope.calls).toBe(0);
+  });
+
+  it.each([{ employeeId: "BS-12" }, { employeeId: "../admin" }, { employeeId: "" }])("validates %j before any scope read or rpc", async ({ employeeId }) => {
+    const fake = managerClient();
+    const scope = scopeOf("BS-1003");
+    const store = createManagerAccessStore({ userClient: fake.userClient, scope });
+    for (const call of [() => store.archive(manager, employeeId), () => store.restore(manager, employeeId)]) {
+      const error = await call().catch(e => e);
+      expect(error).toBeInstanceOf(AccountValidationError);
+      expect(error.fields).toEqual(["employeeId"]);
+    }
+    expect(fake.calls).toEqual([]);
+    expect(scope.calls).toBe(0);
+  });
+
+  it.each([
+    ["employee_not_found", null, AccountValidationError],
+    ["not_authorized", null, ArchiveNotAuthorizedError],
+    ["insufficient_authority", null, ArchiveRankError],
+    ["cannot_archive_self", null, ArchiveSelfError],
+    ["already_archived", "Meera Das", AccountStateError],
+    ["not_archived", "Meera Das", AccountStateError],
+    ["something_else", null, AccountsUnavailableError],
+  ] as const)("maps the database error %s", async (message, details, type) => {
+    const fake = managerClient({ error: { message, details } });
+    const error = await createManagerAccessStore({ userClient: fake.userClient, scope: scopeOf("BS-1003") }).archive(manager, "BS-1003").catch(e => e);
+    expect(error).toBeInstanceOf(type);
+    if (message === "employee_not_found") expect(error.fields).toEqual(["employeeId"]);
+    if (message === "already_archived") expect(error).toMatchObject({ state: "archived", employeeName: "Meera Das" });
+    if (message === "not_archived") expect(error).toMatchObject({ state: "active", employeeName: "Meera Das" });
+  });
+
+  it.each([
+    ["the rpc throws", managerClient("throw")],
+    ["no name is returned", managerClient({ data: null })],
+  ])("reports AccountsUnavailableError when %s", async (_label, fake) => {
+    const store = createManagerAccessStore({ userClient: fake.userClient, scope: scopeOf("BS-1003") });
+    await expect(store.archive(manager, "BS-1003")).rejects.toBeInstanceOf(AccountsUnavailableError);
+  });
+
+  it("reports AccountsUnavailableError when the user client cannot be created", async () => {
+    const store = createManagerAccessStore({ userClient: async () => { throw new Error("Supabase is not configured"); }, scope: scopeOf("BS-1003") });
+    await expect(store.restore(manager, "BS-1003")).rejects.toBeInstanceOf(AccountsUnavailableError);
+  });
+
+  it("maps ManagerScopeUnavailableError to AccountsUnavailableError without calling rpc", async () => {
+    const fake = managerClient();
+    const scope: ManagerScope = { forManager: async () => { throw new ManagerScopeUnavailableError(); } };
+    const store = createManagerAccessStore({ userClient: fake.userClient, scope });
+    await expect(store.archive(manager, "BS-1003")).rejects.toBeInstanceOf(AccountsUnavailableError);
+    await expect(store.restore(manager, "BS-1003")).rejects.toBeInstanceOf(AccountsUnavailableError);
+    expect(fake.calls).toEqual([]);
   });
 });
 

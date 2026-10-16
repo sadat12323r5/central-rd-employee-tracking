@@ -168,4 +168,36 @@ describe("ActivityExportPanel bulk mode (Story 8.2)", () => {
     const { container } = render(<ActivityExportPanel />);
     expect(await axe(container)).toHaveNoViolations();
   });
+  describe("for a department manager (Story 8.3)", () => {
+    it("titles the bulk panel for the manager's departments and notes that interviews are left out", async () => {
+      exportAllMock.mockResolvedValue({ error: "", message: "", csv: CSV, filename: "activity-all-employees-2026-10-05_to_2026-10-11.csv" });
+      const user = userEvent.setup();
+      render(<ActivityExportPanel manager />);
+      expect(screen.getByRole("heading", { name: "Download activity (your departments)" })).toBeInTheDocument();
+      expect(screen.getByText("Interviews are not included in a department manager's export.")).toBeInTheDocument();
+      expect(screen.queryByText(/interviews, training/)).not.toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText("Period"), "last-week");
+      await user.click(screen.getByRole("checkbox", { name: "Include archived" }));
+      await user.click(screen.getByRole("button", { name: "Download activity (your departments)" }));
+      expect(await screen.findByRole("status")).toHaveTextContent("Downloaded activity-all-employees-2026-10-05_to_2026-10-11.csv.");
+      expect(Object.fromEntries(exportAllMock.mock.calls[0][1] as FormData)).toEqual({ period: "last-week", includeArchived: "on" });
+      expect(exportMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps the single panel's heading and notes that interviews are left out", async () => {
+      exportMock.mockResolvedValue({ error: "You can only export employees in your own department or its sub-departments.", message: "" });
+      const user = userEvent.setup();
+      render(<ActivityExportPanel employeeId="BS-1001" manager />);
+      expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
+      expect(screen.getByText("Interviews are not included in a department manager's export.")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Download activity" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("You can only export employees in your own department or its sub-departments.");
+      expect(saved.filename).toBeUndefined();
+    });
+
+    it("has no accessibility violations", async () => {
+      const { container } = render(<ActivityExportPanel manager />);
+      expect(await axe(container)).toHaveNoViolations();
+    });
+  });
 });

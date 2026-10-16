@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDisplayDate, formatDisplayDateTime, isCalendarDate } from "@/domain/dates";
+import { formatDisplayDate, formatDisplayDateTime, formatDisplayDay, isCalendarDate, todayInDhaka } from "@/domain/dates";
 
 describe("isCalendarDate", () => {
   it.each(["2026-09-23", "2028-02-29", "2026-12-31", "0024-02-29"])("accepts %s", value => {
@@ -35,5 +35,28 @@ describe("formatDisplayDateTime", () => {
   it("says Not recorded for anything that is not a timestamp", () => {
     expect(formatDisplayDateTime("")).toBe("Not recorded");
     expect(formatDisplayDateTime("yesterday")).toBe("Not recorded");
+  });
+});
+
+describe("formatDisplayDay (Story 4.6)", () => {
+  it("shows an instant's Asia/Dhaka calendar day as D MMM YYYY", () => {
+    expect(formatDisplayDay("2026-10-16T04:00:00Z")).toBe("16 Oct 2026");
+    expect(formatDisplayDay("2026-10-15T20:00:00Z")).toBe("16 Oct 2026");
+    expect(formatDisplayDay("2026-10-15T17:59:59Z")).toBe("15 Oct 2026");
+    expect(formatDisplayDay("not a time")).toBe("Not recorded");
+  });
+});
+
+describe("todayInDhaka (Story 4.7)", () => {
+  it("is the Asia/Dhaka calendar date of an instant, as YYYY-MM-DD", () => {
+    expect(todayInDhaka(new Date("2026-10-16T05:00:00Z"))).toBe("2026-10-16");
+    // 18:00 UTC is midnight in Dhaka (UTC+6): already the next day there.
+    expect(todayInDhaka(new Date("2026-10-15T17:59:59Z"))).toBe("2026-10-15");
+    expect(todayInDhaka(new Date("2026-10-15T18:00:00Z"))).toBe("2026-10-16");
+    expect(todayInDhaka(new Date("2026-12-31T20:00:00Z"))).toBe("2027-01-01");
+  });
+
+  it("defaults to the current clock", () => {
+    expect(isCalendarDate(todayInDhaka())).toBe(true);
   });
 });

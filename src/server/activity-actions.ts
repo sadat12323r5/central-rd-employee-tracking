@@ -1,7 +1,7 @@
 "use server";
 
 import {
-  activityErrorMessage, exportActivity, exportAllActivity, NOT_ADMIN, type ActivityExportInput, type BulkActivityExportInput,
+  activityErrorMessage, exportActivity, exportAllActivity, mayExport, NOT_ALLOWED, type ActivityExportInput, type BulkActivityExportInput,
 } from "./activity-export";
 import { attendanceStore } from "./attendance-store";
 import type { ActionState } from "./attendance-actions";
@@ -9,14 +9,17 @@ import { createAuditStore } from "./audit-store";
 import { getActor } from "./auth";
 import { employeesStore } from "./employees-store";
 import { interviewsStore } from "./interviews-store";
+import { managerScope } from "./manager-scope";
 import { getServiceClient } from "./supabase";
 import { trainingStore } from "./training-store";
 
-// Administrator-only activity export (Story 8.1). The admin session is checked here, at the server,
+// Activity export (Story 8.1, Administrator only until Story 8.3). The session is checked here, at the server,
 // before anything else: a Staff session or no session reads nothing and gets no CSV. The audit actor is
 // the validated Supabase user from the session, never anything in the form. The CSV text is returned to
 // the profile panel, which saves it, so validation and "unavailable" messages render inline.
 // Story 8.2 adds the bulk export of every employee (exportAllActivityAction), with the same checks.
+// Story 8.3 opens both to department managers: the role is checked here, and the subtree scope (and the
+// absence of interviews) is enforced in activity-export.ts through the session-aware stores.
 
 export type ActivityExportState = ActionState & { csv?: string; filename?: string };
 
@@ -24,7 +27,7 @@ const FIELDS = ["employeeId", "period", "month", "year", "from", "to"] as const;
 
 export async function exportActivityAction(_previous: ActivityExportState, form: FormData): Promise<ActivityExportState> {
   const actor = await getActor();
-  if (actor?.identity.role !== "admin") return { error: NOT_ADMIN, message: "" };
+  if (!actor || !mayExport(actor.identity)) return { error: NOT_ALLOWED, message: "" };
 
   const input: ActivityExportInput = Object.fromEntries(FIELDS.map(name => [name, form.get(name) ?? undefined]));
   try {
@@ -54,12 +57,15 @@ const BULK_FIELDS = ["period", "month", "year", "from", "to", "includeArchived"]
 
 export async function exportAllActivityAction(_previous: ActivityExportState, form: FormData): Promise<ActivityExportState> {
   const actor = await getActor();
-  if (actor?.identity.role !== "admin") return { error: NOT_ADMIN, message: "" };
+  if (!actor || !mayExport(actor.identity)) return { error: NOT_ALLOWED, message: "" };
 
   const input: BulkActivityExportInput = Object.fromEntries(BULK_FIELDS.map(name => [name, form.get(name) ?? undefined]));
   try {
     const result = await exportAllActivity(
-      { employees: employeesStore, attendance: attendanceStore, training: trainingStore, audit: createAuditStore(getServiceClient) },
+      {
+        employees: employeesStore, attendance: attendanceStore, training: trainingStore, audit: createAuditStore(getServiceClient),
+        scope: managerScope,
+      },
       actor.identity, actor.userId, input, new Date(),
     );
     return { error: "", message: `Exported ${result.filename}.`, csv: result.csv, filename: result.filename };

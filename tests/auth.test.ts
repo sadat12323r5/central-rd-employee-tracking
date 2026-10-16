@@ -14,8 +14,17 @@ vi.mock("../src/server/employees-store", async importOriginal => ({
   employeesStore: { listFor: vi.fn(), getFor: vi.fn(), isActive },
 }));
 
+// Story 4.2: the per-request manager check (departments the auth user manages); `managers` holds the
+// auth user ids that manage at least one department.
+const { managesAny, managers } = vi.hoisted(() => ({ managesAny: vi.fn(), managers: new Set<string>() }));
+vi.mock("../src/server/departments-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("../src/server/departments-store")>()),
+  departmentsStore: { list: vi.fn(), create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny },
+}));
+
 const { isSignedIn, signIn, signOut, getSession, getActor } = await import("../src/server/auth");
 const { EmployeesUnavailableError } = await import("../src/server/employees-store");
+const { DepartmentsUnavailableError } = await import("../src/server/departments-store");
 
 const INCORRECT = "The email or password is incorrect. Please try again.";
 const UNAVAILABLE = "Sign-in is temporarily unavailable. Please try again shortly.";
@@ -24,6 +33,9 @@ function reset() {
   archived.clear();
   isActive.mockReset();
   isActive.mockImplementation(async (session: { employeeId: string }) => session.employeeId === STAFF.employeeId && !archived.has(session.employeeId));
+  managers.clear();
+  managesAny.mockReset();
+  managesAny.mockImplementation(async (userId: string) => managers.has(userId));
 }
 
 describe("Administrator sign-in with a Supabase account", () => {
@@ -287,5 +299,80 @@ describe("archived Staff accounts (Story 1.4)", () => {
     expect(await getActor()).toEqual({ identity: { role: "staff", employeeId: STAFF.employeeId }, userId: "staff-1" });
     archived.add(STAFF.employeeId);
     expect(await getActor()).toBeNull();
+  });
+});
+
+describe("department managers (Story 4.2)", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    reset();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("derives `manager` (carrying the validated user id, Story 4.3) for a staff account that manages a department, checked with that user id", async () => {
+    managers.add("staff-1");
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
+    expect(await getActor()).toEqual({ identity: { role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" }, userId: "staff-1" });
+    expect(managesAny).toHaveBeenCalledWith("staff-1");
+    expect(await isSignedIn()).toBe(false);
+  });
+
+  it("re-derives the role on every request: removing the manager makes the next request `staff`", async () => {
+    managers.add("staff-1");
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
+    managers.delete("staff-1");
+    expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
+    managers.add("staff-1");
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
+    expect(supabase.signOuts).toBe(0);
+  });
+
+  it("keeps an Administrator `admin` even when it manages a department, without a manager check", async () => {
+    managers.add("admin-1");
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    expect(await getSession()).toEqual({ role: "admin" });
+    expect(managesAny).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain `staff` and logs when the manager check cannot read departments", async () => {
+    managers.add("staff-1");
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    managesAny.mockRejectedValue(new DepartmentsUnavailableError());
+    expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
+    expect(errorSpy).toHaveBeenCalled();
+    expect(supabase.signOuts).toBe(0);
+  });
+
+  it("checks archiving first: an archived manager has no session at all", async () => {
+    managers.add("staff-1");
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    archived.add(STAFF.employeeId);
+    expect(await getSession()).toBeNull();
+    expect(managesAny).not.toHaveBeenCalled();
+  });
+
+  it("never checks a role-less or malformed account", async () => {
+    supabase.users.set("bad.staff@example.test", { id: "bad-1", password: "a-long-other-passphrase", app_metadata: { role: "staff", employee_id: "1003" } });
+    managers.add("bad-1");
+    await signIn({ error: "" }, formData({ email: "bad.staff@example.test", password: "a-long-other-passphrase" }));
+    expect(await getSession()).toBeNull();
+    expect(managesAny).not.toHaveBeenCalled();
+  });
+
+  it("gives a manager session the 12-hour Staff length", async () => {
+    managers.add("staff-1");
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    vi.setSystemTime(start + 11 * 60 * 60 * 1000);
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
+    vi.setSystemTime(start + 12 * 60 * 60 * 1000 + 60 * 1000);
+    expect(await getSession()).toBeNull();
   });
 });

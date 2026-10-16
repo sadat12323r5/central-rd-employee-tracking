@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { lmsClient, LmsUnavailableError, type Enrolment, type LmsClient } from "./lms-client";
-import type { SessionIdentity } from "./session";
+import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
+import type { ManagerIdentity, SessionIdentity } from "./session";
 import { readAllPages } from "./paging";
 import { getUserClient } from "./supabase";
 
@@ -22,6 +23,10 @@ import { getUserClient } from "./supabase";
 // enforced. The scoping here is the store-level layer: staff reads are limited to the session's own
 // employee. There is no write path (creating or editing training outside the LMS is deferred). This
 // module never uses the service role.
+//
+// Story 4.3: a department manager also sees the training of the employees in their department subtree
+// (manager-scope, computed fresh on each call; RLS: training_history_select_managed and
+// lms_stub_enrolments_select_managed). Anything outside the subtree is `[]` or dropped, without a query.
 
 /** One training entry as views show it: `date` is the completion date, or the target date while in progress. */
 export type TrainingEntry = {
@@ -44,13 +49,15 @@ export type CurrentTraining =
 export interface TrainingStore {
   /**
    * Completed training the session may see, newest completion first: every employee's for an
-   * Administrator, only the session's own for staff. `employeeId` narrows the list to one employee
-   * (staff: only their own; anyone else's is `[]`).
+   * Administrator, the department subtree's for a manager, only the session's own for staff.
+   * `employeeId` narrows the list to one employee (staff: only their own; manager: only in-scope ids;
+   * anyone else's is `[]`).
    */
   listFor(session: SessionIdentity, employeeId?: string): Promise<TrainingEntry[]>;
   /**
-   * LMS enrolments of the given employees: every id for an Administrator; for staff only their own id
-   * (any other id is dropped without an LMS call). One LMS call per employee, in parallel.
+   * LMS enrolments of the given employees: every id for an Administrator; for a manager only ids in
+   * their department subtree; for staff only their own id (any other id is dropped without an LMS call).
+   * One LMS call per employee, in parallel.
    */
   currentFor(session: SessionIdentity, employeeIds: string[]): Promise<CurrentTraining>;
 }
@@ -148,9 +155,11 @@ export type TrainingStoreClients = {
   lms: Pick<LmsClient, "listCurrentEnrolments">;
   /** The current time, used as `asOf` when no employee is read (injectable for tests). */
   now?: () => Date;
+  /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
+  scope?: ManagerScope;
 };
 
-export function createTrainingStore({ userClient, lms, now = () => new Date() }: TrainingStoreClients): TrainingStore {
+export function createTrainingStore({ userClient, lms, now = () => new Date(), scope = managerScope }: TrainingStoreClients): TrainingStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T> {
     let result: Result<T>;
     try {
@@ -163,8 +172,38 @@ export function createTrainingStore({ userClient, lms, now = () => new Date() }:
     return result.data;
   }
 
+  /** The employee ids in a manager's subtree; a scope that cannot be read is TrainingUnavailableError, never a partial list. */
+  async function managedEmployeeIds(session: ManagerIdentity): Promise<Set<string>> {
+    try {
+      return (await scope.forManager(session)).employeeIds;
+    } catch (cause) {
+      if (cause instanceof ManagerScopeUnavailableError) throw new TrainingUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
+  async function listForManager(session: ManagerIdentity, employeeId: string | undefined): Promise<TrainingEntry[]> {
+    const ids = await managedEmployeeIds(session);
+    // Out of scope (or nothing in scope): nothing, without a training query.
+    if (employeeId !== undefined && !ids.has(employeeId)) return [];
+    if (ids.size === 0) return [];
+    // Paged (Story 8.2) like the Administrator and Staff list; the order is total (id last).
+    const rows = await readAllPages((from, to) => run<TrainingRow[]>(t => {
+      const query = t.select(COLUMNS);
+      return (employeeId === undefined ? query.in("employee_id", [...ids]) : query.eq("employee_id", employeeId))
+        .order("completed_on", { ascending: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, to)
+        .returns<TrainingRow[]>();
+    }));
+    // Defence in depth: only rows of in-scope employees (and of the one asked for).
+    return rows.filter(r => ids.has(r.employee_id) && (employeeId === undefined || r.employee_id === employeeId)).map(toTraining);
+  }
+
   return {
     async listFor(session, employeeId) {
+      if (session.role === "manager") return listForManager(session, employeeId);
       // Staff only ever see their own training; asking for anyone else's returns nothing, without a query.
       if (session.role !== "admin" && employeeId !== undefined && employeeId !== session.employeeId) return [];
       const scope = session.role === "admin" ? employeeId : session.employeeId;
@@ -184,7 +223,20 @@ export function createTrainingStore({ userClient, lms, now = () => new Date() }:
 
     async currentFor(session, employeeIds) {
       // Staff: only their own id, whatever was asked (other ids are dropped without an LMS call).
-      const ids = [...new Set(employeeIds)].filter(id => session.role === "admin" || id === session.employeeId);
+      // Manager (Story 4.3): only ids in their department subtree; a scope that cannot be read is unavailable.
+      let allowed: (id: string) => boolean;
+      if (session.role === "admin") allowed = () => true;
+      else if (session.role === "manager") {
+        let inScope: Set<string>;
+        try {
+          inScope = await managedEmployeeIds(session);
+        } catch (error) {
+          if (error instanceof TrainingUnavailableError) return { status: "unavailable" };
+          throw error;
+        }
+        allowed = id => inScope.has(id);
+      } else allowed = id => id === session.employeeId;
+      const ids = [...new Set(employeeIds)].filter(allowed);
       if (ids.length === 0) return { status: "ok", asOf: now().toISOString(), stale: false, inProgress: [], lmsCompleted: [], freshness: {} };
 
       let results: Awaited<ReturnType<LmsClient["listCurrentEnrolments"]>>[];

@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import { TimesheetValidationError, type TimesheetEntry } from "@/domain/timesheet";
 import { AttendanceUnavailableError, createAttendanceStore, toEntry, toRow, type AttendanceRow } from "@/server/attendance-store";
+import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { many, pagedClient } from "./support/paged-client";
 
 type Mode = "ok" | "error" | "throw" | "duplicate";
@@ -145,6 +146,63 @@ describe("attendance-store unavailability", () => {
   it("treats a list with no data as unavailable, never as empty", async () => {
     const empty = { from: () => { const b = { select: () => b, eq: () => b, order: () => b, range: () => b, returns: async () => ({ data: null, error: null }) }; return b; } };
     await expect(storeFor(empty as unknown as SupabaseClient).listAll()).rejects.toBeInstanceOf(AttendanceUnavailableError);
+  });
+});
+
+describe("attendance-store listFor (Story 4.3: session-aware reads)", () => {
+  const other: AttendanceRow = { ...row, id: "0d9c7a52-6f43-4a39-9a1e-3c6f1c5b2a02", employee_id: "BS-1002" };
+  const admin = { role: "admin" } as const;
+  const staff = { role: "staff", employeeId: "BS-1001" } as const;
+  const manager = { role: "manager", employeeId: "BS-1099", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+
+  function fakeScope(employeeIds: string[], fail?: Error) {
+    const calls: unknown[] = [];
+    const scope: ManagerScope = {
+      async forManager(session) {
+        calls.push(session);
+        if (fail) throw fail;
+        return { departmentIds: new Set(["d"]), employeeIds: new Set(employeeIds) };
+      },
+    };
+    return { scope, calls };
+  }
+  const storeWith = (client: SupabaseClient, scope: ManagerScope) => createAttendanceStore({ userClient: async () => client, scope });
+
+  it("lets an Administrator read any employee, without a scope read", async () => {
+    const { client } = fakeClient([row, other]);
+    const scope = fakeScope([]);
+    expect((await storeWith(client, scope.scope).listFor(admin, "BS-1002")).map(e => e.employeeId)).toEqual(["BS-1002"]);
+    expect(scope.calls).toEqual([]);
+  });
+
+  it("lets Staff read only their own entries; anyone else's is [] without a query", async () => {
+    const { client, calls } = fakeClient([row, other]);
+    const store = storeWith(client, fakeScope([]).scope);
+    expect(await store.listFor(staff, "BS-1001")).toEqual([entry]);
+    calls.length = 0;
+    expect(await store.listFor(staff, "BS-1002")).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("lets a manager read an in-scope employee; an out-of-scope id is [] without a query", async () => {
+    const { client, calls } = fakeClient([row, other]);
+    const scope = fakeScope(["BS-1001"]);
+    const store = storeWith(client, scope.scope);
+    expect(await store.listFor(manager, "BS-1001")).toEqual([entry]);
+    expect(calls[0].find(c => c.method === "eq")?.args).toEqual(["employee_id", "BS-1001"]);
+    calls.length = 0;
+    expect(await store.listFor(manager, "BS-1002")).toEqual([]);
+    // The manager's own id is not special: "My record" is Story 4.10.
+    expect(await store.listFor(manager, "BS-1099")).toEqual([]);
+    expect(calls).toHaveLength(0);
+    expect(scope.calls).toEqual([manager, manager, manager]);
+  });
+
+  it("reports attendance unavailable when the manager's scope cannot be read", async () => {
+    const { client, calls } = fakeClient([row]);
+    const store = storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope);
+    await expect(store.listFor(manager, "BS-1001")).rejects.toBeInstanceOf(AttendanceUnavailableError);
+    expect(calls).toHaveLength(0);
   });
 });
 

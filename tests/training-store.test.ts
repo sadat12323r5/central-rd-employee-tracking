@@ -5,6 +5,7 @@ import {
   courseKey, createTrainingStore, dedupeLmsCompleted, enrolmentToTraining, toTraining, TrainingUnavailableError,
   type TrainingEntry, type TrainingRow,
 } from "@/server/training-store";
+import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { many, pagedClient } from "./support/paged-client";
 
 type Mode = "ok" | "error" | "throw" | "null";
@@ -348,6 +349,98 @@ describe("training-store dedupe helper", () => {
   });
 });
 
+describe("training-store and manager sessions (Story 4.3: scoped to the department subtree)", () => {
+  const manager = { role: "manager", employeeId: "BS-1099", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const scoped = [...rows, row("BS-1003", "d", "2026-07-01")];
+
+  function fakeScope(employeeIds: string[], fail?: Error) {
+    const calls: unknown[] = [];
+    const scope: ManagerScope = {
+      async forManager(session) {
+        calls.push(session);
+        if (fail) throw fail;
+        return { departmentIds: new Set(["d"]), employeeIds: new Set(employeeIds) };
+      },
+    };
+    return { scope, calls };
+  }
+  const storeWith = (client: SupabaseClient, scope: ManagerScope, lms = fakeLms().lms) =>
+    createTrainingStore({ userClient: async () => client, lms, now: () => NOW, scope });
+
+  it("lists only in-scope employees' training, filtering in the query", async () => {
+    const { client, calls } = fakeClient(scoped);
+    const list = await storeWith(client, fakeScope(["BS-1001", "BS-1003"]).scope).listFor(manager);
+    expect(list.map(t => t.id)).toEqual(["a", "c", "d"]);
+    expect(calls[0]).toContainEqual({ table: "training_history", method: "in", args: ["employee_id", ["BS-1001", "BS-1003"]] });
+  });
+
+  it("narrows to one in-scope employee, and returns [] without a query for an out-of-scope id", async () => {
+    const { client, calls } = fakeClient(scoped);
+    const store = storeWith(client, fakeScope(["BS-1001"]).scope);
+    expect((await store.listFor(manager, "BS-1001")).map(t => t.id)).toEqual(["a", "c"]);
+    expect(calls[0]).toContainEqual({ table: "training_history", method: "eq", args: ["employee_id", "BS-1001"] });
+    calls.length = 0;
+    expect(await store.listFor(manager, "BS-1002")).toEqual([]);
+    expect(await store.listFor(manager, "BS-1099")).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns [] without a query when nothing is in scope", async () => {
+    const { client, calls } = fakeClient(scoped);
+    expect(await storeWith(client, fakeScope([]).scope).listFor(manager)).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("never hands a manager an out-of-scope row, even if the database returned one", async () => {
+    const { client } = fakeClient(scoped);
+    const leaky = { from: () => { const b = (client.from("training_history") as unknown as Record<string, unknown>); b.in = () => b; return b; } } as unknown as SupabaseClient;
+    expect((await storeWith(leaky, fakeScope(["BS-1002"]).scope).listFor(manager)).map(t => t.employeeId)).toEqual(["BS-1002"]);
+  });
+
+  it("throws TrainingUnavailableError when the scope cannot be read", async () => {
+    const { client, calls } = fakeClient(scoped);
+    const store = storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope);
+    await expect(store.listFor(manager)).rejects.toBeInstanceOf(TrainingUnavailableError);
+    await expect(store.listFor(manager, "BS-1001")).rejects.toBeInstanceOf(TrainingUnavailableError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("drops out-of-scope ids before calling the LMS", async () => {
+    const { client } = fakeClient([]);
+    const lms = fakeLms({ "BS-1001": answer([enrolment("BS-1001", "e-1", "in_progress")]) });
+    const current = await storeWith(client, fakeScope(["BS-1001"]).scope, lms.lms).currentFor(manager, ["BS-1001", "BS-1002", "BS-1003"]);
+    expect(lms.calls).toEqual(["BS-1001"]);
+    expect(current.status === "ok" && current.inProgress.map(t => t.id)).toEqual(["e-1"]);
+  });
+
+  it("makes no LMS call when nothing asked for is in scope", async () => {
+    const { client } = fakeClient([]);
+    const lms = fakeLms();
+    const current = await storeWith(client, fakeScope([]).scope, lms.lms).currentFor(manager, ["BS-1001"]);
+    expect(lms.calls).toEqual([]);
+    expect(current).toMatchObject({ status: "ok", inProgress: [], lmsCompleted: [] });
+  });
+
+  it("resolves unavailable (no LMS call) when the scope cannot be read", async () => {
+    const { client } = fakeClient([]);
+    const lms = fakeLms();
+    const current = await storeWith(client, fakeScope([], new ManagerScopeUnavailableError()).scope, lms.lms).currentFor(manager, ["BS-1001"]);
+    expect(current).toEqual({ status: "unavailable" });
+    expect(lms.calls).toEqual([]);
+  });
+
+  it("never asks the scope for Administrator or Staff reads", async () => {
+    const { client } = fakeClient(rows);
+    const scope = fakeScope(["BS-1001"]);
+    const store = storeWith(client, scope.scope);
+    await store.listFor(admin);
+    await store.listFor(staff);
+    await store.currentFor(admin, ["BS-1001"]);
+    await store.currentFor(staff, ["BS-1001"]);
+    expect(scope.calls).toEqual([]);
+  });
+});
+
 describe("training-store paging (Story 8.2)", () => {
   const rowAt = (i: number) => row("BS-1001", `row-${i}`);
 
@@ -409,5 +502,26 @@ describe("training-store currentFor at bulk scale (Story 8.2)", () => {
     const ids = Array.from({ length: 12 }, (_, i) => `BS-${String(3000 + i)}`);
     const fake = fakeLms({ "BS-3005": new LmsUnavailableError() });
     expect(await storeFor(fakeClient([]).client, fake.lms).currentFor(admin, ids)).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("training-store manager paging (Story 4.3 with Story 8.2)", () => {
+  const manager = { role: "manager", employeeId: "BS-1099", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const rowAt = (i: number) => row("BS-1001", `row-${i}`);
+  const scope: ManagerScope = { forManager: async () => ({ departmentIds: new Set(["d"]), employeeIds: new Set(["BS-1001"]) }) };
+  const storeWith = (client: SupabaseClient) => createTrainingStore({ userClient: async () => client, lms: fakeLms().lms, now: () => NOW, scope });
+
+  it("pages a manager's subtree training past 1000 rows, for the list and for one employee", async () => {
+    const list = pagedClient([many(1000, rowAt), many(3, rowAt, 1000)]);
+    expect(await storeWith(list.client).listFor(manager)).toHaveLength(1003);
+    expect(list.ranges).toEqual([[0, 999], [1000, 1999]]);
+    const one = pagedClient([many(1000, rowAt), []]);
+    expect(await storeWith(one.client).listFor(manager, "BS-1001")).toHaveLength(1000);
+    expect(one.ranges).toEqual([[0, 999], [1000, 1999]]);
+  });
+
+  it("throws TrainingUnavailableError when a later manager page fails", async () => {
+    const { client } = pagedClient([many(1000, rowAt), "error"]);
+    await expect(storeWith(client).listFor(manager)).rejects.toBeInstanceOf(TrainingUnavailableError);
   });
 });

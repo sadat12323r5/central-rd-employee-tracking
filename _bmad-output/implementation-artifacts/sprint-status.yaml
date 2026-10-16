@@ -57,16 +57,16 @@ development_status:
   8-1-administrator-downloads-one-employee-s-activity-timeline: done
   8-2-administrator-bulk-exports-every-employee-s-activity: done
 
-  epic-4: backlog
-  4-1-administrator-manages-the-department-list: backlog
-  4-2-administrator-assigns-a-department-manager: backlog
-  4-3-managers-see-only-their-own-department: backlog
-  4-4-interview-privacy-holds-for-managers: backlog
-  4-5-managers-create-and-close-assignments: backlog
-  4-6-manager-evaluates-a-closed-assignment-employee-sees-it: backlog
-  4-7-staff-backfills-a-past-project: backlog
+  epic-4: in-progress
+  4-1-administrator-manages-the-department-list: review
+  4-2-administrator-assigns-a-department-manager: review
+  4-3-managers-see-only-their-own-department: review
+  4-4-interview-privacy-holds-for-managers: review
+  4-5-managers-create-and-close-assignments: review
+  4-6-manager-evaluates-a-closed-assignment-employee-sees-it: review
+  4-7-staff-backfills-a-past-project: review
   4-8-higher-manager-transfers-an-employee-between-departments: backlog
-  4-9-managers-archive-and-restore-accounts-in-their-own-departmen: backlog
+  4-9-managers-archive-and-restore-accounts-in-their-own-departmen: review
   4-10-managers-use-my-record-for-their-own-self-service: backlog
   epic-4-retrospective: optional
 
@@ -91,7 +91,7 @@ development_status:
   epic-7-retrospective: optional
 
   epic-8: in-progress
-  8-3-department-managers-export-within-their-department: backlog
+  8-3-department-managers-export-within-their-department: review
   8-4-exports-include-assignments-evaluations-and-leave: backlog
   epic-8-retrospective: optional
 

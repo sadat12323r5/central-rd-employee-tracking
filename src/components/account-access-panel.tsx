@@ -16,9 +16,10 @@ async function submit(previous: PanelState, form: FormData): Promise<PanelState>
 }
 
 /**
- * Administrator-only: archive an active employee (ends their sign-in access on their next request and
- * keeps every record) or restore an archived one. The form sends only the Employee ID; the acting
- * Administrator is taken from the session at the server.
+ * Administrator or department manager (Story 4.9, for employees in the manager's department subtree):
+ * archive an active employee (ends their sign-in access on their next request and keeps every record)
+ * or restore an archived one. The form sends only the Employee ID; the acting Administrator or manager
+ * is taken from the session at the server, which also checks the manager's scope and rank.
  */
 export default function AccountAccessPanel({ employeeId, archived: archivedProp }: { employeeId: string; archived: boolean }) {
   const [state, action, pending] = useActionState(submit, initial);

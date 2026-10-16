@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import type { ManagerScope } from "./manager-scope";
+import type { ManagerIdentity } from "./session";
 
 // The only way an account is created (AD-6). scripts/seed-admin.ts uses it to create the first
 // Administrator, scripts/seed-demo-staff.ts the demo Staff account, and the Administrator-only server
@@ -7,9 +9,13 @@ import { z } from "zod";
 // archive()/restore() (Story 1.4) are likewise the only way an employee's access is ended or given
 // back: both call the Postgres function `set_employee_archived`, which changes `employees.archived_at`
 // and writes one append-only `audit_events` row in the same transaction.
+// Story 4.9: createManagerAccessStore() is the department manager's archive/restore path. It never uses
+// the service role: it pre-checks the manager's scope (injected) and then calls the SECURITY DEFINER
+// function `manager_set_employee_archived` through the manager's own JWT client (injected), which takes
+// the actor from auth.uid() and re-checks scope, self and rank in the database.
 // There is deliberately no runtime singleton here, and this module imports nothing but types from
 // other src/ modules, so `node --experimental-strip-types` can load it from the seed scripts.
-// The client passed in must be the service-role client: only it may create users, set app_metadata
+// The client passed to createAccountsStore must be the service-role client: only it may create users, set app_metadata
 // or link `employees.auth_user_id`.
 
 export type AccountRole = "admin" | "staff";
@@ -102,6 +108,22 @@ export class ArchiveSelfError extends Error {
   constructor() {
     super("An account cannot be archived by its own user.");
     this.name = "ArchiveSelfError";
+  }
+}
+
+/** The employee is outside the manager's department subtree, or the caller manages nothing. Nothing changed. */
+export class ArchiveNotAuthorizedError extends Error {
+  constructor() {
+    super("The employee is not in the caller's department subtree.");
+    this.name = "ArchiveNotAuthorizedError";
+  }
+}
+
+/** The target has equal or higher authority than the manager (or is an Administrator). Nothing changed. */
+export class ArchiveRankError extends Error {
+  constructor() {
+    super("The employee's account has equal or higher authority than the caller's.");
+    this.name = "ArchiveRankError";
   }
 }
 
@@ -264,6 +286,70 @@ export function createAccountsStore(getClient: () => SupabaseClient): AccountsSt
         if (users.length === 0) return false;
       }
     },
+  };
+}
+
+/** A department manager's archive and restore (Story 4.9). Same results and errors as AccountsStore. */
+export interface ManagerAccessStore {
+  /**
+   * Archives an employee in the manager's subtree. Throws AccountValidationError(["employeeId"]) for an
+   * invalid or unknown id, ArchiveSelfError for the manager's own record, ArchiveNotAuthorizedError outside
+   * the subtree, ArchiveRankError for equal or higher authority, AccountStateError when already archived,
+   * AccountsUnavailableError for anything else (scope unavailable included).
+   */
+  archive(session: ManagerIdentity, employeeId: string): Promise<ArchiveResult>;
+  /** Restores an archived employee in the manager's subtree. As archive(), with AccountStateError when not archived. */
+  restore(session: ManagerIdentity, employeeId: string): Promise<ArchiveResult>;
+}
+
+export type ManagerAccessClients = {
+  /** Per-request client carrying the manager's JWT (never the service role). */
+  userClient: () => Promise<SupabaseClient>;
+  /** The manager scope helper (manager-scope.ts), computed fresh on each call. */
+  scope: ManagerScope;
+};
+
+const managerArchiveInput = z.object({ employeeId: z.string().trim().regex(/^BS-\d{4}$/) });
+
+export function createManagerAccessStore({ userClient, scope }: ManagerAccessClients): ManagerAccessStore {
+  async function setArchived(session: ManagerIdentity, employeeId: string, archived: boolean): Promise<ArchiveResult> {
+    const parsed = managerArchiveInput.safeParse({ employeeId });
+    if (!parsed.success) throw new AccountValidationError(validationFields(parsed.error.issues));
+    const id = parsed.data.employeeId;
+    // Store-level checks first (defence in depth); the database function repeats them from auth.uid().
+    if (archived && id === session.employeeId) throw new ArchiveSelfError();
+    let inScope: Set<string>;
+    try {
+      inScope = (await scope.forManager(session)).employeeIds;
+    } catch (cause) {
+      throw new AccountsUnavailableError({ cause });
+    }
+    if (!inScope.has(id)) throw new ArchiveNotAuthorizedError();
+
+    let result: { data: unknown; error: { message?: string; details?: string | null } | null };
+    try {
+      result = await (await userClient()).rpc("manager_set_employee_archived", { p_employee_id: id, p_archived: archived });
+    } catch (cause) {
+      throw new AccountsUnavailableError({ cause });
+    }
+    if (result.error) {
+      switch (result.error.message) {
+        case "employee_not_found": throw new AccountValidationError(["employeeId"]);
+        case "not_authorized": throw new ArchiveNotAuthorizedError();
+        case "insufficient_authority": throw new ArchiveRankError();
+        case "already_archived": throw new AccountStateError("archived", result.error.details || undefined);
+        case "not_archived": throw new AccountStateError("active", result.error.details || undefined);
+        case "cannot_archive_self": throw new ArchiveSelfError();
+        default: throw new AccountsUnavailableError({ cause: result.error });
+      }
+    }
+    if (typeof result.data !== "string") throw new AccountsUnavailableError({ cause: "no employee name returned" });
+    return { employeeId: id, name: result.data, archived };
+  }
+
+  return {
+    archive: (session, employeeId) => setArchived(session, employeeId, true),
+    restore: (session, employeeId) => setArchived(session, employeeId, false),
   };
 }
 
