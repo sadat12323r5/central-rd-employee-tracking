@@ -22,6 +22,9 @@ export default defineConfig({
     // The live RLS tests share one Supabase project and their throwaway rows overlap, so test files
     // run one at a time; tests inside a file still run in order as before.
     fileParallelism: false,
+    // Live RLS tests make several round trips to the shared project per test; 5s was too tight in CI.
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
     coverage: {
       include: ["src/domain/**/*.ts", "src/server/**/*.ts", "src/components/**/*.tsx"],
     },
