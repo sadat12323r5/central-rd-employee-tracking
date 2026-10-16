@@ -2,8 +2,8 @@
 title: 'Story 4.8: Higher manager transfers an employee between departments'
 type: 'feature'
 created: '2026-10-16'
-status: 'ready-for-dev'
-baseline_revision: ''
+status: 'in-progress'
+baseline_revision: '054ea3d92c922ac4e8ae0eecacdfa96b1e2569f7'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
