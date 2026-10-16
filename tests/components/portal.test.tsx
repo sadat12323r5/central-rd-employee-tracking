@@ -26,6 +26,9 @@ vi.mock("@/server/assignment-evaluation-actions", () => ({
   createEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation saved." })),
   amendEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation updated." })),
 }));
+vi.mock("@/server/employee-actions", () => ({
+  transferEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -739,6 +742,36 @@ describe("Portal scoped to a manager's departments (Story 4.3)", () => {
     expect(lines).toHaveLength(scoped.length + 1);
     for (const e of scoped) expect(csvText).toContain(e.id);
     expect(csvText).not.toContain("Meera Das");
+  });
+});
+
+describe("Portal Department panel (Story 4.8)", () => {
+  const PARENT = "de9a0000-0000-4000-8000-0000000000b1";
+  const CHILD = "de9a0000-0000-4000-8000-0000000000b2";
+  const departments = [
+    { id: CHILD, name: "Child Team", parentId: PARENT, managerUserId: null, managerEmployeeId: null },
+    { id: PARENT, name: "Parent Team", parentId: null, managerUserId: "u-1", managerEmployeeId: "BS-1001" },
+  ];
+  const placed = employees.filter(e => e.id === "BS-1001").map(e => ({ ...e, archived: false, departmentId: PARENT }));
+
+  it.each(["admin", "manager"] as const)("shows the current department and the other departments on the Overview for %s", async role => {
+    const user = userEvent.setup();
+    await show(<Portal role={role} employees={placed} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).getByText("Department: Parent Team")).toBeInTheDocument();
+    const select = within(panel).getByLabelText("Move to department");
+    expect(within(select).getAllByRole("option").map(o => o.textContent)).toEqual(["Choose a department", "Child Team"]);
+    expect(within(panel).getByRole("button", { name: "Transfer employee" })).toBeInTheDocument();
+  });
+
+  it("says there is nowhere to move them, with no form, when no other department is listed", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={placed} departments={departments.slice(1)} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).getByText("There is no other department you can move this employee to.")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Transfer employee" })).not.toBeInTheDocument();
   });
 });
 
