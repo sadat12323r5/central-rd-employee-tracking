@@ -19,6 +19,9 @@ export default defineConfig({
     environment: "node",
     env: supabaseEnv,
     setupFiles: ["./tests/setup.ts"],
+    // The live RLS tests share one Supabase project and their throwaway rows overlap, so test files
+    // run one at a time; tests inside a file still run in order as before.
+    fileParallelism: false,
     coverage: {
       include: ["src/domain/**/*.ts", "src/server/**/*.ts", "src/components/**/*.tsx"],
     },
