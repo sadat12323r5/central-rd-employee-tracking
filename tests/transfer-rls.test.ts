@@ -4,7 +4,8 @@
 // employee only for the Administrator or a manager with authority over both the source and the
 // destination department, writing exactly one audit_events row (actor, target, 'transfer', from, to); it
 // refuses everyone else (not_authorized), an open assignment (open_assignment), the current department
-// (same_department) and an unknown destination (department_not_found); past assignments keep their
+// (same_department), an unknown destination (department_not_found) and a caller whose own employee row
+// is archived (not_authorized); past assignments keep their
 // recorded department; anon cannot execute it.
 //
 // Assignments can never be deleted (and their employee and department foreign keys are ON DELETE
@@ -208,17 +209,47 @@ describe.skipIf(!configured)("department transfer (shared Supabase project)", ()
     expect(await transfersOf(openId)).toEqual([]);
   });
 
-  it("refuses the employee's current department with same_department", async () => {
+  it("refuses the employee's current department with same_department, changing nothing", async () => {
     const mP = await signedIn("mp");
+    const auditBefore = await transfersOf(staffId);
     const { error } = await mP.rpc(RPC, { p_employee_id: staffId, p_to_department_id: pDept });
     expect(error).toMatchObject({ code: "P0001", message: "same_department" });
+    expect(await departmentOf(staffId)).toBe(pDept);
+    expect(await transfersOf(staffId)).toEqual(auditBefore);
   });
 
-  it("refuses an unknown destination with department_not_found", async () => {
+  it("refuses an unknown destination with department_not_found, changing nothing", async () => {
     const mP = await signedIn("mp");
+    const auditBefore = await transfersOf(staffId);
     const { error } = await mP.rpc(RPC, { p_employee_id: staffId, p_to_department_id: randomUUID() });
     expect(error).toMatchObject({ code: "P0001", message: "department_not_found" });
     expect(await departmentOf(staffId)).toBe(pDept);
+    expect(await transfersOf(staffId)).toEqual(auditBefore);
+  });
+
+  it("refuses C's manager moving a P employee into C (authority over the destination only) with not_authorized", async () => {
+    const mC = await signedIn("mc");
+    const auditBefore = await transfersOf(staffId);
+    const { error } = await mC.rpc(RPC, { p_employee_id: staffId, p_to_department_id: cDept });
+    expect(error).toMatchObject({ code: "P0001", message: "not_authorized" });
+    expect(await departmentOf(staffId)).toBe(pDept);
+    expect(await transfersOf(staffId)).toEqual(auditBefore);
+  });
+
+  it("refuses a manager whose own employee row is archived (JWT still valid) with not_authorized, changing nothing", async () => {
+    const mP = await signedIn("mp");
+    const auditBefore = await transfersOf(staffId);
+    const archived = await service.from("employees").update({ archived_at: new Date().toISOString() }).eq("employee_id", mPId);
+    expect(archived.error).toBeNull();
+    try {
+      const { error } = await mP.rpc(RPC, { p_employee_id: staffId, p_to_department_id: cDept });
+      expect(error).toMatchObject({ code: "P0001", message: "not_authorized" });
+      expect(await departmentOf(staffId)).toBe(pDept);
+      expect(await transfersOf(staffId)).toEqual(auditBefore);
+    } finally {
+      const restored = await service.from("employees").update({ archived_at: null }).eq("employee_id", mPId);
+      expect(restored.error).toBeNull();
+    }
   });
 
   it("lets the Administrator move an employee with no department, recording from as null", async () => {

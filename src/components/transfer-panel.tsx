@@ -5,18 +5,24 @@ import type { Department } from "@/domain/departments";
 import type { ActionState } from "@/server/attendance-actions";
 import { transferEmployeeAction } from "@/server/employee-actions";
 
-type PanelState = ActionState & { departmentId?: string | null; attempt: number };
+/**
+ * React resets a form after every action, so the form is re-mounted per submit (`attempt`) with `chosen` as
+ * its default: a refusal keeps the department that was picked; a success clears the choice.
+ */
+type PanelState = ActionState & { departmentId?: string | null; attempt: number; chosen: string };
 
-const initial: PanelState = { error: "", message: "", attempt: 0 };
+const initial: PanelState = { error: "", message: "", attempt: 0, chosen: "" };
 
 async function submit(previous: PanelState, form: FormData): Promise<PanelState> {
   const result = await transferEmployeeAction({ error: previous.error, message: previous.message }, form);
   const to = form.get("toDepartmentId");
+  const moved = Boolean(result.message) && typeof to === "string";
   // A success shows the new department at once; the refreshed page props agree after revalidation.
   return {
     ...result,
-    departmentId: result.message && typeof to === "string" ? to : previous.departmentId,
+    departmentId: moved ? (to as string) : previous.departmentId,
     attempt: previous.attempt + 1,
+    chosen: moved || typeof to !== "string" ? "" : to,
   };
 }
 
@@ -47,7 +53,7 @@ export default function TransferPanel({ employeeId, departments, departmentId: d
           <input type="hidden" name="employeeId" value={employeeId} />
           <div className="staff-field">
             <label htmlFor={`${id}-to`}>Move to department</label>
-            <select id={`${id}-to`} name="toDepartmentId" required defaultValue="">
+            <select id={`${id}-to`} name="toDepartmentId" required defaultValue={state.chosen}>
               <option value="" disabled>Choose a department</option>
               {options.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>

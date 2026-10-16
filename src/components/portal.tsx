@@ -103,7 +103,7 @@ const departmentCount = (n: number) => `Across ${n} ${n === 1 ? "department" : "
 const MANAGER_HIDDEN_SECTIONS: readonly Section[] = ["Departments", "Interviews & placements"];
 const MANAGER_HIDDEN_TABS: readonly Tab[] = ["Interviews"];
 
-export default function Portal({ employees: all, departments = [], current, role = "admin" }: {
+export default function Portal({ employees: all, departments = [], departmentNames, current, role = "admin" }: {
   employees: Employee[];
   /**
    * Story 4.2: who is using the management portal. A department manager does not get Departments,
@@ -115,6 +115,11 @@ export default function Portal({ employees: all, departments = [], current, role
    * only the departments in their subtree.
    */
   departments?: Department[];
+  /**
+   * Story 4.8 (manager portal): every department's id and name, or null when unavailable. Only a name
+   * fallback for records (e.g. past assignments) under a department outside `departments`; never choices.
+   */
+  departmentNames?: { id: string; name: string }[] | null;
   /** Story 3.2: LMS enrolments for every listed employee, streamed (always resolves; `unavailable` is a value). */
   current: Promise<CurrentTraining>;
 }) {
@@ -153,7 +158,8 @@ export default function Portal({ employees: all, departments = [], current, role
   const isManager = role === "manager";
   const sections = (Object.keys(paths).filter(k => k !== "search") as Section[]).filter(name => !isManager || !MANAGER_HIDDEN_SECTIONS.includes(name));
   const profileTabs = tabs.filter(t => !isManager || !MANAGER_HIDDEN_TABS.includes(t));
-  const departmentName = (id: string | null | undefined) => (id ? departments.find(d => d.id === id)?.name : undefined) ?? "No department";
+  const departmentName = (id: string | null | undefined) =>
+    (id ? departments.find(d => d.id === id)?.name ?? departmentNames?.find(d => d.id === id)?.name : undefined) ?? "No department";
   function navigate(value: Section) { setSection(value); setSelected(null); setNotice(""); }
   function open(employee: Employee, nextTab: Tab = "Overview") { setSelected(employee); setTab(nextTab); setNotice(""); window.scrollTo({ top: 0, behavior: "smooth" }); }
   function exportDirectory() {

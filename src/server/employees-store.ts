@@ -410,9 +410,16 @@ export function createEmployeesStore({
         if (!inScope.employeeIds.has(id) || !inScope.departmentIds.has(to)) throw new TransferForbiddenError();
       }
 
-      // Informational only: the department before the change, for the caller's message or log.
-      const before = await run<{ department_id: string | null }>(t => t.select("department_id").eq("employee_id", id)
-        .maybeSingle<{ department_id: string | null }>());
+      // Informational only (best effort): the department before the change. A failed read never blocks the
+      // transfer; the database function is the authority and records the real source in the audit row.
+      let fromDepartmentId: string | null = null;
+      try {
+        const before = await run<{ department_id: string | null }>(t => t.select("department_id").eq("employee_id", id)
+          .maybeSingle<{ department_id: string | null }>());
+        fromDepartmentId = before?.department_id ?? null;
+      } catch {
+        fromDepartmentId = null;
+      }
 
       let result: { data: unknown; error: { message?: string; code?: string } | null };
       try {
@@ -432,7 +439,7 @@ export function createEmployeesStore({
         }
       }
       if (typeof result.data !== "string") throw new EmployeesUnavailableError({ cause: "no employee name returned" });
-      return { employeeId: id, name: result.data, fromDepartmentId: before?.department_id ?? null, toDepartmentId: to };
+      return { employeeId: id, name: result.data, fromDepartmentId, toDepartmentId: to };
     },
   };
 }

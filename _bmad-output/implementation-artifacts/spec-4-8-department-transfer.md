@@ -2,7 +2,7 @@
 title: 'Story 4.8: Higher manager transfers an employee between departments'
 type: 'feature'
 created: '2026-10-16'
-status: 'in-review'
+status: 'done'
 baseline_revision: '054ea3d92c922ac4e8ae0eecacdfa96b1e2569f7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -10,7 +10,14 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-4-9-manager-archive-restore.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      An assignment opened at the same moment as a transfer can be recorded under the employee's old department.
+    evidence: |-
+      assignments_guard (20261014030000_assignments.sql:62) reads employees.department_id without a row lock; the FK key-share lock waits for the transfer's FOR UPDATE, but only after the guard copied the old value. Fix: `for share` in the guard's select, which replaces an existing function (a DESTRUCTIVE change to Story 4.5's migration surface).
+    location: >-
+      supabase/migrations/20261014030000_assignments.sql:62
+    severity: low
 ---
 
 <intent-contract>
@@ -187,3 +194,56 @@ The authority set is the AD-4 rule: the admin unconditionally, or a manager on b
 - `npm run build` -- expected: success.
 - e2e with Chromium (a local uncommitted config with `launchOptions.executablePath` set to `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`) -- expected: pass, or fail only with schema-missing errors.
 - The migration is applied to a scratch local Postgres 16 with stub `auth` schema and functions -- expected: the function's error paths behave as in the matrix.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Administrators and department managers can now move an employee to another department in one step.
+- **Database:** `public.transfer_employee(employee, destination)` is a SECURITY DEFINER function called through the actor's own JWT, with the actor taken from `auth.uid()`. In one transaction it:
+  - checks that the caller is the Administrator, or manages both the source and the destination (AD-4);
+  - refuses Staff, archived callers, unknown employees or departments, a move to the current department, and an employee with an open assignment;
+  - updates `employees.department_id`;
+  - writes one `audit_events` row (actor, target, `transfer`, from, to, `occurred_at`).
+- **Code:** `employees-store.transfer()` (FR-11) wraps it, with scope pre-checks for managers, and `transferEmployeeAction` maps the outcomes to messages.
+- **UI:** a "Department" panel on the profile Overview shows the current department and offers the other departments the session can see.
+- **History:** past assignments keep their department. Manager portals now label history rows from every department's name (`department_options()`), so a past assignment from a department outside the manager's subtree still shows its real name.
+
+**Migration:** `supabase/migrations/20261016020000_department_transfer.sql` is **DESTRUCTIVE**. It drops and replaces `audit_events_action_check`, widening it only by adding `'transfer'`. Everything else in it is additive: two nullable columns, a new check, and the function. No seed change.
+
+**Files:**
+- `supabase/migrations/20261016020000_department_transfer.sql`: the audit columns and checks, plus `transfer_employee`.
+- `src/server/employees-store.ts`: `transfer()` and six error classes.
+- `src/server/employee-actions.ts`: `transferEmployeeAction` (new).
+- `src/components/transfer-panel.tsx`: the Department panel (new).
+- `src/components/portal.tsx`: renders the panel; `departmentNames` fallback for history labels.
+- `src/app/page.tsx`: the manager branch passes `departmentNames`.
+- Tests:
+  - new: `tests/employee-actions.test.ts`, `tests/components/transfer-panel.test.tsx`, `tests/transfer-single-writer.test.ts`, `tests/transfer-rls.test.ts` (live), `tests/e2e/transfer.spec.ts`;
+  - extended: `tests/employees-store.test.ts`, `tests/components/portal.test.tsx`, `tests/page.test.tsx`.
+- `docs/DEPLOYMENT.md`: the migration is added to the apply list.
+
+**Review:** one pass, 30 findings. 4 were false.
+- **Patched:** 2 medium findings (one root cause) and 8 low. The fixes:
+  - manager history labels for departments outside the subtree;
+  - the best-effort pre-read;
+  - the panel keeps the chosen department after a refusal;
+  - e2e cleanup restores the original department;
+  - live tests for the archived caller, destination-only authority, and no writes on refusals;
+  - a portal test for refreshed department props.
+- **Deferred:** 1 (the assignment-insert race in the 4.5 guard), recorded in frontmatter.
+- **Rejected:** the rest, with reasons in the triage log. The main ones: no rank rule for transfers (the AC defines authority only), archived targets are allowed, no confirmation dialog (consistent with archive and close), and managers get "forbidden" rather than "not found" (so the message never reveals whether an employee exists).
+
+**Follow-up review recommended:** false. This pass patched one medium entry and no high ones.
+
+**Verification:**
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `npm test`: 1449 passed, 10 failed. All 10 are in `tests/transfer-rls.test.ts`, and every failure is schema-missing: PGRST202 (`transfer_employee` not found) or 42703 (`audit_events.from_department_id` does not exist).
+- e2e on Chromium: the full run had 31 passed and 1 failed, and the re-run of `transfer` and `portal` after the patches had 2 passed and 1 failed. The failure is `transfer.spec.ts`: the server logged "Employee transfer failed. EmployeesUnavailableError" (PGRST202 underneath), so the UI showed the "temporarily unavailable" message.
+- The implementer applied every migration to a scratch local Postgres 16 with stubbed `auth` functions. Every matrix row behaved as specified.
+
+**Residual risks:**
+- The live and e2e transfer tests have not yet passed against the real schema. Re-run them after the migration is applied.
+- The live RLS test leaves fixed throwaway rows in the shared project: employees BS-86xx and departments "RLS Transfer slot N P/C".
+

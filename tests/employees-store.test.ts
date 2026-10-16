@@ -947,10 +947,11 @@ describe("employees-store transfer (Story 4.8)", () => {
       .rejects.toBeInstanceOf(EmployeesUnavailableError);
   });
 
-  it("reports the records unavailable, without an rpc, when the department read fails", async () => {
+  it("still transfers, with from null, when the informational department read fails", async () => {
     const { client, rpcCalls } = transferClient(undefined, P, true);
-    await expect(storeFor(client).transfer(admin, "BS-1001", C)).rejects.toBeInstanceOf(EmployeesUnavailableError);
-    expect(rpcCalls).toEqual([]);
+    const result = await storeFor(client).transfer(admin, "BS-1001", C);
+    expect(result).toEqual({ employeeId: "BS-1001", name: "Nadia Rahman", fromDepartmentId: null, toDepartmentId: C });
+    expect(rpcCalls).toHaveLength(1);
   });
 
   it("reports the records unavailable, without an rpc, when the manager scope cannot be read", async () => {

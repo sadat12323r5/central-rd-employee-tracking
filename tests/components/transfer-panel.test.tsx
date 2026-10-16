@@ -70,6 +70,18 @@ describe("TransferPanel (Story 4.8)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Close this employee's open assignment before moving them.");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByText("Department: Parent Team")).toBeInTheDocument();
+    // The chosen department is kept after a refusal, so it can be submitted again.
+    expect(screen.getByLabelText("Move to department")).toHaveValue(Z);
+  });
+
+  it("clears the choice after a success", async () => {
+    transferMock.mockResolvedValue({ error: "", message: "Meera Das was moved to Child Team." });
+    const user = userEvent.setup();
+    render(<TransferPanel employeeId="BS-1003" departments={departments} departmentId={P} />);
+    await user.selectOptions(screen.getByLabelText("Move to department"), "Child Team");
+    await user.click(screen.getByRole("button", { name: "Transfer employee" }));
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.getByLabelText("Move to department")).toHaveValue("");
   });
 
   it("is keyboard operable", async () => {

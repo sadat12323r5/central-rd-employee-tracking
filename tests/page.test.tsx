@@ -241,14 +241,30 @@ describe("Home routing by role", () => {
     errorSpy.mockRestore();
   });
 
-  it("never reads department options for the management portals (Story 4.7)", async () => {
+  it("never reads department options for the Administrator portal (Story 4.7)", async () => {
     departmentOptions.mockClear();
-    for (const session of [{ role: "admin" }, { role: "manager", employeeId: "BS-1008", userId: "u-1" }]) {
-      getSession.mockResolvedValue(session);
-      listFor.mockResolvedValue([]);
-      render(await Home());
-    }
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    render(await Home());
     expect(departmentOptions).not.toHaveBeenCalled();
+  });
+
+  it("passes every department's name to the manager portal as departmentNames, or null when unavailable (Story 4.8)", async () => {
+    getSession.mockResolvedValue({ role: "manager", employeeId: "BS-1008", userId: "u-1" });
+    listFor.mockResolvedValue([]);
+    const names = [{ id: "d-1", name: "Central R&D" }, { id: "d-2", name: "L&D" }];
+    departmentOptions.mockResolvedValueOnce(names);
+    portalProps.mockClear();
+    render(await Home());
+    expect((portalProps.mock.calls.at(-1)?.[0] as { departmentNames: unknown }).departmentNames).toEqual(names);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    departmentOptions.mockRejectedValueOnce(new Error("PGRST202"));
+    portalProps.mockClear();
+    render(await Home());
+    expect((portalProps.mock.calls.at(-1)?.[0] as { departmentNames: unknown }).departmentNames).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   it("strips interviews server-side from every employee a manager session receives (Story 4.4)", async () => {

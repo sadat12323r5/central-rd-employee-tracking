@@ -7,7 +7,8 @@ import { serviceClient } from "./supabase-admin";
 // profile's Department panel; after a reload the profile shows C.
 // The e2e manager (E2E_STAFF_MANAGER_*) gets throwaway departments P (managed) and C (child of P, no
 // manager); the managed throwaway Staff employee (E2E_STAFF_MANAGED_*) starts in P and has no assignments.
-// Cleanup in `finally`: clear the employee's department_id and delete C, then P (if they were created).
+// Cleanup in `finally`: put the employee back in the department they had before (read first) and delete C,
+// then P (if they were created).
 // The audit row stays (audit_events is append-only and has no foreign keys).
 // Needs the departments, department_managers, manager_scope, assignments and department_transfer migrations.
 const run = randomBytes(4).toString("hex");
@@ -36,6 +37,10 @@ test("a department manager transfers a Staff member from their department to its
   const C = `E2E Transfer C ${run}`;
   let parentId: string | null = null;
   let childId: string | null = null;
+  // The shared managed employee's department before this spec, restored in `finally`.
+  const original = await service.from("employees").select("department_id").eq("employee_id", staff.id).single();
+  if (original.error) throw new Error(`Could not read the throwaway employee's department (${original.error.code}): ${original.error.message}`);
+  const originalDepartmentId = (original.data.department_id as string | null) ?? null;
 
   try {
     const parent = await service.from("departments").insert({ name: P, manager_user_id: account.data.auth_user_id }).select("id").single();
@@ -65,8 +70,8 @@ test("a department manager transfers a Staff member from their department to its
     const stored = await service.from("employees").select("department_id").eq("employee_id", staff.id).single();
     expect(stored.data?.department_id).toBe(childId);
   } finally {
-    const cleared = await service.from("employees").update({ department_id: null }).eq("employee_id", staff.id);
-    checkCleanup("clear the throwaway employee's department", cleared.error);
+    const restored = await service.from("employees").update({ department_id: originalDepartmentId }).eq("employee_id", staff.id);
+    checkCleanup("restore the throwaway employee's department", restored.error);
     for (const id of [childId, parentId]) {
       if (!id) continue;
       const deleted = await service.from("departments").delete().eq("id", id);

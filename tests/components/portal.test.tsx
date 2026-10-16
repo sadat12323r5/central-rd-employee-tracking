@@ -773,6 +773,43 @@ describe("Portal Department panel (Story 4.8)", () => {
     expect(within(panel).getByText("There is no other department you can move this employee to.")).toBeInTheDocument();
     expect(within(panel).queryByRole("button", { name: "Transfer employee" })).not.toBeInTheDocument();
   });
+
+  it("follows the refreshed employees: after a rerender with a new departmentId the panel shows it and omits it from the options", async () => {
+    const user = userEvent.setup();
+    const { rerender } = await show(<Portal role="admin" employees={placed} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    await act(async () => {
+      rerender(<Portal role="admin" employees={placed.map(e => ({ ...e, departmentId: CHILD }))} departments={departments} current={none()} />);
+    });
+    await user.click(screen.getByRole("tab", { name: "Training" }));
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).getByText("Department: Child Team")).toBeInTheDocument();
+    const select = within(panel).getByLabelText("Move to department");
+    expect(within(select).getAllByRole("option").map(o => o.textContent)).toEqual(["Choose a department", "Parent Team"]);
+  });
+
+  it("names a past assignment's department from departmentNames when it is outside a manager's departments", async () => {
+    const user = userEvent.setup();
+    const OLD = "de9a0000-0000-4000-8000-0000000000b9";
+    const past: Assignment = {
+      id: "5e000000-0000-4000-8000-0000000000b1", employeeId: "BS-1001", departmentId: OLD, client: "Old client", projectName: "Before the move",
+      role: "Engineer", allocation: 50, startDate: "2026-03-01", latestUpdate: "", status: "closed", completionDate: "2026-08-31",
+      createdAt: "2026-03-01T00:00:00Z", closedAt: "2026-09-01T00:00:00Z", provenance: "assignment",
+    };
+    const moved = placed.map(e => ({ ...e, departmentId: CHILD, assignments: [past] }));
+    await show(<Portal role="manager" employees={moved} departments={departments.slice(0, 1)}
+      departmentNames={[...departments.map(({ id, name }) => ({ id, name })), { id: OLD, name: "Old Department" }]} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    const item = within(screen.getByRole("list", { name: "Work history" })).getByRole("listitem");
+    expect(within(item).getByText(/Old Department/)).toBeInTheDocument();
+    expect(within(item).queryByText(/No department/)).not.toBeInTheDocument();
+    // The transfer choices stay the scoped list: the extra names are never offered.
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).queryByRole("option", { name: "Old Department" })).not.toBeInTheDocument();
+  });
 });
 
 describe("Portal Current work tab (Story 4.5)", () => {
