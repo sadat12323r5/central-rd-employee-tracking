@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, type FormEvent } from "react";
+import { startTransition, useActionState, useEffect, useRef, type FormEvent } from "react";
 import { EMPLOYMENT_TYPES, TEXT_FIELD_MAX } from "@/domain/employee-input";
 import type { ActionState } from "@/server/attendance-actions";
 import { updateEmployeeDetailsAction } from "@/server/employee-actions";
@@ -27,6 +27,10 @@ export default function EmployeeDetailsPanel({ employeeId, name, title, team, ma
   departmentName: string;
 }) {
   const [state, action, pending] = useActionState(updateEmployeeDetailsAction, initial);
+  // The panel stays mounted across saves (keyed by employee only), so its "saved" message survives the
+  // refresh; when refreshed props bring different details, the fields are refilled from them.
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => { formRef.current?.reset(); }, [title, team, manager, office, employmentType]);
   // Submitted by hand rather than through `action=`, which would make React reset the form after every
   // submission: a refusal keeps what was entered (and focus).
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -40,7 +44,7 @@ export default function EmployeeDetailsPanel({ employeeId, name, title, team, ma
   return <article className="panel employee-details" aria-labelledby={`${prefix}-heading`}>
     <h2 id={`${prefix}-heading`}>Edit details</h2>
     <p className="muted">Update {name}&apos;s basic details. Every field is required.</p>
-    <form onSubmit={onSubmit} className="staff-log" aria-label="Edit employee details">
+    <form ref={formRef} onSubmit={onSubmit} className="staff-log" aria-label="Edit employee details">
       <input type="hidden" name="employeeId" value={employeeId} />
       <div className="add-employee-grid">
         <Text id={`${prefix}-title`} name="title" label="Job title" value={title} />
