@@ -14,8 +14,9 @@ import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-trainin
 import DepartmentsPanel from "./departments-panel";
 import TransferPanel from "./transfer-panel";
 import StaffAccountPanel from "./staff-account-panel";
+import { StaffSelfService, type StaffSelfServiceProps } from "./staff-attendance";
 
-type Section = "Overview" | "Employees" | "Learning & development" | "Interviews & placements" | "Attendance & leave" | "Departments";
+type Section = "Overview" | "Employees" | "Learning & development" | "Interviews & placements" | "Attendance & leave" | "Departments" | "My record";
 type Show = "Active employees" | "Archived employees";
 type Tab = "Overview" | "Employment" | "Training" | "Skills & evaluation" | "Current work" | "Interviews" | "Attendance";
 const tabs: Tab[] = ["Overview", "Employment", "Training", "Skills & evaluation", "Current work", "Interviews", "Attendance"];
@@ -26,6 +27,7 @@ const paths: Record<string, string> = {
   "Interviews & placements": "M8 6V3h8v3 M3 7h18v14H3z M3 12c6 3 12 3 18 0 M10 12h4v4h-4z",
   "Attendance & leave": "M4 5h16v16H4z M8 3v4 M16 3v4 M4 10h16 M8 14h2 M14 14h2 M8 18h2",
   Departments: "M9 3h6v5H9z M12 8v4 M5 12h14 M5 12v4 M19 12v4 M2 16h6v5H2z M16 16h6v5h-6z",
+  "My record": "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
   search: "m21 21-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
 };
 function Icon({ name }: { name: string }) { return <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.Overview} /></svg>; }
@@ -103,7 +105,7 @@ const departmentCount = (n: number) => `Across ${n} ${n === 1 ? "department" : "
 const MANAGER_HIDDEN_SECTIONS: readonly Section[] = ["Departments", "Interviews & placements"];
 const MANAGER_HIDDEN_TABS: readonly Tab[] = ["Interviews"];
 
-export default function Portal({ employees: all, departments = [], departmentNames, current, role = "admin" }: {
+export default function Portal({ employees: all, departments = [], departmentNames, current, role = "admin", myRecord }: {
   employees: Employee[];
   /**
    * Story 4.2: who is using the management portal. A department manager does not get Departments,
@@ -122,6 +124,12 @@ export default function Portal({ employees: all, departments = [], departmentNam
   departmentNames?: { id: string; name: string }[] | null;
   /** Story 3.2: LMS enrolments for every listed employee, streamed (always resolves; `unavailable` is a value). */
   current: Promise<CurrentTraining>;
+  /**
+   * Story 4.10: the signed-in account's own employee record, for an account linked to one (a manager, or a
+   * linked Administrator). Read on the server under the Staff own-record rules. Without it there is no
+   * "My record" navigation entry or section.
+   */
+  myRecord?: StaffSelfServiceProps;
 }) {
   // Archived employees (Story 1.4) are left out of every view, count and stat by default; the
   // directory's "Show" filter lists them on their own.
@@ -156,7 +164,9 @@ export default function Portal({ employees: all, departments = [], departmentNam
   const selectedEvaluations = selected ? (all.find(e => e.id === selected.id)?.evaluations ?? selected.evaluations ?? []) : [];
   const selectedBackfilled = selected ? (all.find(e => e.id === selected.id)?.backfilledProjects ?? selected.backfilledProjects ?? []) : [];
   const isManager = role === "manager";
-  const sections = (Object.keys(paths).filter(k => k !== "search") as Section[]).filter(name => !isManager || !MANAGER_HIDDEN_SECTIONS.includes(name));
+  const sections = (Object.keys(paths).filter(k => k !== "search") as Section[])
+    .filter(name => !isManager || !MANAGER_HIDDEN_SECTIONS.includes(name))
+    .filter(name => name !== "My record" || Boolean(myRecord));
   const profileTabs = tabs.filter(t => !isManager || !MANAGER_HIDDEN_TABS.includes(t));
   const departmentName = (id: string | null | undefined) =>
     (id ? departments.find(d => d.id === id)?.name ?? departmentNames?.find(d => d.id === id)?.name : undefined) ?? "No department";
@@ -187,13 +197,14 @@ export default function Portal({ employees: all, departments = [], departmentNam
     {tab === "Attendance" && <><div className="stat-grid"><Stat label="Scheduled days" value={selected.attendance.scheduled} note="1–20 September 2026" icon="Attendance & leave" /><Stat label="Recorded days worked" value={selected.attendance.worked} note="From demo attendance records" icon="Employees" /><Stat label="Leave days" value={selected.attendance.leave} note="Within the reporting period" icon="Attendance & leave" /><Stat label="Missing records" value={selected.attendance.unrecorded} note="Require review" icon="Overview" /></div><article className="panel"><h2>Leave & attendance exceptions</h2><p className="muted">Schedule: Monday–Friday · demonstration period, not a payroll calculation.</p><div className="table-scroll"><table><thead><tr><th>Date</th><th>Record type</th><th>Days</th><th>Status</th></tr></thead><tbody>{selected.attendance.records.map(r => <tr key={r.date}><td>{date(r.date)}</td><td>{r.type}</td><td>{r.days}</td><td><Badge>{r.status}</Badge></td></tr>)}</tbody></table></div></article></>}
     </section>
   </> : <>
-    <div className="page-heading"><div><span className="eyebrow">PEOPLE & DEVELOPMENT</span><h1>{section === "Overview" ? "A clearer view of your people." : section}</h1><p>{section === "Overview" ? "Track progress, support growth and help your people take their next step." : section === "Employees" ? "Every person, their experience and their potential — in one place." : section === "Departments" ? "The organisational units employees belong to." : "A shared view of development, opportunities and employee records."}</p></div>{(section === "Overview" || section === "Employees") && <button className="secondary" onClick={exportDirectory}>↓ Export directory</button>}</div>
+    <div className="page-heading"><div><span className="eyebrow">PEOPLE & DEVELOPMENT</span><h1>{section === "Overview" ? "A clearer view of your people." : section}</h1><p>{section === "Overview" ? "Track progress, support growth and help your people take their next step." : section === "Employees" ? "Every person, their experience and their potential — in one place." : section === "Departments" ? "The organisational units employees belong to." : section === "My record" ? "Your own attendance, daily log, assignments, training and interviews." : "A shared view of development, opportunities and employee records."}</p></div>{(section === "Overview" || section === "Employees") && <button className="secondary" onClick={exportDirectory}>↓ Export directory</button>}</div>
     {section === "Overview" && <><div className="period-label">WORKSPACE SNAPSHOT <span>Demo period · September 2026</span></div><div className="stat-grid"><Stat label="Total employees" value={employees.length} note={isManager ? departmentCount(departments.length) : "Across 5 specialist teams"} icon="Employees" /><Suspense fallback={<Stat label="Learning in progress" value="…" note="Loading from the LMS" icon="Learning & development" />}><InProgressStat current={current} employees={employees} /></Suspense><Stat label="Available for assignment" value={employees.filter(e => e.status === "Available").length} note="Ready for a new opportunity" icon="Overview" />{!isManager && <Stat label="Upcoming interviews" value={interviews.filter(i => i.interview.outcome === "Scheduled").length} note="External employer opportunities" icon="Interviews & placements" />}</div><div className="overview-grid"><article className="panel focus-panel"><div className="panel-title"><h2>Growth starts with a next step.</h2><span className="spark">✳</span></div><p>Connect each employee's skills and experience with the right learning opportunity.</p><button className="primary" onClick={() => navigate("Learning & development")}>Explore learning progress <span>→</span></button><div className="focus-foot"><span className="overlap-avatars">{employees.slice(0, 3).map(e => <Avatar key={e.id} employee={e} />)}</span><span><Suspense fallback={<>{trainings.length} completed training records</>}><CompletedCount current={current} employees={employees} /></Suspense></span></div></article><article className="panel attention"><div className="panel-title"><h2>On your radar</h2><span className="badge amber">FOLLOW UP</span></div>{radarNadia && !isManager && <button className="radar-row" onClick={() => open(radarNadia, "Interviews")}><span className="radar-icon blue"><Icon name="Interviews & placements" /></span><span><strong>Nadia's technical interview</strong><small>23 Sep · Northstar Labs · external employer</small></span><span>↗</span></button>}{radarMeera && <button className="radar-row" onClick={() => open(radarMeera, "Training")}><span className="radar-icon lavender"><Icon name="Learning & development" /></span><span><strong>Meera's learning check-in</strong><small>Review communication training progress</small></span><span>↗</span></button>}<button className="radar-row" onClick={() => navigate("Attendance & leave")}><span className="radar-icon peach"><Icon name="Attendance & leave" /></span><span><strong>{totals.missing} attendance records to review</strong><small>Missing entries in the demo reporting period</small></span><span>↗</span></button></article></div></>}
     {(section === "Employees" || section === "Overview") && <section className="panel directory"><div className="panel-title"><div><h2>Employee directory <span className="count">{directory.length}</span></h2><p className="muted">Get to know the people behind the work.</p></div>{section === "Overview" && <button className="text-button" onClick={() => navigate("Employees")}>View directory →</button>}</div>{filters}{employeeTable}<div className="table-footer">Showing {visible.length} of {directory.length} {show === "Archived employees" ? "archived " : ""}employees <span>All records are fictional</span></div></section>}
     {section === "Employees" && <ActivityExportPanel key="activity-all" manager={isManager} />}
     {section === "Learning & development" && <Suspense fallback={<LearningTable rows={trainings} badge={`${trainings.length} completed`} open={open} state={<CurrentLoading />} />}><OrgLearning current={current} employees={employees} open={open} /></Suspense>}
     {section === "Interviews & placements" && !isManager && <section className="panel"><h2>External opportunities</h2><p className="muted">Applications and interview outcomes at other employers. Select an employee to review feedback.</p><div className="table-scroll"><table><thead><tr><th>Employee</th><th>Employer & position</th><th>Interview date</th><th>Outcome</th></tr></thead><tbody>{interviews.map(({ employee: e, interview: i }) => <tr key={i.id}><td><button className="person-button" onClick={() => open(e, "Interviews")}><Avatar employee={e} /><strong>{e.name}</strong></button></td><td>{i.company}<small>{i.role}</small></td><td>{date(i.date)}</td><td><Badge>{outcomeLabel(i.outcome)}</Badge></td></tr>)}</tbody></table></div></section>}
     {section === "Departments" && !isManager && <DepartmentsPanel departments={departments} employees={all} />}
+    {section === "My record" && myRecord && <section className="my-record" aria-label="My record"><StaffSelfService {...myRecord} /></section>}
     {section === "Attendance & leave" && <><div className="stat-grid three"><Stat label="Recorded days worked" value={totals.worked} note="Sum across employees" icon="Employees" /><Stat label="Leave days" value={totals.leave} note="Sum across employees" icon="Attendance & leave" /><Stat label="Missing records" value={totals.missing} note="Require manual review" icon="Overview" /></div><section className="panel"><h2>Attendance summary</h2><p className="muted">1–20 September 2026 · Monday–Friday schedule · synthetic attendance records</p><div className="table-scroll"><table><thead><tr><th>Employee</th><th>Scheduled</th><th>Worked</th><th>Leave</th><th>Missing</th></tr></thead><tbody>{employees.map(e => <tr key={e.id}><td><button className="person-button" onClick={() => open(e, "Attendance")}><Avatar employee={e} /><strong>{e.name}</strong></button></td><td>{e.attendance.scheduled}</td><td>{e.attendance.worked}</td><td>{e.attendance.leave}</td><td><span className="badge amber">{e.attendance.unrecorded}</span></td></tr>)}</tbody></table></div><p className="fine-print">Worked days come from attendance records, not Git commits or scheduled days minus leave.</p></section></>}
   </>}
   <footer className="page-footer"><span>Brain Station 23 · People & Development</span><span>Demo workspace · fictional records · September 2026</span></footer>

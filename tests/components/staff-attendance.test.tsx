@@ -17,7 +17,7 @@ const { addBackfillAction, editBackfillAction, withdrawBackfillAction } = vi.hoi
 }));
 vi.mock("@/server/backfill-actions", () => ({ addBackfillAction, editBackfillAction, withdrawBackfillAction }));
 
-import StaffAttendance from "@/components/staff-attendance";
+import StaffAttendance, { StaffSelfService } from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
 import type { TimesheetEntry } from "@/domain/timesheet";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
@@ -569,5 +569,31 @@ describe("StaffAttendance past projects (Story 4.7)", () => {
   it("has no detectable accessibility violations with past projects and the add form", async () => {
     const { container } = await show(<StaffAttendance employee={withPast} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("StaffSelfService (Story 4.10)", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(now)); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("renders the self-service body without the page shell: no brand header and no Sign out button", async () => {
+    const { container } = await show(<StaffSelfService employee={employee} entries={[]} serverNow={now} current={none()} departmentOptions={[]} />);
+    expect(screen.getByRole("button", { name: "Clock in" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Today's work log" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "My assignments" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Current enrolments" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "External interviews" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add interview" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+    expect(container.querySelector(".staff-header")).toBeNull();
+    expect(container.querySelector("main")).toBeNull();
+  });
+
+  it("is exactly what the staff portal renders inside its shell", async () => {
+    const shell = await show(<StaffAttendance employee={employee} entries={[open]} serverNow={now} current={none()} />);
+    const inner = shell.container.querySelector(".staff-content")!.outerHTML;
+    shell.unmount();
+    const body = await show(<StaffSelfService employee={employee} entries={[open]} serverNow={now} current={none()} />);
+    expect(body.container.innerHTML).toBe(inner);
   });
 });

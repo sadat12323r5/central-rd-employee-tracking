@@ -239,3 +239,32 @@ describe("withdrawInterviewAction (Story 2.2)", () => {
     }
   });
 });
+
+describe("own-record identity for managers and linked Administrators (Story 4.10)", () => {
+  const MANAGER = { role: "manager", employeeId: "BS-1004", userId: "u-manager" } as const;
+  const LINKED_ADMIN = { role: "admin", employeeId: "BS-1005" } as const;
+
+  it.each([["a manager", MANAGER, "BS-1004"], ["a linked Administrator", LINKED_ADMIN, "BS-1005"]] as const)(
+    "%s adds, updates and withdraws through the store as `{ role: \"staff\", employeeId }`, ignoring a form employee id",
+    async (_label, session, employeeId) => {
+      getSession.mockResolvedValue(session);
+      const own = { role: "staff", employeeId };
+      expect(await addInterviewAction(blank, form({ ...valid, employeeId: "BS-1008" }))).toEqual({ error: "", message: "Interview added." });
+      expect(add).toHaveBeenCalledWith(own, { ...valid, outcome: "" });
+      expect(await updateInterviewAction(blank, form(edit))).toEqual({ error: "", message: "Interview updated." });
+      expect(update).toHaveBeenCalledWith(own, ID, { stage: edit.stage, outcome: edit.outcome, feedback: edit.feedback });
+      expect(await withdrawInterviewAction(blank, form({ id: ID }))).toEqual({ error: "", message: "Interview withdrawn." });
+      expect(withdraw).toHaveBeenCalledWith(own, ID);
+    },
+  );
+
+  it("refuses an unlinked Administrator before any store call", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    expect((await addInterviewAction(blank, form(valid))).error).toMatch(/sign in/i);
+    expect((await updateInterviewAction(blank, form(edit))).error).toMatch(/sign in/i);
+    expect((await withdrawInterviewAction(blank, form({ id: ID }))).error).toMatch(/sign in/i);
+    expect(add).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(withdraw).not.toHaveBeenCalled();
+  });
+});

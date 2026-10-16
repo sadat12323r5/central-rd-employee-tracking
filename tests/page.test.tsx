@@ -139,7 +139,8 @@ describe("Home routing by role", () => {
     expect(screen.getByText("Employee directory")).toBeInTheDocument();
     expect(screen.queryByText("Staff portal")).not.toBeInTheDocument();
     expect(listFor).toHaveBeenCalledWith(manager);
-    expect(getFor).not.toHaveBeenCalled();
+    // Story 4.10: the only single-employee read is the manager's own record, under the Staff identity.
+    expect(getFor.mock.calls).toEqual([[{ role: "staff", employeeId: "BS-1003" }, "BS-1003"]]);
     expect(listDepartments).toHaveBeenCalledWith(manager);
     expect(currentFor).toHaveBeenCalledWith(manager, scoped.map(e => e.id));
     const props = portalProps.mock.calls.at(-1)?.[0] as { role: string; employees: unknown[]; departments?: unknown };
@@ -424,5 +425,101 @@ describe("Home loads the department list for the Administrator (Story 4.1)", () 
     expect(screen.getByRole("alert")).not.toHaveTextContent(/employee records/i);
     expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
     expect(errorSpy).toHaveBeenCalled();
+  });
+});
+
+describe("Home builds \"My record\" for linked management accounts (Story 4.10)", () => {
+  const own = { role: "staff", employeeId: "BS-1004" };
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listFor.mockReset(); getFor.mockReset(); portalProps.mockReset(); currentFor.mockReset(); departmentOptions.mockClear();
+    attendanceListFor.mockReset(); attendanceListFor.mockResolvedValue([]);
+    listDepartments.mockResolvedValue([]);
+    currentFor.mockResolvedValue({ status: "unavailable" });
+  });
+  afterEach(() => errorSpy.mockRestore());
+
+  type MyRecord = { employee: { id: string; interviews: unknown[] }; entries: unknown[]; serverNow: string; current: Promise<unknown>; departmentOptions: unknown };
+  const myRecordProp = () => (portalProps.mock.calls.at(-1)?.[0] as { myRecord?: MyRecord }).myRecord;
+
+  it.each([
+    ["a manager", { role: "manager", employeeId: "BS-1004", userId: "u-1" }],
+    ["a linked Administrator", { role: "admin", employeeId: "BS-1004" }],
+  ])("passes %s their own record, read only with `{ role: \"staff\", employeeId }`", async (_label, session) => {
+    const { employees } = await import("@/data/employees");
+    const mine = employees.find(e => e.id === "BS-1004")!;
+    const entry = { id: "t-1", employeeId: "BS-1004", date: "2026-10-16", clockIn: "2026-10-16T03:00:00.000Z", clockOut: null, breakMinutes: 0, workMode: "Office", log: null };
+    const options = [{ id: "d-1", name: "Central R&D" }];
+    getSession.mockResolvedValue(session);
+    listFor.mockResolvedValue([]);
+    getFor.mockResolvedValue(mine);
+    attendanceListFor.mockResolvedValue([entry]);
+    departmentOptions.mockResolvedValue(options);
+    render(await Home());
+    const myRecord = myRecordProp();
+    expect(myRecord?.employee).toBe(mine);
+    expect(myRecord?.entries).toEqual([entry]);
+    expect(myRecord?.departmentOptions).toEqual(options);
+    expect(typeof myRecord?.serverNow).toBe("string");
+    expect(myRecord?.current).toBeInstanceOf(Promise);
+    expect(getFor).toHaveBeenCalledWith(own, "BS-1004");
+    expect(attendanceListFor).toHaveBeenCalledWith(own, "BS-1004");
+    expect(currentFor).toHaveBeenCalledWith(own, ["BS-1004"]);
+    // The own reads never use the management identity.
+    expect(getFor.mock.calls.every(([s]) => JSON.stringify(s) === JSON.stringify(own))).toBe(true);
+    expect(attendanceListFor.mock.calls.every(([s]) => JSON.stringify(s) === JSON.stringify(own))).toBe(true);
+    departmentOptions.mockReset(); departmentOptions.mockResolvedValue([]);
+  });
+
+  it("keeps the manager's own interviews in myRecord while the employees list stays interview-free", async () => {
+    const { employees } = await import("@/data/employees");
+    const withInterviews = employees.filter(e => e.interviews.length > 0).slice(0, 2);
+    const mine = withInterviews[0];
+    getSession.mockResolvedValue({ role: "manager", employeeId: mine.id, userId: "u-1" });
+    listFor.mockResolvedValue(withInterviews);
+    getFor.mockResolvedValue(mine);
+    render(await Home());
+    const props = portalProps.mock.calls.at(-1)?.[0] as { employees: { interviews: unknown[] }[]; myRecord: MyRecord };
+    expect(props.employees.every(e => e.interviews.length === 0)).toBe(true);
+    expect(props.myRecord.employee.interviews).toEqual(mine.interviews);
+    expect(props.myRecord.employee.interviews.length).toBeGreaterThan(0);
+  });
+
+  it("leaves myRecord undefined for an unlinked Administrator, with no own-record reads", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    render(await Home());
+    expect(myRecordProp()).toBeUndefined();
+    expect(getFor).not.toHaveBeenCalled();
+    expect(attendanceListFor).not.toHaveBeenCalled();
+    expect(departmentOptions).not.toHaveBeenCalled();
+  });
+
+  it("omits myRecord when the own employee read returns null", async () => {
+    getSession.mockResolvedValue({ role: "admin", employeeId: "BS-1004" });
+    listFor.mockResolvedValue([]);
+    getFor.mockResolvedValue(null);
+    render(await Home());
+    expect(screen.getByText("Employee directory")).toBeInTheDocument();
+    expect(myRecordProp()).toBeUndefined();
+  });
+
+  it("shows the existing unavailable pages when an own-record read fails", async () => {
+    getSession.mockResolvedValue({ role: "manager", employeeId: "BS-1004", userId: "u-1" });
+    listFor.mockResolvedValue([]);
+    getFor.mockResolvedValue(null);
+    attendanceListFor.mockRejectedValue(new AttendanceUnavailableError());
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/attendance is unavailable/i);
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+  });
+
+  it("shows the employee-records alert when the own employee read fails", async () => {
+    getSession.mockResolvedValue({ role: "admin", employeeId: "BS-1004" });
+    listFor.mockResolvedValue([]);
+    getFor.mockRejectedValue(new EmployeesUnavailableError());
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/employee records are unavailable/i);
   });
 });
