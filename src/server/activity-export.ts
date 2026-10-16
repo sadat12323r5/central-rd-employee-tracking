@@ -10,6 +10,7 @@ import { AttendanceUnavailableError, type AttendanceStore } from "./attendance-s
 import { AuditEmployeeNotFoundError, AuditUnavailableError, AuditValidationError, type AuditStore } from "./audit-store";
 import { EmployeesUnavailableError, type EmployeesStore } from "./employees-store";
 import { InterviewsUnavailableError, type InterviewsStore } from "./interviews-store";
+import { ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { SessionIdentity } from "./session";
 import { TrainingUnavailableError, type TrainingStore } from "./training-store";
 
@@ -21,10 +22,16 @@ import { TrainingUnavailableError, type TrainingStore } from "./training-store";
 //
 // Story 8.2 adds the bulk export (exportAllActivity): the same pipeline for every employee, each source
 // read once for the whole export (paged by the stores), one audit row for the whole file.
+//
+// Story 8.3 opens both exports to department managers, scoped to their department subtree through the
+// session-aware stores (Story 4.3). A manager's export never contains interview rows: the interviews
+// store is not even called for them (on top of it returning [] for managers). A manager's single export
+// is audited like the Administrator's (target = the employee); a manager's bulk export records the
+// subtree's department ids, read during the export, through record_department_activity_export.
 
 export type ActivityExportDeps = {
   employees: Pick<EmployeesStore, "getFor">;
-  attendance: Pick<AttendanceStore, "listForEmployee">;
+  attendance: Pick<AttendanceStore, "listFor">;
   interviews: Pick<InterviewsStore, "listFor">;
   training: Pick<TrainingStore, "listFor" | "currentFor">;
   audit: Pick<AuditStore, "recordActivityExport">;
@@ -35,19 +42,22 @@ export type BulkActivityExportDeps = {
   employees: Pick<EmployeesStore, "listFor">;
   attendance: Pick<AttendanceStore, "listAll">;
   training: Pick<TrainingStore, "currentFor">;
-  audit: Pick<AuditStore, "recordBulkActivityExport">;
+  audit: Pick<AuditStore, "recordBulkActivityExport" | "recordDepartmentActivityExport">;
+  /** The manager's subtree (Story 8.3): its department ids are the audit scope of a manager's bulk export. */
+  scope: Pick<ManagerScope, "forManager">;
 };
 
 export type ActivityExport = { csv: string; filename: string; from: string; to: string };
 
-export const NOT_ADMIN = "Only an Administrator can export activity.";
+export const NOT_ALLOWED = "Only an Administrator or a department manager can export activity.";
+export const OUT_OF_SCOPE = "You can only export employees in your own department or its sub-departments.";
 export const UNKNOWN_EMPLOYEE = "Choose an existing employee.";
 export const UNAVAILABLE = "Activity could not be exported because a record source is unavailable. Nothing was downloaded. Please try again.";
 
-/** Only an Administrator session may export. */
+/** Only an Administrator or a department manager may export; a manager only within their subtree. */
 export class ActivityForbiddenError extends Error {
-  constructor() {
-    super(NOT_ADMIN);
+  constructor(message: string = NOT_ALLOWED) {
+    super(message);
     this.name = "ActivityForbiddenError";
   }
 }
@@ -147,19 +157,26 @@ function fixedPeriod(input: PeriodInput, today: string): Period | undefined {
 
 const UNAVAILABLE_ERRORS = [
   AttendanceUnavailableError, InterviewsUnavailableError, TrainingUnavailableError, EmployeesUnavailableError, AuditUnavailableError,
+  ManagerScopeUnavailableError,
 ];
+
+/** Who may export at all (Story 8.3): the Administrator and department managers. */
+export const mayExport = (session: SessionIdentity) => session.role === "admin" || session.role === "manager";
 const isUnavailable = (error: unknown) => UNAVAILABLE_ERRORS.some(type => error instanceof type);
 
 /**
- * Exports one employee's activity timeline for the requested period. `actorId` is the Administrator's
- * auth user id (the audit actor); `now` is the server clock ("today" is its Asia/Dhaka date).
+ * Exports one employee's activity timeline for the requested period. `actorId` is the exporting
+ * Administrator's or manager's auth user id (the audit actor); `now` is the server clock ("today" is its
+ * Asia/Dhaka date). A manager may export only an employee in their subtree (anyone else, or an unknown
+ * id, is refused with OUT_OF_SCOPE before any other read) and never gets interview rows.
  * Throws ActivityForbiddenError, ActivityValidationError, ActivityEmployeeNotFoundError or
  * ActivityUnavailableError; on any of them nothing is returned and no audit row exists.
  */
 export async function exportActivity(
   deps: ActivityExportDeps, session: SessionIdentity, actorId: string, input: ActivityExportInput, now: Date,
 ): Promise<ActivityExport> {
-  if (session.role !== "admin") throw new ActivityForbiddenError();
+  if (!mayExport(session)) throw new ActivityForbiddenError();
+  const manager = session.role === "manager";
   const { employeeId, period: periodInput } = parseInput(input);
   const today = dhakaDate(now);
 
@@ -168,11 +185,13 @@ export async function exportActivity(
 
   try {
     const employee = await deps.employees.getFor(session, employeeId);
-    if (!employee) throw new ActivityEmployeeNotFoundError();
+    // A manager is told only that the employee is out of scope, whether or not the id exists.
+    if (!employee) throw manager ? new ActivityForbiddenError(OUT_OF_SCOPE) : new ActivityEmployeeNotFoundError();
 
     const [attendance, interviews, training, current] = await Promise.all([
-      deps.attendance.listForEmployee(employeeId),
-      deps.interviews.listFor(session, employeeId),
+      deps.attendance.listFor(session, employeeId),
+      // Never read for a manager: interviews are visible only to the employee and the Administrator.
+      manager ? [] : deps.interviews.listFor(session, employeeId),
       deps.training.listFor(session, employeeId),
       deps.training.currentFor(session, [employeeId]),
     ]);
@@ -181,7 +200,7 @@ export async function exportActivity(
     const freshness = current.freshness[employeeId];
     const sources: ActivitySources = {
       attendance: attendance.filter(e => e.employeeId === employeeId),
-      interviews: interviews.filter(i => i.employeeId === employeeId),
+      interviews: manager ? [] : interviews.filter(i => i.employeeId === employeeId),
       training: training.filter(t => t.employeeId === employeeId),
       enrolments: {
         entries: [...current.inProgress, ...current.lmsCompleted].filter(e => e.employeeId === employeeId),
@@ -222,11 +241,15 @@ function combinedSpan(spans: (Period | null)[]): Period | null {
  * employees. One audit row (target `all-employees` or `all-employees+archived`) is written after every
  * read. Throws ActivityForbiddenError, ActivityValidationError or ActivityUnavailableError; on any of
  * them nothing is returned and no audit row exists.
+ *
+ * For a manager (Story 8.3) "every employee" is their subtree (`employees.listFor` is already scoped, and
+ * the result is re-checked against the scope read here), interview rows are always dropped, and the
+ * audit row's target is `departments:<subtree department ids>` (plus `+archived`).
  */
 export async function exportAllActivity(
   deps: BulkActivityExportDeps, session: SessionIdentity, actorId: string, input: BulkActivityExportInput, now: Date,
 ): Promise<ActivityExport> {
-  if (session.role !== "admin") throw new ActivityForbiddenError();
+  if (!mayExport(session)) throw new ActivityForbiddenError();
   const { includeArchived, period: periodInput } = parseBulkInput(input);
   const today = dhakaDate(now);
   const period = fixedPeriod(periodInput, today);
@@ -237,15 +260,21 @@ export async function exportAllActivity(
 
   try {
     // All or nothing: every read must succeed. The LMS is asked only about the included employees.
-    const employeesRead = deps.employees.listFor(session);
-    const [list, attendance, current] = await Promise.all([
-      employeesRead,
+    // A manager's scope is read once: its department ids are the audit scope, its employee ids re-check
+    // the (already scoped) employee list as defence in depth.
+    const scopeRead = session.role === "manager" ? deps.scope.forManager(session) : Promise.resolve(null);
+    const includedRead = Promise.all([deps.employees.listFor(session), scopeRead])
+      .then(([all, scope]) => inScope(scope ? all.filter(e => scope.employeeIds.has(e.id)) : all));
+    const [included, scope, attendance, current] = await Promise.all([
+      includedRead,
+      scopeRead,
       deps.attendance.listAll(),
-      employeesRead.then(all => deps.training.currentFor(session, inScope(all).map(e => e.id))),
+      includedRead.then(list => deps.training.currentFor(session, list.map(e => e.id))),
     ]);
     if (current.status !== "ok") throw new ActivityUnavailableError({ cause: "LMS unavailable" });
+    // A manager with no department in scope (e.g. just unassigned) has nothing to export.
+    if (scope && scope.departmentIds.size === 0) throw new ActivityForbiddenError(OUT_OF_SCOPE);
 
-    const included = inScope(list);
     const attendanceOf = new Map<string, typeof attendance>();
     for (const entry of attendance) {
       const own = attendanceOf.get(entry.employeeId);
@@ -258,7 +287,8 @@ export async function exportAllActivity(
       const freshness = current.freshness[employee.id];
       const sources: ActivitySources = {
         attendance: attendanceOf.get(employee.id) ?? [],
-        interviews: employee.interviews,
+        // Never for a manager, whatever the stores returned.
+        interviews: scope ? [] : employee.interviews,
         training: employee.training,
         enrolments: {
           entries: enrolments.filter(e => e.employeeId === employee.id),
@@ -274,7 +304,12 @@ export async function exportAllActivity(
       buildTimeline({ id: employee.id, name: employee.name }, sources, resolved, now));
     const csv = timelineCsv(rows);
 
-    await deps.audit.recordBulkActivityExport({ actorId, includeArchived, from: resolved.from, to: resolved.to });
+    if (scope) {
+      const departmentIds = [...scope.departmentIds].sort(compare);
+      await deps.audit.recordDepartmentActivityExport({ actorId, departmentIds, includeArchived, from: resolved.from, to: resolved.to });
+    } else {
+      await deps.audit.recordBulkActivityExport({ actorId, includeArchived, from: resolved.from, to: resolved.to });
+    }
     return { csv, filename: activityBulkFilename(resolved), ...resolved };
   } catch (error) {
     if (isUnavailable(error) || error instanceof AuditValidationError || error instanceof AuditEmployeeNotFoundError) {

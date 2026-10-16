@@ -622,7 +622,7 @@ describe("Portal for a department manager (Story 4.2)", () => {
     expect(screen.getByText("Total employees")).toBeInTheDocument();
   });
 
-  it("opens a profile without the Interviews tab, provisioning or activity export, but with Account access (Story 4.9)", async () => {
+  it("opens a profile without the Interviews tab or provisioning, but with Account access (Story 4.9) and the department export (Story 8.3)", async () => {
     const user = userEvent.setup();
     await show(<Portal role="manager" employees={own} current={none()} />);
     await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
@@ -630,7 +630,7 @@ describe("Portal for a department manager (Story 4.2)", () => {
     expect(tabs.queryByRole("tab", { name: "Interviews" })).not.toBeInTheDocument();
     expect(tabs.getByRole("tab", { name: "Training" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Sign-in account" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Download activity" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archive employee" })).toBeInTheDocument();
     expect(screen.queryByText(/Northstar Labs/)).not.toBeInTheDocument();
@@ -1227,5 +1227,38 @@ describe("Interview privacy for managers (Story 4.4)", () => {
     await user.click(screen.getByRole("tab", { name: "Interviews" }));
     expect(within(screen.getByRole("tabpanel")).getByText(SECRET[0])).toBeInTheDocument();
     expect(within(screen.getByRole("tabpanel")).getByText(SECRET[4])).toBeInTheDocument();
+  });
+});
+
+describe("Portal activity export for a department manager (Story 8.3)", () => {
+  const own = employees.filter(e => e.id === "BS-1001");
+
+  it("offers Download activity on a profile's Overview, saying interviews are not included, without provisioning (Account access is Story 4.9's)", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    expect(screen.getByRole("heading", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download activity" })).toBeInTheDocument();
+    expect(screen.getByText("Interviews are not included in a department manager's export.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign-in account" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
+  });
+
+  it("offers Download activity (your departments) in the Employees section", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={own} current={none()} />);
+    await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: /Employees/ }));
+    expect(screen.getByRole("heading", { name: "Download activity (your departments)" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Download activity (all employees)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Include archived" })).toBeInTheDocument();
+    expect(screen.getByText("Interviews are not included in a department manager's export.")).toBeInTheDocument();
+  });
+
+  it("keeps the Administrator's panels unchanged, with no manager note", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={own} current={none()} />);
+    await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: /Employees/ }));
+    expect(screen.getByRole("heading", { name: "Download activity (all employees)" })).toBeInTheDocument();
+    expect(screen.queryByText(/Interviews are not included/)).not.toBeInTheDocument();
   });
 });

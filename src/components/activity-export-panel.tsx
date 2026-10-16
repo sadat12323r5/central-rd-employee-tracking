@@ -41,18 +41,20 @@ async function submit(previous: ActivityExportState, form: FormData): Promise<Ac
 }
 
 /**
- * Administrator-only: download one employee's activity timeline (attendance, interviews, training and
+ * Administrator and department managers: download one employee's activity timeline (attendance, interviews, training and
  * LMS enrolments) for a chosen period as a CSV. The form sends only the Employee ID and the period;
- * the acting Administrator is taken from the session at the server, which also audits the export.
+ * the acting Administrator or department manager is taken from the session at the server, which also audits the export.
  * Without an `employeeId` (Story 8.2, on the directory) it is the bulk export of every employee, with an
  * "Include archived" checkbox.
+ * With `manager` (Story 8.3) only the heading and the notes change: the bulk export covers the manager's
+ * departments, and the panel says interviews are not included. The server enforces both, whatever the UI sends.
  */
-export default function ActivityExportPanel({ employeeId }: { employeeId?: string }) {
+export default function ActivityExportPanel({ employeeId, manager = false }: { employeeId?: string; manager?: boolean }) {
   const bulk = employeeId === undefined;
-  const title = bulk ? "Download activity (all employees)" : "Download activity";
+  const title = bulk ? (manager ? "Download activity (your departments)" : "Download activity (all employees)") : "Download activity";
   const [state, action, pending] = useActionState(submit, initial);
   // Submitted by hand rather than through `<form action>`, so React does not reset the form after the
-  // action: the chosen period and the controlled "Include archived" box stay as the Administrator left them.
+  // action: the chosen period and the controlled "Include archived" box stay as the Administrator or department manager left them.
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -68,10 +70,15 @@ export default function ActivityExportPanel({ employeeId }: { employeeId?: strin
     <article className="panel account-panel activity-export-panel">
       <h2>{title}</h2>
       <p className="muted">
-        {bulk
-          ? "Every employee's attendance, interviews, training and LMS enrolments in one CSV, one row per event, sorted by employee then date. Archived employees are left out unless included. Every download is recorded in the audit log."
-          : "Attendance, interviews, training and LMS enrolments in one CSV, one row per event. Every download is recorded in the audit log."}
+        {manager
+          ? bulk
+            ? "Attendance, training and LMS enrolments of everyone in your departments and their sub-departments in one CSV, one row per event, sorted by employee then date. Archived employees are left out unless included. Every download is recorded in the audit log."
+            : "Attendance, training and LMS enrolments in one CSV, one row per event. Every download is recorded in the audit log."
+          : bulk
+            ? "Every employee's attendance, interviews, training and LMS enrolments in one CSV, one row per event, sorted by employee then date. Archived employees are left out unless included. Every download is recorded in the audit log."
+            : "Attendance, interviews, training and LMS enrolments in one CSV, one row per event. Every download is recorded in the audit log."}
       </p>
+      {manager && <p className="muted">Interviews are not included in a department manager's export.</p>}
       {state.message && <p role="status" className="notice">{state.message}</p>}
       <form onSubmit={onSubmit} className="account-form">
         {!bulk && <input type="hidden" name="employeeId" value={employeeId} />}

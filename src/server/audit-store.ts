@@ -6,12 +6,18 @@ import { isCalendarDate } from "@/domain/dates";
 // `record_activity_export`, which appends one `audit_events` row (actor, target employee,
 // `export_activity`, period). audit_events is append-only with RLS on and no policies, so the client
 // passed in must be the service-role client; the export action uses it only after the caller's
-// Administrator session was checked. Story 8.2 adds the bulk export (every employee), recorded through
-// `record_bulk_activity_export` with the target `all-employees` or `all-employees+archived`.
+// Administrator or department manager session was checked. Story 8.2 adds the bulk export (every employee), recorded through
+// `record_bulk_activity_export` with the target `all-employees` or `all-employees+archived`. Story 8.3
+// adds a department manager's bulk export, recorded through `record_department_activity_export` with
+// the target `departments:<the subtree's department ids>` (plus `+archived`).
 
 export type ActivityExportAudit = { actorId: string; employeeId: string; from: string; to: string };
 
 export type BulkActivityExportAudit = { actorId: string; includeArchived: boolean; from: string; to: string };
+
+export type DepartmentActivityExportAudit = {
+  actorId: string; departmentIds: string[]; includeArchived: boolean; from: string; to: string;
+};
 
 export interface AuditStore {
   /** Appends one `export_activity` audit row. Throws a typed error when nothing was recorded. */
@@ -21,6 +27,11 @@ export interface AuditStore {
    * `all-employees+archived`). Throws a typed error when nothing was recorded.
    */
   recordBulkActivityExport(input: BulkActivityExportAudit): Promise<void>;
+  /**
+   * Appends one `export_activity` audit row for a department manager's bulk export, target
+   * `departments:<ids sorted, comma-separated>` (plus `+archived`). Throws a typed error when nothing was recorded.
+   */
+  recordDepartmentActivityExport(input: DepartmentActivityExportAudit): Promise<void>;
 }
 
 /** The audit log is unreachable or refused the write. Nothing was recorded. */
@@ -63,6 +74,14 @@ const bulkExportInput = z.object({
   to: calendarDate,
 }).refine(input => input.from <= input.to, { path: ["to"] });
 
+const departmentExportInput = z.object({
+  actorId: z.uuid(),
+  departmentIds: z.array(z.uuid()).min(1),
+  includeArchived: z.boolean(),
+  from: calendarDate,
+  to: calendarDate,
+}).refine(input => input.from <= input.to, { path: ["to"] });
+
 /** The offending input names of a failed parse, for AuditValidationError. */
 const fieldsOf = (error: z.ZodError) => [...new Set(error.issues.map(i => String(i.path[0] ?? "input")))];
 
@@ -94,6 +113,14 @@ export function createAuditStore(getClient: () => SupabaseClient): AuditStore {
       if (!parsed.success) throw new AuditValidationError(fieldsOf(parsed.error));
       const { actorId, includeArchived, from, to } = parsed.data;
       await call("record_bulk_activity_export", { p_actor: actorId, p_include_archived: includeArchived, p_from: from, p_to: to });
+    },
+    async recordDepartmentActivityExport(input) {
+      const parsed = departmentExportInput.safeParse(input);
+      if (!parsed.success) throw new AuditValidationError(fieldsOf(parsed.error));
+      const { actorId, departmentIds, includeArchived, from, to } = parsed.data;
+      await call("record_department_activity_export", {
+        p_actor: actorId, p_department_ids: departmentIds, p_include_archived: includeArchived, p_from: from, p_to: to,
+      });
     },
   };
 }
