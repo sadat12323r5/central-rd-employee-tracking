@@ -36,3 +36,14 @@ export function formatDisplayDateTime(value: string): string {
   const parts = Object.fromEntries(DHAKA_PARTS.formatToParts(new Date(time)).map(p => [p.type, p.value]));
   return `${formatDisplayDate(`${parts.year}-${parts.month}-${parts.day}`)}, ${parts.hour}:${parts.minute}`;
 }
+
+/**
+ * The calendar day of an instant (ISO 8601 timestamp) in the Asia/Dhaka org timezone, as `D MMM YYYY`, e.g.
+ * `2026-10-15T20:00:00Z` → `16 Oct 2026`; anything unparseable → `Not recorded`.
+ */
+export function formatDisplayDay(value: string): string {
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) return "Not recorded";
+  const parts = Object.fromEntries(DHAKA_PARTS.formatToParts(new Date(time)).map(p => [p.type, p.value]));
+  return formatDisplayDate(`${parts.year}-${parts.month}-${parts.day}`);
+}

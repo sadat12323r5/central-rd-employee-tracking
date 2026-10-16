@@ -98,7 +98,9 @@ test("a manager creates, updates and closes an assignment; a second open one is 
     const item = panel.getByRole("list", { name: "Closed assignments" }).getByRole("listitem").filter({ has: page.getByRole("heading", { name: project }) });
     await expect(item).toContainText("Closed");
     await expect(item).toContainText("1 Oct 2026 – 10 Oct 2026");
-    await expect(item.getByRole("button")).toHaveCount(0);
+    // No note edit or close control on a closed one (Story 4.6 adds only its evaluation form).
+    await expect(item.getByRole("button", { name: /Save update|Close assignment/ })).toHaveCount(0);
+    await expect(item.getByLabel("Latest update")).toHaveCount(0);
 
     // Another open assignment appears meanwhile (say, another manager): this form's create is rejected.
     const again = panel.getByRole("form", { name: "Create an assignment" });

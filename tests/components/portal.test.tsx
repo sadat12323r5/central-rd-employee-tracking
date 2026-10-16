@@ -22,14 +22,19 @@ vi.mock("@/server/assignment-actions", () => ({
   updateAssignmentNoteAction: vi.fn(async () => ({ error: "", message: "Latest update saved." })),
   closeAssignmentAction: vi.fn(async () => ({ error: "", message: "Assignment closed." })),
 }));
+vi.mock("@/server/assignment-evaluation-actions", () => ({
+  createEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation saved." })),
+  amendEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation updated." })),
+}));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 
 import Portal from "@/components/portal";
-import { employees, type Assignment } from "@/data/employees";
+import { employees, type Assignment, type AssignmentEvaluation } from "@/data/employees";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
+import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 
 /** LMS answers as page.tsx passes them: a promise that always resolves. */
@@ -844,8 +849,10 @@ describe("Portal Current work tab (Story 4.5)", () => {
     expect(within(item).getByRole("heading", { name: "Legacy migration" })).toBeInTheDocument();
     expect(within(item).getByText("Closed")).toBeInTheDocument();
     expect(within(item).getByText(/1 Mar 2026 – 31 Aug 2026/)).toBeInTheDocument();
-    expect(within(item).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(item).queryByRole("textbox")).not.toBeInTheDocument();
+    // No note edit or close control on a closed one (Story 4.6 adds only its evaluation form).
+    expect(within(item).queryByRole("button", { name: /Save update|Close assignment/ })).not.toBeInTheDocument();
+    expect(within(item).queryByLabelText("Latest update")).not.toBeInTheDocument();
+    expect(within(item).queryByLabelText("Completion date")).not.toBeInTheDocument();
     // The only edit and close controls belong to the open assignment.
     expect(screen.getAllByRole("button", { name: "Close assignment" })).toHaveLength(1);
   });
@@ -872,6 +879,124 @@ describe("Portal Current work tab (Story 4.5)", () => {
 
   it("has no detectable accessibility violations on the Current work tab", async () => {
     const { container } = await openWork([assignment(), closedOne]);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("Portal assignment evaluations (Story 4.6)", () => {
+  const CRD = "de9a0000-0000-4000-8000-000000000002";
+  const LND = "de9a0000-0000-4000-8000-000000000001";
+  const MANAGER_USER = "aaaa0000-0000-4000-8000-0000000000a2";
+  const ADMIN_USER = "aaaa0000-0000-4000-8000-0000000000ad";
+  const departments = [
+    { id: CRD, name: "Central R&D", parentId: LND, managerUserId: MANAGER_USER, managerEmployeeId: "BS-1002" },
+    { id: LND, name: "L&D", parentId: null, managerUserId: ADMIN_USER, managerEmployeeId: null },
+  ];
+  const open: Assignment = {
+    id: "5e000000-0000-4000-8000-000000000001", employeeId: "BS-1001", departmentId: CRD, client: "Not recorded",
+    projectName: "Customer experience platform", role: "Software Engineer I", allocation: 80, startDate: "2026-09-14",
+    latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-10-14T00:00:00Z", closedAt: null,
+  };
+  const closed: Assignment = {
+    ...open, id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)", status: "closed",
+    startDate: "2026-03-01", completionDate: "2026-08-31", closedAt: "2026-09-01T00:00:00Z",
+  };
+  const evaluation = (extra: Partial<AssignmentEvaluation> = {}): AssignmentEvaluation => ({
+    id: "e0000000-0000-4000-8000-000000000001", assignmentId: closed.id, employeeId: "BS-1001", departmentId: CRD,
+    evaluation: "Delivered the migration on time.", clientFeedback: "The client praised the hand-over.",
+    createdBy: MANAGER_USER, createdAt: "2026-10-16T04:00:00Z", authoredBy: MANAGER_USER, updatedAt: "2026-10-16T04:00:00Z", ...extra,
+  });
+  const list = (evaluations: AssignmentEvaluation[]) => employees.map(e => ({
+    ...e, departmentId: CRD, assignments: e.id === "BS-1001" ? [open, closed] : [], evaluations: e.id === "BS-1001" ? evaluations : [],
+  }));
+
+  async function openWork(evaluations: AssignmentEvaluation[], role: "admin" | "manager" = "admin") {
+    const user = userEvent.setup();
+    const result = await show(<Portal role={role} employees={list(evaluations)} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: "View Nadia Rahman's profile" }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    const item = within(screen.getByRole("list", { name: "Closed assignments" })).getByRole("listitem");
+    return { user, item, ...result };
+  }
+
+  afterEach(() => vi.clearAllMocks());
+
+  it("offers the write form on a closed assignment only, never on the open one", async () => {
+    const { item } = await openWork([]);
+    expect(within(item).getByText("Not evaluated yet.")).toBeInTheDocument();
+    expect(within(item).getByText("Write evaluation")).toBeInTheDocument();
+    expect(within(item).getByRole("form", { name: "Write evaluation for Legacy migration" })).toBeInTheDocument();
+    // Exactly one evaluation form on the tab: the open assignment gets none.
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getAllByRole("form", { name: /evaluation/i })).toHaveLength(1);
+    const current = within(panel).getByRole("heading", { name: "Customer experience platform" }).closest("article")!;
+    expect(within(current).queryByLabelText("Evaluation")).not.toBeInTheDocument();
+  });
+
+  it("writes an evaluation with client feedback by keyboard, naming only the assignment", async () => {
+    const { user, item } = await openWork([]);
+    await user.click(within(item).getByText("Write evaluation"));
+    await user.type(within(item).getByLabelText("Evaluation"), "Delivered the migration on time.");
+    await user.type(within(item).getByLabelText("Client feedback (optional)"), "The client praised the hand-over.");
+    await user.click(within(item).getByRole("button", { name: "Save evaluation" }));
+    expect(createEvaluationAction).toHaveBeenCalledTimes(1);
+    expect(Object.fromEntries((vi.mocked(createEvaluationAction).mock.calls[0][1] as FormData).entries())).toEqual({
+      assignmentId: closed.id, mode: "create", evaluation: "Delivered the migration on time.", clientFeedback: "The client praised the hand-over.",
+    });
+    expect(await within(item).findByRole("status")).toHaveTextContent("Evaluation saved.");
+    expect(amendEvaluationAction).not.toHaveBeenCalled();
+  });
+
+  it("shows the saved evaluation with its authorship, and the form becomes Amend evaluation", async () => {
+    const { item, rerender } = await openWork([]);
+    await act(async () => { rerender(<Portal employees={list([evaluation()])} departments={departments} current={none()} />); });
+    const shown = within(item).getByRole("region", { name: "Recorded evaluation" });
+    expect(within(shown).getByText("Delivered the migration on time.")).toBeInTheDocument();
+    expect(within(shown).getByText("The client praised the hand-over.")).toBeInTheDocument();
+    expect(within(item).getByText("Written by Arif Hasan on 16 Oct 2026")).toBeInTheDocument();
+    expect(within(item).getByText("Amend evaluation")).toBeInTheDocument();
+    expect(within(item).queryByText("Write evaluation")).not.toBeInTheDocument();
+    expect(within(item).getByLabelText("Evaluation")).toHaveValue("Delivered the migration on time.");
+    expect(within(item).queryByText(MANAGER_USER)).not.toBeInTheDocument();
+  });
+
+  it("amends through the amend action and shows who amended it", async () => {
+    const amended = evaluation({ authoredBy: ADMIN_USER, updatedAt: "2026-10-17T05:00:00Z", clientFeedback: "" });
+    const { user, item } = await openWork([amended]);
+    expect(within(item).getByText("Written by Arif Hasan on 16 Oct 2026 · amended by the Administrator on 17 Oct 2026")).toBeInTheDocument();
+    expect(within(item).getByText("No client feedback recorded.")).toBeInTheDocument();
+    await user.click(within(item).getByText("Amend evaluation"));
+    const text = within(item).getByLabelText("Evaluation");
+    await user.clear(text);
+    await user.type(text, "Revised after the client call.");
+    await user.click(within(item).getByRole("button", { name: "Save amendment" }));
+    expect(Object.fromEntries((vi.mocked(amendEvaluationAction).mock.calls[0][1] as FormData).entries())).toMatchObject({
+      assignmentId: closed.id, mode: "amend", evaluation: "Revised after the client call.",
+    });
+    expect(await within(item).findByRole("status")).toHaveTextContent("Evaluation updated.");
+    expect(createEvaluationAction).not.toHaveBeenCalled();
+  });
+
+  it("falls back to role words when the author cannot be named, never a raw id", async () => {
+    const { item } = await openWork([evaluation({ createdBy: "bbbb0000-0000-4000-8000-000000000001", authoredBy: "bbbb0000-0000-4000-8000-000000000001" })]);
+    expect(within(item).getByText("Written by a manager or the Administrator on 16 Oct 2026")).toBeInTheDocument();
+    expect(within(item).queryByText(/bbbb0000/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's refusal and keeps what was typed", async () => {
+    vi.mocked(createEvaluationAction).mockResolvedValueOnce({ error: "Close the assignment before evaluating it.", message: "" });
+    const { user, item } = await openWork([], "manager");
+    await user.click(within(item).getByText("Write evaluation"));
+    await user.type(within(item).getByLabelText("Evaluation"), "Unsaved words.");
+    await user.type(within(item).getByLabelText("Client feedback (optional)"), "Unsaved feedback.");
+    await user.click(within(item).getByRole("button", { name: "Save evaluation" }));
+    expect(await within(item).findByRole("alert")).toHaveTextContent("Close the assignment before evaluating it.");
+    expect(within(item).getByLabelText("Evaluation")).toHaveValue("Unsaved words.");
+    expect(within(item).getByLabelText("Client feedback (optional)")).toHaveValue("Unsaved feedback.");
+  });
+
+  it("has no detectable accessibility violations with an evaluation shown", async () => {
+    const { container } = await openWork([evaluation()]);
     expect(await axe(container)).toHaveNoViolations();
   });
 });

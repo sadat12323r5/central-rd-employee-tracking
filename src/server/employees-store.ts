@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { employees as fixture, type Employee } from "@/data/employees";
+import {
+  assignmentEvaluationsStore, EvaluationsUnavailableError, type AssignmentEvaluation, type AssignmentEvaluationsStore,
+} from "./assignment-evaluations-store";
 import { assignmentsStore, AssignmentsUnavailableError, type Assignment, type AssignmentsStore } from "./assignments-store";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
@@ -26,6 +29,7 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // computed fresh on each call), archived ones included and flagged, with their department; never
 // `auth_user_id` and never interviews. RLS (employees_select_managed) bounds the same rows.
 // Story 4.5: every role's profiles carry their assignments (scoped the same way by assignments-store).
+// Story 4.6: and the evaluations of those assignments (scoped by assignment-evaluations-store).
 export interface EmployeesStore {
   /** Every employee for an admin; the department subtree's employees for a manager; only the caller's own record for staff. */
   listFor(session: SessionIdentity): Promise<Employee[]>;
@@ -93,7 +97,7 @@ function nestedFor(id: string): NestedProfile {
  */
 export function toEmployee(
   row: EmployeeRow, view: EmployeeView | boolean = "basic", interviews: Employee["interviews"] = [], training: Employee["training"] = [],
-  assignments: Employee["assignments"] = [],
+  assignments: Employee["assignments"] = [], evaluations: Employee["evaluations"] = [],
 ): Employee {
   const mode = view === true ? "admin" : view === false ? "basic" : view;
   return {
@@ -106,6 +110,7 @@ export function toEmployee(
     training,
     interviews,
     assignments,
+    evaluations,
   };
 }
 
@@ -121,6 +126,10 @@ const trainingOf = (all: TrainingEntry[], employeeId: string): Employee["trainin
 const assignmentsOf = (all: Assignment[], employeeId: string): Employee["assignments"] =>
   all.filter(a => a.employeeId === employeeId);
 
+/** The assignment evaluations of one employee (Story 4.6). */
+const evaluationsOf = (all: AssignmentEvaluation[], employeeId: string): Employee["evaluations"] =>
+  all.filter(e => e.employeeId === employeeId);
+
 type Result<T> = { data: T | null; error: unknown };
 
 export type EmployeesStoreClients = {
@@ -132,11 +141,13 @@ export type EmployeesStoreClients = {
   training: Pick<TrainingStore, "listFor">;
   /** Story 4.5: where profile assignments come from (RLS-scoped through the same per-request JWT). */
   assignments: Pick<AssignmentsStore, "listFor">;
+  /** Story 4.6: where profile assignment evaluations come from (RLS-scoped through the same per-request JWT). */
+  evaluations: Pick<AssignmentEvaluationsStore, "listFor">;
   /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
   scope?: ManagerScope;
 };
 
-export function createEmployeesStore({ userClient, interviews, training, assignments, scope = managerScope }: EmployeesStoreClients): EmployeesStore {
+export function createEmployeesStore({ userClient, interviews, training, assignments, evaluations, scope = managerScope }: EmployeesStoreClients): EmployeesStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T | null> {
     let result: Result<T>;
     try {
@@ -178,6 +189,16 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
     }
   }
 
+  /** A failed evaluations read makes the whole record unavailable: never a profile with missing evaluations. */
+  async function evaluationsFor(session: SessionIdentity, employeeId?: string): Promise<AssignmentEvaluation[]> {
+    try {
+      return await evaluations.listFor(session, employeeId);
+    } catch (cause) {
+      if (cause instanceof EvaluationsUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   const columnsFor = (session: SessionIdentity) => (session.role === "admin" ? ADMIN_COLUMNS : COLUMNS);
 
   /** The employee ids in a manager's subtree. A scope that cannot be read makes the records unavailable: never a partial list. */
@@ -194,7 +215,7 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
   async function listForManager(session: ManagerIdentity): Promise<Employee[]> {
     const ids = await managedEmployeeIds(session);
     if (ids.size === 0) return [];
-    const [rows, allTraining, allAssignments] = await Promise.all([
+    const [rows, allTraining, allAssignments, allEvaluations] = await Promise.all([
       // Paged (Story 8.2) like the Administrator list: employee_id is the primary key, so the order is total.
       readAllPages(async (from, to) => {
         const page = await run<EmployeeRow[]>(t => t.select(MANAGER_COLUMNS).in("employee_id", [...ids])
@@ -204,10 +225,14 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
       }),
       trainingFor(session),
       assignmentsFor(session),
+      evaluationsFor(session),
     ]);
     // Defence in depth: never a row outside the scope, whatever the query returned.
     return rows.filter(row => ids.has(row.employee_id))
-      .map(row => toEmployee(row, "manager", [], trainingOf(allTraining, row.employee_id), assignmentsOf(allAssignments, row.employee_id)));
+      .map(row => toEmployee(
+        row, "manager", [], trainingOf(allTraining, row.employee_id), assignmentsOf(allAssignments, row.employee_id),
+        evaluationsOf(allEvaluations, row.employee_id),
+      ));
   }
 
   async function getForManager(session: ManagerIdentity, id: string): Promise<Employee | null> {
@@ -215,15 +240,17 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
     if (!(await managedEmployeeIds(session)).has(id)) return null;
     const row = await run<EmployeeRow>(t => t.select(MANAGER_COLUMNS).eq("employee_id", id).maybeSingle<EmployeeRow>());
     if (!row) return null;
-    const [ownTraining, ownAssignments] = await Promise.all([trainingFor(session, id), assignmentsFor(session, id)]);
-    return toEmployee(row, "manager", [], trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id));
+    const [ownTraining, ownAssignments, ownEvaluations] = await Promise.all([
+      trainingFor(session, id), assignmentsFor(session, id), evaluationsFor(session, id),
+    ]);
+    return toEmployee(row, "manager", [], trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id), evaluationsOf(ownEvaluations, id));
   }
 
   return {
     async listFor(session) {
       if (session.role === "manager") return listForManager(session);
       // One interviews, one training and one assignments read for the whole list: everyone's for an admin, the caller's own for staff.
-      const [rows, all, allTraining, allAssignments] = await Promise.all([
+      const [rows, all, allTraining, allAssignments, allEvaluations] = await Promise.all([
         // Paged (Story 8.2): one request is capped at PostgREST's max_rows. employee_id is the primary
         // key, so ordering by it alone is total.
         readAllPages(async (from, to) => {
@@ -238,10 +265,11 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
         interviewsFor(session),
         trainingFor(session),
         assignmentsFor(session),
+        evaluationsFor(session),
       ]);
       return rows.map(row => toEmployee(
         row, session.role === "admin", interviewsOf(all, row.employee_id), trainingOf(allTraining, row.employee_id),
-        assignmentsOf(allAssignments, row.employee_id),
+        assignmentsOf(allAssignments, row.employee_id), evaluationsOf(allEvaluations, row.employee_id),
       ));
     },
     async getFor(session, id) {
@@ -249,8 +277,13 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
       if (session.role !== "admin" && id !== session.employeeId) return null;
       const row = await run<EmployeeRow>(t => t.select(columnsFor(session)).eq("employee_id", id).maybeSingle<EmployeeRow>());
       if (!row) return null;
-      const [own, ownTraining, ownAssignments] = await Promise.all([interviewsFor(session, id), trainingFor(session, id), assignmentsFor(session, id)]);
-      return toEmployee(row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id));
+      const [own, ownTraining, ownAssignments, ownEvaluations] = await Promise.all([
+        interviewsFor(session, id), trainingFor(session, id), assignmentsFor(session, id), evaluationsFor(session, id),
+      ]);
+      return toEmployee(
+        row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id),
+        evaluationsOf(ownEvaluations, id),
+      );
     },
     async isActive(session) {
       const row = await run<{ archived_at: string | null }>(t => t.select("archived_at").eq("employee_id", session.employeeId).maybeSingle<{ archived_at: string | null }>());
@@ -261,4 +294,5 @@ export function createEmployeesStore({ userClient, interviews, training, assignm
 
 export const employeesStore: EmployeesStore = createEmployeesStore({
   userClient: getUserClient, interviews: interviewsStore, training: trainingStore, assignments: assignmentsStore,
+  evaluations: assignmentEvaluationsStore,
 });

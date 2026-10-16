@@ -1,15 +1,20 @@
 "use client";
 
 import { useActionState } from "react";
-import type { Assignment } from "@/data/employees";
+import type { Assignment, AssignmentEvaluation } from "@/data/employees";
 import { formatDisplayDate } from "@/domain/dates";
+import { UNKNOWN_AUTHOR, type AuthorName } from "@/domain/evaluations";
+import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import type { ActionState } from "@/server/attendance-actions";
+import EvaluationView from "./evaluation-view";
 
 // Story 4.5: the profile's Current work tab in the management portal (Administrator or a manager over
 // the employee's department). It shows the open assignment, with forms to edit its latest-update note and
 // to close it, or, when nothing is open, a form to create one; then the history of closed assignments,
 // read-only. The department is never chosen here: the server copies the employee's own.
+// Story 4.6: each closed assignment shows its evaluation (with the client's feedback and its authorship)
+// and a form to write it or, once written, to amend it. The open assignment is never offered one.
 
 /** A form's result, stamped so the panel can show the most recent one (forms unmount after a create or close). */
 type Stamped = ActionState & { at: number };
@@ -58,7 +63,62 @@ function StatusLabel({ status }: { status: Assignment["status"] }) {
 
 const date = formatDisplayDate;
 
-export default function AssignmentsPanel({ employeeId, name, assignments, departmentName }: {
+/** The evaluation form's result; a refused entry is kept so it can be shown again. */
+type EvaluationState = ActionState & { values?: { evaluation: string; clientFeedback: string }; attempt: number };
+const evaluationInitial: EvaluationState = { error: "", message: "", attempt: 0 };
+
+async function submitEvaluation(previous: EvaluationState, form: FormData): Promise<EvaluationState> {
+  const write = form.get("mode") === "amend" ? amendEvaluationAction : createEvaluationAction;
+  const result = await write({ error: previous.error, message: previous.message }, form);
+  const text = (key: string) => {
+    const value = form.get(key);
+    return typeof value === "string" ? value : "";
+  };
+  return {
+    ...result, attempt: previous.attempt + 1,
+    values: result.error ? { evaluation: text("evaluation"), clientFeedback: text("clientFeedback") } : undefined,
+  };
+}
+
+/**
+ * Story 4.6: a closed assignment's evaluation, then the form to write it (none yet) or amend it. The
+ * form names only the assignment; the server takes the employee, department and author from elsewhere.
+ */
+function ClosedEvaluation({ assignment, evaluation, authorName }: {
+  assignment: Assignment; evaluation: AssignmentEvaluation | undefined; authorName: AuthorName;
+}) {
+  const [state, submit, saving] = useActionState(submitEvaluation, evaluationInitial);
+  const mode = evaluation ? "amend" : "create";
+  const id = (suffix: string) => `evaluation-${suffix}-${assignment.id}`;
+  const label = evaluation ? "Amend evaluation" : "Write evaluation";
+  return <div className="assignment-evaluation">
+    <EvaluationView evaluation={evaluation} authorName={authorName} />
+    {state.error ? <p role="alert" className="form-error">{state.error}</p> : state.message ? <p role="status" className="staff-status">{state.message}</p> : null}
+    <details key={mode} className="evaluation-editor">
+      <summary>{label}</summary>
+      <form key={`${mode}-${state.attempt}-${evaluation?.updatedAt ?? ""}`} action={submit} className="staff-log"
+        aria-label={`${label} for ${assignment.projectName}`}>
+        <input type="hidden" name="assignmentId" value={assignment.id} />
+        <input type="hidden" name="mode" value={mode} />
+        <div className="staff-field">
+          <label htmlFor={id("text")}>Evaluation</label>
+          <textarea id={id("text")} name="evaluation" maxLength={4000} rows={4} required
+            defaultValue={state.values?.evaluation ?? evaluation?.evaluation ?? ""} />
+        </div>
+        <div className="staff-field">
+          <label htmlFor={id("feedback")}>Client feedback (optional)</label>
+          <textarea id={id("feedback")} name="clientFeedback" maxLength={2000} rows={3}
+            defaultValue={state.values?.clientFeedback ?? evaluation?.clientFeedback ?? ""} />
+        </div>
+        <div className="staff-actions">
+          <button className="primary" disabled={saving}>{saving ? "Saving…" : evaluation ? "Save amendment" : "Save evaluation"}</button>
+        </div>
+      </form>
+    </details>
+  </div>;
+}
+
+export default function AssignmentsPanel({ employeeId, name, assignments, departmentName, evaluations = [], authorName = () => UNKNOWN_AUTHOR }: {
   employeeId: string;
   /** The employee's name, for labels. */
   name: string;
@@ -66,6 +126,10 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
   assignments: Assignment[];
   /** The department's display name. */
   departmentName: (id: string) => string;
+  /** Story 4.6: the employee's assignment evaluations (joined to closed assignments by id). */
+  evaluations?: AssignmentEvaluation[];
+  /** Story 4.6: who an evaluation's author is (never a raw id). */
+  authorName?: AuthorName;
 }) {
   const [created, create, creating] = useActionState(submitCreate, createInitial);
   const [noted, note, noting] = useActionState(submitNote, keptInitial);
@@ -138,13 +202,14 @@ export default function AssignmentsPanel({ employeeId, name, assignments, depart
     </article>
     <article className="panel" aria-labelledby={ids("history-heading")}>
       <h2 id={ids("history-heading")}>Assignment history</h2>
-      <p className="muted">Closed assignments, newest completion first. Kept for the record; read-only.</p>
+      <p className="muted">Closed assignments, newest completion first, each with its evaluation. Kept for the record.</p>
       {history.length === 0 ? <p className="muted">No closed assignments yet.</p> : <ul className="assignment-history" aria-label="Closed assignments">
         {history.map(a => <li key={a.id} className="interview-detail">
           <div className="panel-title"><h3>{a.projectName}</h3><StatusLabel status="closed" /></div>
           <p>{a.role} · {a.client} · {a.allocation}%</p>
           <small>{date(a.startDate)} – {date(a.completionDate ?? "")} · {departmentName(a.departmentId)}</small>
           {a.latestUpdate && <div className="callout">{a.latestUpdate}</div>}
+          <ClosedEvaluation assignment={a} evaluation={evaluations.find(e => e.assignmentId === a.id)} authorName={authorName} />
         </li>)}
       </ul>}
     </article>

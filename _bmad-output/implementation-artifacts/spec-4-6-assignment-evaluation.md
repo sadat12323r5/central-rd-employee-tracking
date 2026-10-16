@@ -2,7 +2,7 @@
 title: 'Story 4.6: Manager evaluates a closed assignment; employee sees it'
 type: 'feature'
 created: '2026-10-16'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '6df80d84bbc0c41b66e8877c72ceea93e3d7d660'
 review_loop_iteration: 0
 followup_review_recommended: false

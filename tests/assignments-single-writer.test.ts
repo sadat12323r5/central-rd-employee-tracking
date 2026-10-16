@@ -1,12 +1,14 @@
 // Single writer (AD-2, Story 4.5): assignments-store.ts is the only file under src/ that mentions the
 // `completion_date` column or writes to the `assignments` table (insert, update, upsert or delete), so
 // only it can set an assignment's status or completion date.
+// Story 4.6: the evaluations store reads its target assignment but never writes the assignments table.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = join(import.meta.dirname, "..");
 const STORE = "src/server/assignments-store.ts";
+const EVALUATIONS_STORE = "src/server/assignment-evaluations-store.ts";
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap(name => {
@@ -39,5 +41,22 @@ describe("assignments single writer", () => {
 
   it("is the only module that names the assignments table at all", () => {
     expect(sources.filter(s => /from\(\s*["'`]assignments["'`]|TABLE\s*=\s*["'`]assignments["'`]/.test(s.text)).map(s => s.file)).toEqual([STORE]);
+  });
+
+  it("has the evaluations store only read assignments, never write them (Story 4.6)", () => {
+    // Code only: comments may name the table freely.
+    const text = (sources.find(s => s.file === EVALUATIONS_STORE)?.text ?? "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(text).not.toBe("");
+    // Every mention of the assignments table is a read through the read() helper.
+    const mentions = text.match(/["'`]assignments["'`]/g) ?? [];
+    const reads = text.match(/\bread<[^>]*>\(\s*["'`]assignments["'`]/g) ?? [];
+    expect(mentions.length).toBeGreaterThan(0);
+    expect(reads).toHaveLength(mentions.length);
+    // Its write() helper only ever targets its own table.
+    expect(text).toMatch(/const TABLE = "assignment_evaluations";/);
+    expect(text).toMatch(/execute\(TABLE, query\)/);
+    expect(WRITES_ASSIGNMENTS.test(text)).toBe(false);
+    // And it never names an assignment's status or completion date in a write.
+    expect(text).not.toMatch(/completion_date|status\s*:\s*["'`]closed/);
   });
 });

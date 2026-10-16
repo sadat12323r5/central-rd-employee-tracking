@@ -331,3 +331,61 @@ describe("StaffAttendance current enrolments (Story 3.2)", () => {
     expect(screen.queryByText("Secure coding basics")).not.toBeInTheDocument();
   });
 });
+
+describe("StaffAttendance My assignments (Story 4.6)", () => {
+  type Assignment = (typeof employee)["assignments"][number];
+  type Evaluation = (typeof employee)["evaluations"][number];
+  const openOne: Assignment = {
+    id: "5e000000-0000-4000-8000-000000000001", employeeId: employee.id, departmentId: "d-1", client: "Northwind (fictional)",
+    projectName: "Portal rebuild", role: "Developer", allocation: 60, startDate: "2026-10-01", latestUpdate: "Sprint two under way.",
+    status: "open", completionDate: null, createdAt: "2026-10-01T00:00:00Z", closedAt: null,
+  };
+  const evaluated: Assignment = {
+    ...openOne, id: "5e000000-0000-4000-8000-000000000002", projectName: "Legacy migration", client: "Harbour Systems (fictional)",
+    status: "closed", startDate: "2026-03-01", completionDate: "2026-08-31", closedAt: "2026-09-01T00:00:00Z", latestUpdate: "",
+  };
+  const notEvaluated: Assignment = { ...evaluated, id: "5e000000-0000-4000-8000-000000000003", projectName: "Data audit", completionDate: "2026-02-28", startDate: "2026-01-10" };
+  const evaluation: Evaluation = {
+    id: "e-1", assignmentId: evaluated.id, employeeId: employee.id, departmentId: "d-1", evaluation: "Delivered the migration on time.",
+    clientFeedback: "The client praised the hand-over.", createdBy: "u-mgr", createdAt: "2026-10-16T04:00:00Z", authoredBy: "u-mgr",
+    updatedAt: "2026-10-16T04:00:00Z",
+  };
+  const withWork = { ...employee, assignments: [openOne, evaluated, notEvaluated], evaluations: [evaluation] };
+  const section = () => screen.getByRole("heading", { name: "My assignments" }).closest("section")!;
+
+  it("lists the open assignment and history with text labels and D MMM YYYY dates", async () => {
+    await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} />);
+    const items = within(within(section()).getByRole("list", { name: "Your assignments" })).getAllByRole("listitem");
+    expect(items.map(i => within(i).getByRole("heading", { level: 3 }).textContent)).toEqual(["Portal rebuild", "Legacy migration", "Data audit"]);
+    expect(within(items[0]).getByText("Open")).toBeInTheDocument();
+    expect(within(items[0]).getByText("Since 1 Oct 2026")).toBeInTheDocument();
+    expect(within(items[1]).getByText("Closed")).toBeInTheDocument();
+    expect(within(items[1]).getByText("1 Mar 2026 – 31 Aug 2026")).toBeInTheDocument();
+    // The open assignment has no evaluation area.
+    expect(within(items[0]).queryByText("Not evaluated yet.")).not.toBeInTheDocument();
+  });
+
+  it("shows each closed assignment's evaluation and client feedback, or that it is not evaluated yet", async () => {
+    await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} />);
+    const items = within(section()).getAllByRole("listitem");
+    expect(within(items[1]).getByText("Delivered the migration on time.")).toBeInTheDocument();
+    expect(within(items[1]).getByText("The client praised the hand-over.")).toBeInTheDocument();
+    expect(within(items[1]).getByText(/^Written by .+ on 16 Oct 2026$/)).toBeInTheDocument();
+    expect(within(items[1]).queryByText(/u-mgr/)).not.toBeInTheDocument();
+    expect(within(items[2]).getByText("Not evaluated yet.")).toBeInTheDocument();
+  });
+
+  it("is read-only: no input, textarea, button or form in the section", async () => {
+    const { container } = await show(<StaffAttendance employee={withWork} entries={[]} serverNow={now} current={none()} />);
+    const area = section();
+    expect(area.querySelectorAll("input, textarea, button, select, form, details")).toHaveLength(0);
+    expect(within(area).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(area).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("says when no assignment has been recorded", async () => {
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    expect(within(section()).getByText("No assignments have been recorded for you yet.")).toBeInTheDocument();
+  });
+});

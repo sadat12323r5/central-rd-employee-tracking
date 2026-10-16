@@ -9,6 +9,17 @@ export type Assignment = {
   completionDate: string | null; createdAt: string; closedAt: string | null;
 };
 
+/**
+ * Story 4.6: the evaluation of one closed assignment (a separate record, AD-2; at most one per assignment).
+ * `employeeId` and `departmentId` are copied from the assignment, never caller-chosen. `createdBy` /
+ * `createdAt` are the first writer; `authoredBy` / `updatedAt` the latest (an amendment). Both authors are
+ * auth user ids taken from the writer's session by the database. Never deleted.
+ */
+export type AssignmentEvaluation = {
+  id: string; assignmentId: string; employeeId: string; departmentId: string; evaluation: string; clientFeedback: string;
+  createdBy: string; createdAt: string; authoredBy: string; updatedAt: string;
+};
+
 export type Employee = {
   id: string; name: string; title: string; team: string; type: string; email: string;
   joined: string; manager: string; location: string; status: "On project" | "In training" | "Available";
@@ -35,6 +46,12 @@ export type Employee = {
    * work" is seed-only (`fixtureCurrentWork`); the fixture's own list is always empty.
    */
   assignments: Assignment[];
+  /**
+   * Story 4.6: the evaluations of the employee's closed assignments, read through
+   * assignment-evaluations-store from the `assignment_evaluations` table (joined to `assignments` by
+   * `assignmentId`). The fixture's own list is always empty.
+   */
+  evaluations: AssignmentEvaluation[];
   /**
    * External interviews (Story 2.1): read from the `external_interviews` table, newest first.
    * `withdrawn` (Story 2.2) marks an entry its author withdrew: it leaves active views but stays in history.
@@ -175,6 +192,7 @@ export const employees: Employee[] = people.map((p, index) => {
     history: [{ role: title, company: "Brain Station 23", period: `${joined} – Present`, detail: `Working with the ${team} team.` }, ...(!junior ? [{ role: index === 1 ? "Junior Data Engineer" : `Associate ${title.replace(/ I+$/, "")}`, company: "Example Digital Ltd. (fictional)", period: "2021 – 2022", detail: "Delivered team projects and developed foundational professional skills." }] : [])],
     training: [{ id: trainingSeedId(id, 0), name: `${skillOne} · practical foundations`, provider: "BS23 Learning & Development", progress: 100, date: "2026-08-20", result: junior ? "Completed · mentor reviewed" : "Completed · assessment passed" }, { id: trainingSeedId(id, 1), name: junior ? "Professional communication" : "Technical leadership & collaboration", provider: "BS23 Learning & Development", progress: 60 + (index % 3) * 10, date: "2026-09-28", result: "In progress" }],
     assignments: [],
+    evaluations: [],
     interviews: index === 2 || index === 5 ? [] : [{ id: interviewSeedId(id, 0), company: ["Northstar Labs", "Orbit Analytics", "", "Cedar Software", "Canvas Digital", "", "Summit Cloud", "Harbour Systems"][index] + " (fictional)", role: title, date: index === 0 ? "2026-09-23" : "2026-09-16", stage: index === 0 ? "Technical interview" : "Technical round completed", outcome: index === 0 ? "Scheduled" : index === 3 ? "Not selected" : "Awaiting feedback", feedback: index === 3 ? "Needs more practice explaining test strategy. Mentor follow-up planned." : "Preparation focus: project examples, technical reasoning and communication. No offer recorded.", withdrawn: false }],
     attendance: { scheduled: 14, worked: index === 2 ? 11 : 12, leave: index === 2 ? 2 : 1, unrecorded: 1, records: [{ date: "2026-09-10", type: "Leave", days: index === 2 ? 2 : 1, status: "Recorded" }, { date: "2026-09-17", type: "Attendance", days: 1, status: "Missing record" }] },
     review: { date: "2026-09-14", reviewer: "Ayesha Karim · L&D Manager", readiness: junior ? "Developing · mentor support" : "Ready for role-matched interviews", strengths: junior ? "Consistent learning progress, asks thoughtful questions and responds well to feedback." : "Clear technical reasoning, collaborative delivery and well-documented project contributions.", next: junior ? "Complete the capstone and practise a short technical presentation." : `Strengthen advanced ${skillTwo} skills and prepare two project case studies.` },

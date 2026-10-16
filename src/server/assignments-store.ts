@@ -112,6 +112,8 @@ export type AssignmentRow = {
 
 const TABLE = "assignments";
 const COLUMNS = "id,employee_id,department_id,client,project_name,role,allocation,start_date,latest_update,status,completion_date,created_at,closed_at";
+/** The assignment columns, for read-only lookups elsewhere (Story 4.6: the evaluations store reads its target assignment). */
+export const ASSIGNMENT_COLUMNS = COLUMNS;
 
 export function toAssignment(row: AssignmentRow): Assignment {
   return {

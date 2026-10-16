@@ -11,6 +11,7 @@ import { addInterviewAction, updateInterviewAction, withdrawInterviewAction } fr
 import { signOut } from "@/server/auth";
 import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
+import EvaluationView from "./evaluation-view";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -109,6 +110,33 @@ function CompletedWithLms({ stored, current, employeeId }: { stored: Training[];
   const result = use(current);
   const fromLms = result.status === "ok" ? result.lmsCompleted.filter(t => t.employeeId === employeeId) : [];
   return <CompletedTable entries={[...stored, ...fromLms]} />;
+}
+
+/**
+ * Story 4.6: the employee's own assignments, read-only: the open one, then history, each closed one with
+ * its evaluation and the client's feedback. No form control: Staff never write assignments or evaluations.
+ */
+function MyAssignments({ employee }: { employee: Employee }) {
+  const assignments = employee.assignments ?? [];
+  const evaluations = employee.evaluations ?? [];
+  return <section className="panel staff-assignments" aria-labelledby="my-assignments-heading">
+    <h2 id="my-assignments-heading">My assignments</h2>
+    <p className="muted">Your current assignment and your assignment history, with your manager&apos;s evaluations. Read-only.</p>
+    {assignments.length === 0 ? <p className="muted">No assignments have been recorded for you yet.</p> : <ul className="assignment-history" aria-label="Your assignments">
+      {assignments.map(a => <li key={a.id} className="interview-detail">
+        <div className="panel-title">
+          <h3>{a.projectName}</h3>
+          {a.status === "open"
+            ? <span className="badge green"><span className="dot" />Open</span>
+            : <span className="badge withdrawn"><span className="dot" />Closed</span>}
+        </div>
+        <p>{a.role} · {a.client} · {a.allocation}%</p>
+        <small>{a.status === "open" ? `Since ${formatDisplayDate(a.startDate)}` : `${formatDisplayDate(a.startDate)} – ${formatDisplayDate(a.completionDate ?? "")}`}</small>
+        {a.latestUpdate && <div className="callout">{a.latestUpdate}</div>}
+        {a.status === "closed" && <EvaluationView evaluation={evaluations.find(e => e.assignmentId === a.id)} />}
+      </li>)}
+    </ul>}
+  </section>;
 }
 
 export default function StaffAttendance({ employee, entries, serverNow, current }: {
@@ -259,6 +287,8 @@ export default function StaffAttendance({ employee, entries, serverNow, current 
           })}</tbody>
         </table></div>}
       </section>
+
+      <MyAssignments employee={employee} />
 
       <section className="panel staff-training" aria-labelledby="current-training-heading">
         <h2 id="current-training-heading">Current enrolments</h2>

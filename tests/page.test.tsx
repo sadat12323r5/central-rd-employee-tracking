@@ -162,6 +162,31 @@ describe("Home routing by role", () => {
     }
   });
 
+  it("passes each employee's assignment evaluations through to both portals (Story 4.6)", async () => {
+    const { employees } = await import("@/data/employees");
+    const evaluation = {
+      id: "ev-1", assignmentId: "a-0", employeeId: "BS-1001", departmentId: "d-1", evaluation: "Delivered on time.", clientFeedback: "Happy client.",
+      createdBy: "u-1", createdAt: "2026-10-16T00:00:00Z", authoredBy: "u-1", updatedAt: "2026-10-16T00:00:00Z",
+    };
+    const listed = [{ ...employees[0], evaluations: [evaluation] }];
+    for (const session of [{ role: "admin" }, { role: "manager", employeeId: "BS-1008", userId: "u-1" }]) {
+      getSession.mockResolvedValue(session);
+      listFor.mockResolvedValue(listed);
+      currentFor.mockResolvedValue({ status: "unavailable" });
+      portalProps.mockClear();
+      render(await Home());
+      const props = portalProps.mock.calls.at(-1)?.[0] as { employees: { evaluations: unknown[] }[] };
+      expect(props.employees[0].evaluations).toEqual([evaluation]);
+    }
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1001" });
+    getFor.mockResolvedValue(listed[0]);
+    staffProps.mockClear();
+    render(await Home());
+    const staff = staffProps.mock.calls.at(-1)?.[0] as { employee: { evaluations: unknown[] } };
+    expect(staff.employee.evaluations).toEqual([evaluation]);
+    expect(getFor).toHaveBeenLastCalledWith({ role: "staff", employeeId: "BS-1001" }, "BS-1001");
+  });
+
   it("passes no role (the Administrator portal) for an admin", async () => {
     getSession.mockResolvedValue({ role: "admin" });
     listFor.mockResolvedValue([]);
