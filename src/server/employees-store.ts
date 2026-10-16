@@ -52,6 +52,12 @@ export interface EmployeesStore {
    */
   isActive(session: StaffIdentity): Promise<boolean>;
   /**
+   * Story 4.10: the employee id linked to an auth user (`auth_user_id`), read through the signed-in user's
+   * JWT (RLS). Null when no row is linked or the linked row is archived. Throws EmployeesUnavailableError
+   * on a read error (including more than one linked row).
+   */
+  linkedEmployeeId(userId: string): Promise<string | null>;
+  /**
    * Story 4.8: moves the employee to another department and records one audit row, in one transaction.
    * Throws TransferInvalidError (bad id format), TransferForbiddenError (Staff, out of a manager's scope, or
    * refused by the database), TransferNotFoundError, TransferDepartmentError (unknown destination),
@@ -391,6 +397,11 @@ export function createEmployeesStore({
     async isActive(session) {
       const row = await run<{ archived_at: string | null }>(t => t.select("archived_at").eq("employee_id", session.employeeId).maybeSingle<{ archived_at: string | null }>());
       return row !== null && !row.archived_at;
+    },
+    async linkedEmployeeId(userId) {
+      type LinkRow = { employee_id: string; archived_at: string | null };
+      const row = await run<LinkRow>(t => t.select("employee_id,archived_at").eq("auth_user_id", userId).maybeSingle<LinkRow>());
+      return row && !row.archived_at ? row.employee_id : null;
     },
     async transfer(session, employeeId, toDepartmentId) {
       const parsed = transferInput.safeParse({ employeeId, toDepartmentId });

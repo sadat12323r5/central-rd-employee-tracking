@@ -613,6 +613,32 @@ describe("employees-store.isActive", () => {
   });
 });
 
+describe("employees-store.linkedEmployeeId (Story 4.10)", () => {
+  const linked = (id: string, userId: string, archived_at: string | null = null) =>
+    ({ ...rowFor(id), auth_user_id: userId, archived_at }) as EmployeeRow;
+
+  it("returns the employee id linked to the auth user, reading only the link columns through the JWT client", async () => {
+    const { client, queries } = fakeClient([linked("BS-1001", "other"), linked("BS-1002", "admin-1")]);
+    expect(await createEmployeesStore(both(client)).linkedEmployeeId("admin-1")).toBe("BS-1002");
+    expect(queries).toEqual([{ table: "employees", filters: [["auth_user_id", "admin-1"]], columns: "employee_id,archived_at" }]);
+  });
+
+  it("returns null when no row is linked to the auth user", async () => {
+    const { client } = fakeClient([linked("BS-1001", "other")]);
+    expect(await createEmployeesStore(both(client)).linkedEmployeeId("admin-1")).toBeNull();
+  });
+
+  it("returns null when the linked row is archived", async () => {
+    const { client } = fakeClient([linked("BS-1002", "admin-1", "2026-10-08T09:00:00+00:00")]);
+    expect(await createEmployeesStore(both(client)).linkedEmployeeId("admin-1")).toBeNull();
+  });
+
+  it.each(["error", "throw"] as const)("throws EmployeesUnavailableError when the read fails (%s)", async mode => {
+    const { client } = fakeClient(seeded, mode);
+    await expect(createEmployeesStore(both(client)).linkedEmployeeId("admin-1")).rejects.toBeInstanceOf(EmployeesUnavailableError);
+  });
+});
+
 describe("employees-store paging (Story 8.2)", () => {
   const rowAt = (i: number): EmployeeRow => ({ ...rowFor("BS-1001"), employee_id: `BS-${String(i).padStart(4, "0")}` });
 

@@ -5,14 +5,15 @@ import { revalidatePath } from "next/cache";
 import { buildLog, clockIn, clockOut, todaysEntry, TimesheetValidationError } from "@/domain/timesheet";
 import { getSession } from "./auth";
 import { attendanceStore, AttendanceUnavailableError } from "./attendance-store";
+import { ownRecordIdentity } from "./session";
 
 export type ActionState = { error: string; message: string };
 
 // The employee is always taken from the signed session, never from the submitted form,
-// so staff can only create or change their own records.
+// so staff can only create or change their own records. Story 4.10: a manager, or an Administrator
+// linked to an employee row, records their own attendance ("My record") under the same Staff rules.
 async function staffId(): Promise<string | null> {
-  const session = await getSession();
-  return session?.role === "staff" ? session.employeeId : null;
+  return ownRecordIdentity(await getSession())?.employeeId ?? null;
 }
 
 async function run(work: (employeeId: string, now: Date) => Promise<string>): Promise<ActionState> {
