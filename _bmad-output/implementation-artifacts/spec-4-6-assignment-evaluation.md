@@ -149,6 +149,44 @@ deferred:
 
 ## Review Triage Log
 
+### 2026-10-16 — Review pass 2
+- verdicts: 33 findings — high 0, medium 3, low 26, false 1, maybe-false 0 (7 intent-audit notes are counted as low or reject)
+- findings:
+  - blind-hunter
+    - `[low]` `[reject]` In `create`, the open check runs before authorize, so a manager who can read the assignment but not write it learns its state — that is the order the intent sets, and that manager can already see the assignment's status in the portal.
+    - `[low]` `[defer]` carried: a write form is shown to a manager without authority over the assignment's department — deferred to 4.8.
+    - `[low]` `[patch]` The post-transfer write path can't be reached from the portal — the migration header and DEPLOYMENT.md now say plainly that this path is database/store-only until 4.8 (the 4.8 defer already covers the UI).
+    - `[medium]` `[defer]` carried: an amendment replaces the earlier text with no history.
+    - `[low]` `[reject]` carried: saving without a change still counts as an amendment.
+    - `[low]` `[reject]` The character limits are repeated in the client — cosmetic duplication; the SQL checks are the backstop.
+    - `[false]` `[reject]` carried: "My assignments" isn't ordered — the store already sorts with `compareAssignments`.
+    - `[low]` `[patch]` Every evaluation region has the same accessible name — the name now includes the project.
+    - `[low]` `[patch]` `employee_id` and `department_id` have no foreign keys — added; the trim CHECK is rejected as before (carried).
+    - `[low]` `[reject]` `auth.jwt()` is not wrapped in a select — this matches every existing policy in the repo; a performance tweak is out of scope.
+    - `[low]` `[patch]` The RLS refusal assertions are weak — they now assert 42501.
+    - `[low]` `[reject]` `formatDisplayDay` duplicates the date-time helper's body — small, tested duplication.
+    - `[low]` `[patch]` DEPLOYMENT.md and the migration header leave things out — fixed together with the transfer-path note.
+    - `[low]` `[patch]` Trailing whitespace in two test files — removed.
+  - edge-case-hunter
+    - `[low]` `[defer]` carried: the form is shown after a transfer.
+    - `[low]` `[reject]` The open check runs before authorize — duplicate of the blind-hunter row.
+    - `[medium]` `[patch]` A manager, or an employee-linked Administrator, can evaluate their own assignment, though 4.10 says read-only evaluations apply to one's own record — the store refuses it and the insert/update policies exclude the writer's own employee.
+    - `[low]` `[reject]` carried: a no-op amend.
+    - `[low]` `[reject]` An evaluation made only of zero-width characters — far-fetched for an internal tool used by managers.
+    - `[low]` `[reject]` `.in()` URL length for very large subtrees — the same pattern as 4.3/4.5; the departments are a handful.
+    - `[low]` `[reject]` An unknown action error reaches the error boundary — the same convention as every other action in the repo.
+    - `[low]` `[patch]` The transfer path is unreachable from the portal (claim) — duplicate; documented.
+  - verification-gap
+    - no gaps; other finding: the transfer path is unreachable from the portal — `[low]` `[patch]`, duplicate; documented.
+  - intent-alignment
+    - `[low]` `[reject]` Extra snapshot columns and indexes (A2) — the pass-1 spec amendment adds them for the intent's display rule.
+    - `[low]` `[reject]` A new policy on `assignments` (B2) — additive; the header now says so.
+    - `[low]` `[reject]` Write-time snapshot rather than read-time resolution (C2) — chosen in pass 1, because read-time resolution depends on the viewer.
+    - `[low]` `[reject]` Store ordering and error differences — no outcome in the matrix changes.
+    - `[low]` `[reject]` Transfer infrastructure added ahead of 4.8 — needed for AD-4 at the database; small and additive.
+    - `[low]` `[reject]` The 23514 mapping is tested only with faked errors — by design.
+    - `[low]` `[reject]` An own-author amendment shows "amended by" — accurate: the text was changed later.
+
 ### 2026-10-16 — Review pass 1
 - verdicts: 27 findings — high 0, medium 4, low 17, false 2, maybe-false 0 (4 more are descriptive intent-audit notes and are logged below as reject)
 - findings:
