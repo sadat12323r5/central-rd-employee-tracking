@@ -2,7 +2,7 @@
 title: 'Story 4.8: Higher manager transfers an employee between departments'
 type: 'feature'
 created: '2026-10-16'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '054ea3d92c922ac4e8ae0eecacdfa96b1e2569f7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -134,6 +134,44 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 2026-10-16 — Review pass
+- verdicts: 30 findings — high 0, medium 2, low 24, false 4, maybe-false 0 (five descriptive intent-alignment observations were triaged as findings)
+- findings:
+  - blind-hunter
+    - `[low]` `[patch]` e2e cleanup sets the shared managed Staff member's department to null instead of restoring it — the spec now reads the original department_id and restores it in `finally`.
+    - `[low]` `[reject]` No guard against a manager moving themselves or a peer manager — the AC defines authority as "authority over both departments" and restricts only Staff; 4.9's rank rule is specific to archiving (Design Notes). Adding a rank rule would invent a requirement.
+    - `[low]` `[reject]` Archived employees can be transferred — nothing in the story forbids it; recorded as a Design Notes assumption.
+    - `[low]` `[reject]` An Administrator can see the manager-worded forbidden message — only reachable for an archived or token-less admin; a role branch is not worth it for that path.
+    - `[low]` `[patch]` The informational pre-read of department_id makes the whole transfer fail when it errors — the read is now best-effort (null on failure); the test was updated.
+    - `[low]` `[reject]` For managers, an unknown employee or a stale destination reads as forbidden, not "not found" — deliberate: out-of-scope and nonexistent stay indistinguishable for a manager (no existence oracle), as in 4.9; the matrix's "Unknown employee" row is covered for the Administrator.
+    - `[low]` `[reject]` No confirmation step — consistent with 4.5's close and 4.9's archive, which have none; confirmation dialogs would be new UX across the app.
+    - `[low]` `[patch]` The form resets the chosen department after a refusal — the form is now re-keyed only after a success.
+    - `[low]` `[reject]` The panel keeps an optimistic department over later props — needs another user to transfer the same employee while the panel is mounted; keying on the prop would also drop the success message on revalidation.
+    - `[low]` `[patch]` Live RLS gaps (archived caller, source-only out of scope, no-write on refusals) — tests added (grouped with the verification-gap finding below).
+    - `[medium]` `[patch]` After a transfer, a manager whose subtree does not hold the old department sees past assignments labelled "No department", so "past assignments still show the department they were done under" fails at the viewing surface — the manager portal now also receives every department's id and name (through `department_options()`, as in 4.7) and uses it to label history rows; portal test added.
+    - `[low]` `[reject]` 42501 maps to forbidden, so a missing grant looks like a refusal — the spec's error table sets this mapping; changing it is a spec edit.
+    - `[low]` `[reject]` Validation duplicated in the action and the store — harmless defence in depth; the store is also called directly by tests.
+    - `[false]` `[reject]` No test that Staff never see the panel — Staff never render `Portal` (page.tsx renders `StaffAttendance`), so the panel cannot appear for them.
+  - edge-case-hunter
+    - `[low]` `[defer]` An assignment insert racing a transfer can be recorded under the old department, because `assignments_guard` reads the department without a lock (the FK key-share lock waits, but only after the guard copied the old value) — the fix changes the 4.5 guard function, an existing object; deferred.
+    - `[low]` `[reject]` A lost response after commit shows "Nothing was changed" — same behaviour as every other rpc action (4.9); very unlikely.
+    - `[low]` `[reject]` Archived target can be transferred — duplicate of the blind-hunter row.
+    - `[low]` `[reject]` Manager self-transfer — duplicate of the blind-hunter row.
+    - `[false]` `[reject]` A rejected server action is unhandled in `submit` — the same pattern as `account-access-panel.tsx`; Next.js server actions report failure through the returned state, and a transport failure goes to the error boundary app-wide by design.
+    - `[low]` `[reject]` Stale optimistic department — duplicate.
+    - `[low]` `[patch]` Pre-read failure blocks the transfer — duplicate; same fix.
+    - `[low]` `[patch]` e2e cleanup nulls the department — duplicate; same fix.
+    - `[low]` `[reject]` A manager's mistyped id reads as forbidden — duplicate of the no-oracle row.
+  - verification-gap
+    - `[low]` `[patch]` The archived-caller refusal is never exercised — live test added: archive mP's own row, call as mP, expect not_authorized and nothing written, then restore.
+    - `[low]` `[patch]` The portal's use of the refreshed `departmentId` is unverified — portal test added: rerender with a new department, tab round-trip, panel follows.
+  - intent-alignment
+    - `[low]` `[patch]` "Authority over only one" is tested live in one direction only — the source-only-out-of-scope live case was added.
+    - `[medium]` `[patch]` History after a transfer is not exercised at the viewing surface — grouped with the "No department" label finding; same fix and test.
+    - `[false]` `[reject]` Training history is not asserted after a transfer — training rows are keyed by employee_id and the function touches only employees.department_id and audit_events; nothing can change them.
+    - `[false]` `[reject]` The audit "when" is not asserted — `audit_events.occurred_at` is `not null default now()` (20261008000000) and cannot be supplied by the function.
+    - `[low]` `[reject]` No live successful transfer through `employees-store.transfer()` — the store's rpc call is unit-tested and the e2e test goes through the store end to end.
 
 ## Design Notes
 
