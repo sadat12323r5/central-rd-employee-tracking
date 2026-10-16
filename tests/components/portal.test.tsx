@@ -622,7 +622,7 @@ describe("Portal for a department manager (Story 4.2)", () => {
     expect(screen.getByText("Total employees")).toBeInTheDocument();
   });
 
-  it("opens a profile without the Interviews tab or the account controls", async () => {
+  it("opens a profile without the Interviews tab, provisioning or activity export, but with Account access (Story 4.9)", async () => {
     const user = userEvent.setup();
     await show(<Portal role="manager" employees={own} current={none()} />);
     await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
@@ -630,8 +630,21 @@ describe("Portal for a department manager (Story 4.2)", () => {
     expect(tabs.queryByRole("tab", { name: "Interviews" })).not.toBeInTheDocument();
     expect(tabs.getByRole("tab", { name: "Training" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Sign-in account" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Account access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Download activity" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive employee" })).toBeInTheDocument();
     expect(screen.queryByText(/Northstar Labs/)).not.toBeInTheDocument();
+  });
+
+  it("offers Restore on an archived in-scope employee's profile for a manager (Story 4.9)", async () => {
+    const user = userEvent.setup();
+    const archived = [...own.map(e => ({ ...e, archived: true }))];
+    await show(<Portal role="manager" employees={archived} current={none()} />);
+    await user.selectOptions(screen.getByLabelText("Show employees"), "Archived employees");
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    expect(screen.getByRole("heading", { name: "Account access" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore employee" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign-in account" })).not.toBeInTheDocument();
   });
 
   it("keeps everything for the Administrator portal (the default role)", async () => {

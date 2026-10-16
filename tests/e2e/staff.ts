@@ -46,6 +46,16 @@ export function e2eNoAccountEmployee() {
   return { id, name };
 }
 
+/** Story 4.9: the linked throwaway Staff account the manager-archive spec places in a managed department. */
+export function e2eManagedStaff() {
+  const id = process.env.E2E_STAFF_MANAGED_ID;
+  const name = process.env.E2E_STAFF_MANAGED_NAME;
+  const email = process.env.E2E_STAFF_MANAGED_EMAIL;
+  const password = process.env.E2E_STAFF_MANAGED_PASSWORD;
+  if (!id || !name || !email || !password) throw new Error("E2E_STAFF_MANAGED_* are not set; global-setup.ts did not run.");
+  return { id, name, email, password };
+}
+
 export async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel("Email address").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
