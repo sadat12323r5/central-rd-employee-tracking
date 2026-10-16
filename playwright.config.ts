@@ -4,7 +4,9 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
   workers: 1,
-  timeout: 60_000,
+  timeout: 90_000,
+  // Server actions re-render pages that read several stores; on the dev server a save can take ~6s.
+  expect: { timeout: 15_000 },
   // Creates a throwaway Administrator (E2E_ADMIN_*), two linked throwaway Staff accounts (E2E_STAFF_1_*,
   // E2E_STAFF_2_*), an unlinked throwaway employee (E2E_STAFF_UNLINKED_*) and a linked Staff account for
   // the archive spec (E2E_STAFF_ARCHIVE_*), plus a Staff account the department-manager spec makes a
