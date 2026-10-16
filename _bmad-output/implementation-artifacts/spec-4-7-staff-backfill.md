@@ -10,7 +10,21 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-4-6-assignment-evaluation.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Managers and employee-linked Administrators can write their own backfilled entries at the store, but have no UI, and their own entries may fall outside their list scope.
+    evidence: |-
+      The store allows any session with an employeeId; page.tsx only gives Staff the form. Story 4.10 ("My record") owns this.
+    location: >-
+      src/server/backfilled-project-store.ts
+    severity: low
+  - summary: >-
+      Live and e2e test rows in backfilled_projects accumulate, because nothing can be deleted.
+    evidence: |-
+      Each run inserts new rows tagged by run id; there is no delete path.
+    location: >-
+      tests/backfill-rls.test.ts
+    severity: low
 ---
 
 <intent-contract>
@@ -146,6 +160,44 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 2026-10-16 — Review pass
+- verdicts: 30 findings — high 0, medium 4, low 24, false 2, maybe-false 0
+- findings:
+  - blind-hunter
+    - `[medium]` `[patch]` The no-future-date rule is store-only, so a direct PostgREST write accepts future dates — guard raises 23514; live assertion added.
+    - `[low]` `[patch]` No index on `department_id` — added.
+    - `[medium]` `[patch]` One withdraw state is shared by all entries (every button disabled, message shown away from its entry) — per-entry action state.
+    - `[low]` `[reject]` Withdraw has no confirmation — consistent with 4.5's close, which also has none; adding confirm dialogs is new UX across the app.
+    - `[low]` `[patch]` Edits leave no trace for managers — the management row shows "Edited D MMM YYYY"; full version history is not required by FR-8.
+    - `[low]` `[defer]` Managers and employee-linked Administrators can write at the store but have no UI, and a manager's own entries may be out of their list scope — 4.10 ("My record") owns this.
+    - `[medium]` `[patch]` A backfilled department outside the manager's subtree shows a fallback label — the store attaches `departmentName` from `department_options()`.
+    - `[low]` `[patch]` Heading/list label mismatch — renamed to "Work history".
+    - `[low]` `[reject]` 23503 always maps to the department message — the employee FK cannot fail, because the owner comes from the session's own existing row.
+    - `[low]` `[reject]` Redundant validation and rpc calls — minor duplication with no user-visible harm.
+    - `[low]` `[patch]` DEPLOYMENT.md omissions — documented.
+    - `[low]` `[patch]` Missing tests — covered by the patches above (future date, per-entry withdraw).
+  - edge-case-hunter
+    - `[medium]` `[patch]` Future date at the database — duplicate; same fix.
+    - `[low]` `[patch]` Withdrawal can rewrite content in the same request — the guard refuses content changes on active→withdrawn.
+    - `[low]` `[reject]` A 42501 on add shows the forbidden message — needs an employee whose row isn't linked to auth.uid() while the session carries its id, which session building rules out.
+    - `[low]` `[defer]` A manager can add entries with no UI — duplicate of the 4.10 defer.
+    - `[low]` `[reject]` Withdraw confirmation — duplicate.
+    - `[medium]` `[patch]` Department name lost when options are null — duplicate; `departmentName` comes from the store.
+    - `[medium]` `[patch]` The AC "appears with its department name" — same fix.
+    - `[low]` `[defer]` Manager-authored entries — duplicate of the 4.10 defer.
+  - verification-gap
+    - `[low]` `[patch]` The empty-departments branch is never asserted — test added.
+  - intent-alignment
+    - `[low]` `[reject]` An unlinked Administrator gets the "no employee" message, not forbidden — the matrix's "No employee (e.g. unlinked Administrator)" row settles it.
+    - `[low]` `[patch]` The withdraw control sits inside the Edit `<details>` — moved outside, as the spec says.
+    - `[false]` `[reject]` Mixed-history ordering lives in the component — the order is tested at both the store and component surfaces, and both agree.
+    - `[low]` `[defer]` Manager self-backfill below the UI — duplicate of the 4.10 defer.
+    - `[low]` `[defer]` Test rows accumulate (no deletes) — same as 4.5/4.6.
+    - `[false]` `[reject]` Strict refusal of no-op updates on withdrawn rows — this is the intended "any change to a withdrawn row".
+    - `[low]` `[reject]` "Manager-created" is shown on admin-created assignments — the intent fixes these two labels.
+    - `[low]` `[reject]` The staff list is not mixed — mixing is only required in the management view.
+    - `[low]` `[reject]` The admin linked-employee forbidden path is untested — Administrator sessions carry no `employeeId` today, so the path is unreachable.
 
 ## Design Notes
 
