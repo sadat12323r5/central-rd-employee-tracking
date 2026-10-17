@@ -2,7 +2,7 @@
 title: 'Story 5.4: Attendance views use real data'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-review'
+status: 'done'
 baseline_revision: '8bc6e3b9106c1ab5964e07d2e45d00c84433e274'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -130,3 +130,37 @@ Join-date capping is not applied (`Employee.joined` is free text); an employee w
 - `npm test` -- expected: all pass except live-DB tests needing the 5.1–5.3 migrations (PGRST205 / schema-missing only)
 - `npm run build` -- expected: success
 - `npm run test:e2e` (`PLAYWRIGHT_CHANNEL=chromium` in this sandbox) -- expected: failures only from schema-missing errors
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** The profile Attendance tab and the org-wide Attendance & leave view now count scheduled, worked, leave and missing-record days for the current month to date (Asia/Dhaka) from real attendance entries, non-cancelled leave and the active holiday calendar. `Employee.attendance` and its fixture are gone.
+
+**Files changed:**
+- `src/domain/attendance-summary.ts` -- new: `monthToDate`, `periodLabel`, `summariseAttendance` (per-day worked > leave > missing).
+- `src/domain/leave.ts` -- `isWorkingDay` (non-throwing per-day rule shared with `countWorkingDays`).
+- `src/server/attendance-store.ts` -- `listInPeriod(session, period, employeeIds?)`: session-scoped, `work_date`-windowed, paged.
+- `src/server/attendance-summary.ts` -- new: per-employee summaries, or `no-calendar` / `year` / `calendar-error` as values.
+- `src/app/page.tsx`, `src/components/portal.tsx`, `src/components/leave-panel.tsx` -- wiring and rendering; leave rows carry the category label and colour; the Overview and footer show the real period.
+- `src/data/employees.ts`, `src/server/employees-store.ts`, `scripts/seed-employees.ts` -- fixture attendance removed.
+- Tests: new domain and server tests; extended store, portal, page, attendance-rls and manager-scope-rls tests; e2e portal label check; support doubles.
+
+**Review:** 24 findings (0 high, 0 medium, 20 low, 4 false). Patched 4 (e2e label assertion, Overview/footer period, linear grouping, two missing tests). Deferred: mid-month joiners counted as missing (no join-date cap). Rejected: whole-portal alert on attendance failure (spec choice), admin read not narrowed, ordering and perf nits, unreachable cross-month or cross-year periods, memory test double, Staff summary out of scope, cosmetic exceptions labels, weekend work making the totals not add up (spec rule), long `.in` URLs (cross-store precedent), and duplicates. See the triage log.
+
+**Follow-up review recommended:** false (patched: high 0, medium 0, low 4).
+
+**Verification:**
+- `npm run typecheck` and `npm run build`: pass.
+- `npm test`: 2182 passed, 8 failed.
+  - 7 are the Story 5.3 live cases in `tests/leave-rls.test.ts`, which need the unapplied `20261019000000_leave_records_update.sql` (PGRST116 / no trigger error / LeaveNotFoundError).
+  - 1 is a Story 5.1 case, `holiday-calendar-rls` "refuses an Administrator's direct insert" (`expected '23514' to be '42501'`). This story didn't touch it.
+  - The new live `listInPeriod` cases pass against the shared project.
+- `npm run test:e2e` (`PLAYWRIGHT_CHANNEL=chromium`): 39 passed, 1 failed.
+  - The failure is `leave.spec`. Its isolation bug (it assumed an empty leave list) is fixed on the 5.3 branch and merged in.
+  - It now fails only at the edit step with "This leave period no longer exists." because the 5.3 update policy is unapplied.
+
+**Residual risks:**
+- Mid-month joiners show missing days.
+- An attendance read failure replaces the whole admin or manager portal with the alert.
+- The admin reads every employee's entries for the month.
