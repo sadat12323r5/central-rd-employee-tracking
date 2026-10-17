@@ -7,8 +7,11 @@ on:
 
 # Every run uses the one shared Supabase project; queue runs so their RLS tests never overlap.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Every run shares one Supabase project and the live tests use fixed throwaway ids, so runs must
+  # never overlap: one global queue. GitHub keeps only the newest pending run, so a superseded
+  # pending run is cancelled and may need a manual re-run; that is safer than colliding runs.
+  group: shared-supabase
+  cancel-in-progress: false
 
 # The Supabase secrets (see docs/DEPLOYMENT.md) are passed only to the steps that need them:
 # unit tests run the RLS integration test, and the e2e dev server reads employees.
