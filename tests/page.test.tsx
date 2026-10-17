@@ -620,6 +620,15 @@ describe("Home attendance summaries (Story 5.4)", () => {
     expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
   });
 
+  it("shows the attendance alert for a manager when the attendance read fails", async () => {
+    getSession.mockResolvedValue({ role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" });
+    listFor.mockResolvedValue([]);
+    summariesFor.mockRejectedValue(new AttendanceUnavailableError());
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/attendance is unavailable/i);
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+  });
+
   it("never computes summaries for a staff session", async () => {
     const { employees } = await import("@/data/employees");
     getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });

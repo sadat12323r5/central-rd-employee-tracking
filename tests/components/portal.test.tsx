@@ -1782,10 +1782,33 @@ describe("Portal attendance summaries (Story 5.4)", () => {
     expect(within(screen.getByRole("tabpanel")).getByText("No leave or missing records in this period.")).toBeInTheDocument();
   });
 
-  it("puts the real missing total on the overview radar", async () => {
+  it("puts the real missing total and the period on the overview, never the old demo month", async () => {
     await show(<Portal employees={list} current={none()} attendance={attendance} />);
     expect(screen.getByText("3 attendance records to review")).toBeInTheDocument();
     expect(screen.getByText("Missing entries · 1–17 October 2026")).toBeInTheDocument();
+    expect(document.querySelector(".period-label span")).toHaveTextContent("1–17 October 2026");
+    expect(document.querySelector(".page-footer")).toHaveTextContent("Demo workspace · fictional records · 1–17 October 2026");
+    expect(document.body).not.toHaveTextContent(/September 2026/);
+  });
+
+  it("drops the period from the overview and footer when summaries cannot be counted", async () => {
+    await show(<Portal employees={list} current={none()} attendance={{ unavailable: "no-calendar" }} />);
+    expect(document.querySelector(".period-label span")).toBeNull();
+    expect(document.querySelector(".page-footer")).toHaveTextContent(/fictional records$/);
+    expect(document.body).not.toHaveTextContent(/September 2026/);
+  });
+
+  it("says summaries cover active employees only on an archived employee's profile", async () => {
+    const user = userEvent.setup();
+    const archived = { ...second, archived: true };
+    await show(<Portal employees={[first, archived]} current={none()} attendance={{ period: attendance.period, byEmployee: { [first.id]: firstSummary } }} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Employees/ }));
+    await user.selectOptions(screen.getByLabelText("Show employees"), "Archived employees");
+    await user.click(screen.getByRole("button", { name: `View ${second.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    const panel = within(screen.getByRole("tabpanel"));
+    expect(panel.getByText("Attendance summaries cover active employees only.")).toBeInTheDocument();
+    expect(panel.queryByText("Scheduled days")).not.toBeInTheDocument();
   });
 
   it.each([

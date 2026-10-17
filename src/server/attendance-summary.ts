@@ -58,7 +58,9 @@ export async function attendanceSummariesFor<E extends SummaryEmployee>(
   const datesOf = new Map<string, string[]>();
   for (const entry of entries) {
     if (!wanted.has(entry.employeeId)) continue;
-    datesOf.set(entry.employeeId, [...(datesOf.get(entry.employeeId) ?? []), entry.date]);
+    const dates = datesOf.get(entry.employeeId);
+    if (dates) dates.push(entry.date);
+    else datesOf.set(entry.employeeId, [entry.date]);
   }
   const byEmployee: Record<string, AttendanceSummary<E["leave"][number]>> = {};
   try {

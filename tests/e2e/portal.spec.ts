@@ -44,7 +44,10 @@ test("admin login, directory filters, profiles, export and logout", async ({ pag
   // Story 5.4: the summary covers the current month to date (or says why the calendar cannot count it).
   const summary = page.locator("section.panel", { has: page.getByRole("heading", { name: "Attendance summary", exact: true }) });
   const label = periodLabel(monthToDate(todayInDhaka()));
-  await expect(summary).toContainText(new RegExp(`${label} · Monday–Friday|holiday calendar`));
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await expect(summary.locator("p.muted")).toHaveText(new RegExp(
+    `^(${escaped} · Monday–Friday|No holiday calendar is loaded yet, so scheduled days can't be counted\\.$|The holiday calendar doesn't cover \\d{4} yet\\.$|The holiday calendar could not be read, so scheduled days can't be counted\\.)`,
+  ));
   await expect(summary).not.toContainText("September 2026");
   await page.locator(".sidebar").getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();

@@ -2,7 +2,7 @@
 title: 'Story 5.4: Attendance views use real data'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '8bc6e3b9106c1ab5964e07d2e45d00c84433e274'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -10,7 +10,14 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-5-3-edit-cancel-leave.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Employees who joined mid-month show their earlier days as missing records.
+    evidence: |-
+      Employee.joined is free text, so the window is not capped at the join date (Design Notes).
+    location: >-
+      src/domain/attendance-summary.ts
+    severity: low
 ---
 
 <intent-contract>
@@ -80,6 +87,37 @@ deferred: []
 - Given a leave category is shown, when displayed, then it has a text label as well as its colour.
 
 ## Spec Change Log
+
+## Review Triage Log
+
+### 2026-10-17 — Review pass
+- verdicts: 24 findings — high 0, medium 0, low 20, false 4, maybe-false 0 (plus 3 descriptive intent rows)
+- findings:
+  - `[low]` `[patch]` (blind) e2e period-label regex always matches ("holiday calendar" is in the success line) — success line and exact unavailable messages now asserted separately.
+  - `[low]` `[patch]` (blind) Overview header/footer still say "September 2026" beside the real month-to-date radar — now show the summary's period label.
+  - `[low]` `[reject]` (blind) An attendance read failure replaces the whole admin/manager portal with the alert — the spec chose the existing page-alert behaviour (Staff and "My record" already fail this way); changing it edits the spec.
+  - `[low]` `[reject]` (blind) Admin read not narrowed to listed employees — reads only the current month, paged; archived employees are few; narrowing would push every id into the URL (see the long `.in` row).
+  - `[low]` `[patch]` (blind) Quadratic `datesOf` array copying — now pushes.
+  - `[low]` `[reject]` (blind) Summary computed after the other reads (one extra round trip) — negligible; reordering complicates the page for one request.
+  - `[false]` `[reject]` (blind) Years between period ends unchecked — periods come only from `monthToDate`, which never spans years.
+  - `[low]` `[reject]` (blind) `periodLabel` mislabels cross-month periods — unreachable (month-to-date only); documented as single-month.
+  - `[low]` `[reject]` (blind+edge) In-memory test store returns [] for managers — only used by attendance-actions tests, which never call `listInPeriod`.
+  - `[low]` `[reject]` (blind) Staff/"My record" get no summary — the AC names the profile Attendance tab and the org-wide view; Staff self-service is unchanged by design.
+  - `[low]` `[patch]` (blind) Missing tests: archived-profile message, manager page alert — added. A manager reading the active calendar is covered by the 5.1 RLS tests ("any signed-in role").
+  - `[low]` `[reject]` (blind) Exceptions table says "Attendance" for a missing day and lost the Days column — each row is one day, and the Status column says "Missing record"; cosmetic.
+  - `[low]` `[patch]` (gap) e2e regex always passes — duplicate of the first row.
+  - `[low]` `[patch]` (gap) Overview still September 2026 — duplicate of the second row.
+  - `[low]` `[reject]` (intent) Shown numbers need not add up when someone works a weekend (worked counts every entry; missing counts scheduled days) — this follows the spec's rule ("worked days from attendance records"); changing it edits the spec.
+  - `[low]` `[reject]` (intent) Staff views not covered — duplicate of the Staff row.
+  - `[low]` `[reject]` (intent) New whole-portal failure mode — duplicate of the attendance-failure row.
+  - `[low]` `[reject]` (edge) A manager's scope changing between the two reads shows zeros — needs a reassignment within one page load; next load is correct.
+  - `[false]` `[reject]` (edge) A non-"unavailable" calendar error crashes the page — other errors are programming bugs, and failing loudly is intended (as everywhere else).
+  - `[low]` `[reject]` (edge) A very large manager subtree makes the `.in` URL too long — the same `.in` pattern is already used by leave, history and the other stores; it's a cross-store limit, not one this story introduced.
+  - `[low]` `[reject]` (edge) Admin read not narrowed — duplicate of the blind row.
+  - `[false]` `[reject]` (edge) Overlapping leave picks an arbitrary category — overlapping non-cancelled leave is refused by the store and the DB trigger (5.2).
+  - `[low]` `[reject]` (edge) Memory store manager divergence — duplicate.
+  - `[false]` `[reject]` (intent) "Nothing read from employees.ts" untested — met by construction: the field is gone from the type, so any read fails typecheck.
+  - intent rows (reading A+C, strong F, narrow D; month-to-date period chosen in the spec; layer-by-layer tests, no full-chain numeric e2e) — descriptive, no action.
 
 ## Design Notes
 
