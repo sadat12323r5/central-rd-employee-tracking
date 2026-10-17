@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { z } from "zod";
 import { employees as fixture, type Employee } from "@/data/employees";
 import {
   derivedFields, invalidEmployeeDetailsFields, invalidNewEmployeeFields, normalizeEmployeeDetails, normalizeNewEmployee,
@@ -56,6 +57,12 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // Administrator may edit anyone, a manager only employees in their subtree (checked here against
 // manager-scope before the rpc, and again by the function); Staff never, not even their own record.
 // The department never changes here: only through a transfer.
+//
+// Story 4.8: transfer() (FR-11) is the only way the app changes an employee's department. It calls the
+// SECURITY DEFINER function `transfer_employee` through the actor's own JWT (Administrator and manager
+// alike, never the service role), which takes the actor from auth.uid(), re-checks authority over both
+// departments, refuses a transfer while an assignment is open, and writes the change and one audit row in
+// one transaction. Staff are refused before any call; managers are pre-checked against their scope here.
 export interface EmployeesStore {
   /** Every employee for an admin; the department subtree's employees for a manager; only the caller's own record for staff. */
   listFor(session: SessionIdentity): Promise<Employee[]>;
@@ -78,6 +85,19 @@ export interface EmployeesStore {
    * EmployeeValidationError (bad input), EmployeeNotFoundError (no such employee) or EmployeesUnavailableError.
    */
   updateDetails(session: SessionIdentity, employeeId: string, input: EmployeeDetailsInput): Promise<{ employeeId: string; name: string }>;
+  /**
+   * Story 4.10: the employee id linked to an auth user (`auth_user_id`), read through the signed-in user's
+   * JWT (RLS). Null when no row is linked or the linked row is archived. Throws EmployeesUnavailableError
+   * on a read error (including more than one linked row).
+   */
+  linkedEmployeeId(userId: string): Promise<string | null>;
+  /**
+   * Story 4.8: moves the employee to another department and records one audit row, in one transaction.
+   * Throws TransferInvalidError (bad id format), TransferForbiddenError (Staff, out of a manager's scope, or
+   * refused by the database), TransferNotFoundError, TransferDepartmentError (unknown destination),
+   * TransferSameDepartmentError, TransferOpenAssignmentError, or EmployeesUnavailableError for anything else.
+   */
+  transfer(session: SessionIdentity, employeeId: string, toDepartmentId: string): Promise<TransferResult>;
 }
 
 /** The caller may not add or edit this employee: a Staff session, or outside a manager's subtree. */
@@ -118,6 +138,64 @@ export class EmployeeNotFoundError extends Error {
     this.name = "EmployeeNotFoundError";
   }
 }
+
+/** The outcome of a transfer. `fromDepartmentId` was read before the change and is informational only. */
+export type TransferResult = { employeeId: string; name: string; fromDepartmentId: string | null; toDepartmentId: string };
+
+/** The transfer input is malformed. `fields` names the offending inputs. */
+export class TransferInvalidError extends Error {
+  readonly fields: ("employeeId" | "toDepartmentId")[];
+  constructor(fields: ("employeeId" | "toDepartmentId")[]) {
+    super(`Invalid transfer: ${fields.join(", ")}.`);
+    this.name = "TransferInvalidError";
+    this.fields = fields;
+  }
+}
+
+/** The caller has no authority over the employee's department or the destination (or is Staff). */
+export class TransferForbiddenError extends Error {
+  constructor() {
+    super("Not allowed to move this employee to that department.");
+    this.name = "TransferForbiddenError";
+  }
+}
+
+/** No such employee. */
+export class TransferNotFoundError extends Error {
+  constructor() {
+    super("Employee not found.");
+    this.name = "TransferNotFoundError";
+  }
+}
+
+/** The destination department does not exist. */
+export class TransferDepartmentError extends Error {
+  constructor() {
+    super("No such department.");
+    this.name = "TransferDepartmentError";
+  }
+}
+
+/** The destination is the employee's current department. */
+export class TransferSameDepartmentError extends Error {
+  constructor() {
+    super("The employee is already in that department.");
+    this.name = "TransferSameDepartmentError";
+  }
+}
+
+/** The employee has an open assignment; it must be closed before a transfer. */
+export class TransferOpenAssignmentError extends Error {
+  constructor() {
+    super("The employee has an open assignment.");
+    this.name = "TransferOpenAssignmentError";
+  }
+}
+
+const transferInput = z.object({
+  employeeId: z.string().trim().regex(/^BS-\d{4}$/),
+  toDepartmentId: z.string().trim().pipe(z.uuid()),
+});
 
 /** The employee database is unreachable or returned an error. Never treat this as "no employees". */
 export class EmployeesUnavailableError extends Error {
@@ -512,6 +590,60 @@ export function createEmployeesStore({
     async isActive(session) {
       const row = await run<{ archived_at: string | null }>(t => t.select("archived_at").eq("employee_id", session.employeeId).maybeSingle<{ archived_at: string | null }>());
       return row !== null && !row.archived_at;
+    },
+    async linkedEmployeeId(userId) {
+      type LinkRow = { employee_id: string; archived_at: string | null };
+      const row = await run<LinkRow>(t => t.select("employee_id,archived_at").eq("auth_user_id", userId).maybeSingle<LinkRow>());
+      return row && !row.archived_at ? row.employee_id : null;
+    },
+    async transfer(session, employeeId, toDepartmentId) {
+      const parsed = transferInput.safeParse({ employeeId, toDepartmentId });
+      if (!parsed.success) {
+        throw new TransferInvalidError([...new Set(parsed.error.issues.map(i => String(i.path[0]) as "employeeId" | "toDepartmentId"))]);
+      }
+      const { employeeId: id, toDepartmentId: to } = parsed.data;
+      if (session.role === "staff") throw new TransferForbiddenError();
+      // Store-level checks first for managers (defence in depth); the database function repeats them from auth.uid().
+      if (session.role === "manager") {
+        let inScope: Awaited<ReturnType<ManagerScope["forManager"]>>;
+        try {
+          inScope = await scope.forManager(session);
+        } catch (cause) {
+          throw new EmployeesUnavailableError({ cause });
+        }
+        if (!inScope.employeeIds.has(id) || !inScope.departmentIds.has(to)) throw new TransferForbiddenError();
+      }
+
+      // Informational only (best effort): the department before the change. A failed read never blocks the
+      // transfer; the database function is the authority and records the real source in the audit row.
+      let fromDepartmentId: string | null = null;
+      try {
+        const before = await run<{ department_id: string | null }>(t => t.select("department_id").eq("employee_id", id)
+          .maybeSingle<{ department_id: string | null }>());
+        fromDepartmentId = before?.department_id ?? null;
+      } catch {
+        fromDepartmentId = null;
+      }
+
+      let result: { data: unknown; error: { message?: string; code?: string } | null };
+      try {
+        result = await (await userClient()).rpc("transfer_employee", { p_employee_id: id, p_to_department_id: to });
+      } catch (cause) {
+        throw new EmployeesUnavailableError({ cause });
+      }
+      if (result.error) {
+        if (result.error.code === "42501") throw new TransferForbiddenError();
+        switch (result.error.message) {
+          case "not_authorized": throw new TransferForbiddenError();
+          case "employee_not_found": throw new TransferNotFoundError();
+          case "department_not_found": throw new TransferDepartmentError();
+          case "same_department": throw new TransferSameDepartmentError();
+          case "open_assignment": throw new TransferOpenAssignmentError();
+          default: throw new EmployeesUnavailableError({ cause: result.error });
+        }
+      }
+      if (typeof result.data !== "string") throw new EmployeesUnavailableError({ cause: "no employee name returned" });
+      return { employeeId: id, name: result.data, fromDepartmentId, toDepartmentId: to };
     },
   };
 }

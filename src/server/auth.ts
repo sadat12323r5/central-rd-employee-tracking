@@ -103,6 +103,17 @@ async function supabaseSession(): Promise<Actor | null> {
       }
       if (manages) return { identity: { role: "manager", employeeId: identity.employeeId, userId: data.user.id }, userId: data.user.id };
     }
+    // Story 4.10: an Administrator linked to exactly one non-archived employee row carries its id, which
+    // enables "My record". A failed lookup is never fatal: the session stays an unlinked admin.
+    if (identity.role === "admin") {
+      let employeeId: string | null = null;
+      try {
+        employeeId = await employeesStore.linkedEmployeeId(data.user.id);
+      } catch (error) {
+        console.error("Employee link check failed; continuing as an unlinked Administrator.", error instanceof Error ? error.name : "unknown error");
+      }
+      if (employeeId && EMPLOYEE_ID.test(employeeId)) return { identity: { role: "admin", employeeId }, userId: data.user.id };
+    }
     // An Administrator account stays `admin` even when it manages a department.
     return { identity, userId: data.user.id };
   } catch (error) {

@@ -29,11 +29,16 @@ vi.mock("@/server/assignment-evaluation-actions", () => ({
 vi.mock("@/server/employee-actions", () => ({
   createEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
   updateEmployeeDetailsAction: vi.fn(async () => ({ error: "", message: "" })),
+  transferEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 vi.mock("@/server/assessment-actions", () => ({
   rateSkillAction: vi.fn(async () => ({ error: "", message: "" })),
   saveEvaluationAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
+// Story 4.10: "My record" renders the staff self-service body and its forms.
+vi.mock("@/server/attendance-actions", () => ({ clockInAction: vi.fn(), clockOutAction: vi.fn(), saveLogAction: vi.fn() }));
+vi.mock("@/server/interviews-actions", () => ({ addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn() }));
+vi.mock("@/server/backfill-actions", () => ({ addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn() }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -752,6 +757,73 @@ describe("Portal scoped to a manager's departments (Story 4.3)", () => {
   });
 });
 
+describe("Portal Department panel (Story 4.8)", () => {
+  const PARENT = "de9a0000-0000-4000-8000-0000000000b1";
+  const CHILD = "de9a0000-0000-4000-8000-0000000000b2";
+  const departments = [
+    { id: CHILD, name: "Child Team", parentId: PARENT, managerUserId: null, managerEmployeeId: null },
+    { id: PARENT, name: "Parent Team", parentId: null, managerUserId: "u-1", managerEmployeeId: "BS-1001" },
+  ];
+  const placed = employees.filter(e => e.id === "BS-1001").map(e => ({ ...e, archived: false, departmentId: PARENT }));
+
+  it.each(["admin", "manager"] as const)("shows the current department and the other departments on the Overview for %s", async role => {
+    const user = userEvent.setup();
+    await show(<Portal role={role} employees={placed} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).getByText("Department: Parent Team")).toBeInTheDocument();
+    const select = within(panel).getByLabelText("Move to department");
+    expect(within(select).getAllByRole("option").map(o => o.textContent)).toEqual(["Choose a department", "Child Team"]);
+    expect(within(panel).getByRole("button", { name: "Transfer employee" })).toBeInTheDocument();
+  });
+
+  it("says there is nowhere to move them, with no form, when no other department is listed", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={placed} departments={departments.slice(1)} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).getByText("There is no other department you can move this employee to.")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Transfer employee" })).not.toBeInTheDocument();
+  });
+
+  it("follows the refreshed employees: after a rerender with a new departmentId the panel shows it and omits it from the options", async () => {
+    const user = userEvent.setup();
+    const { rerender } = await show(<Portal role="admin" employees={placed} departments={departments} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    await act(async () => {
+      rerender(<Portal role="admin" employees={placed.map(e => ({ ...e, departmentId: CHILD }))} departments={departments} current={none()} />);
+    });
+    await user.click(screen.getByRole("tab", { name: "Training" }));
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).getByText("Department: Child Team")).toBeInTheDocument();
+    const select = within(panel).getByLabelText("Move to department");
+    expect(within(select).getAllByRole("option").map(o => o.textContent)).toEqual(["Choose a department", "Parent Team"]);
+  });
+
+  it("names a past assignment's department from departmentNames when it is outside a manager's departments", async () => {
+    const user = userEvent.setup();
+    const OLD = "de9a0000-0000-4000-8000-0000000000b9";
+    const past: Assignment = {
+      id: "5e000000-0000-4000-8000-0000000000b1", employeeId: "BS-1001", departmentId: OLD, client: "Old client", projectName: "Before the move",
+      role: "Engineer", allocation: 50, startDate: "2026-03-01", latestUpdate: "", status: "closed", completionDate: "2026-08-31",
+      createdAt: "2026-03-01T00:00:00Z", closedAt: "2026-09-01T00:00:00Z", provenance: "assignment",
+    };
+    const moved = placed.map(e => ({ ...e, departmentId: CHILD, assignments: [past] }));
+    await show(<Portal role="manager" employees={moved} departments={departments.slice(0, 1)}
+      departmentNames={[...departments.map(({ id, name }) => ({ id, name })), { id: OLD, name: "Old Department" }]} current={none()} />);
+    await user.click(screen.getByRole("button", { name: /View Nadia Rahman's profile/ }));
+    await user.click(screen.getByRole("tab", { name: "Current work" }));
+    const item = within(screen.getByRole("list", { name: "Work history" })).getByRole("listitem");
+    expect(within(item).getByText(/Old Department/)).toBeInTheDocument();
+    expect(within(item).queryByText(/No department/)).not.toBeInTheDocument();
+    // The transfer choices stay the scoped list: the extra names are never offered.
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    const panel = screen.getByRole("heading", { name: "Department", level: 2 }).closest("article")!;
+    expect(within(panel).queryByRole("option", { name: "Old Department" })).not.toBeInTheDocument();
+  });
+});
+
 describe("Portal Current work tab (Story 4.5)", () => {
   const CRD = "de9a0000-0000-4000-8000-000000000002";
   const departments = [{ id: CRD, name: "Central R&D", parentId: null, managerUserId: null, managerEmployeeId: null }];
@@ -1447,4 +1519,75 @@ describe("Portal skills and evaluation (Story 7.4)", () => {
 
   // Staff never get this portal (page.tsx renders StaffAttendance for them); the Staff read-only view is
   // asserted to have no forms in staff-attendance.test.tsx.
+});
+
+describe("Portal \"My record\" (Story 4.10)", () => {
+  const CRD = "de9a0000-0000-4000-8000-000000000002";
+  const closed: Assignment = {
+    id: "5e000000-0000-4000-8000-0000000000a1", employeeId: "BS-1004", departmentId: CRD, client: "Harbour Systems (fictional)",
+    projectName: "Own legacy migration", role: "Engineering Manager", allocation: 50, startDate: "2026-03-01", latestUpdate: "",
+    status: "closed", completionDate: "2026-08-31", createdAt: "2026-03-01T00:00:00Z", closedAt: "2026-09-01T00:00:00Z", provenance: "assignment",
+  };
+  const evaluation: AssignmentEvaluation = {
+    id: "e0000000-0000-4000-8000-0000000000a1", assignmentId: closed.id, employeeId: "BS-1004", departmentId: CRD,
+    evaluation: "Led the migration well.", clientFeedback: "", createdBy: "u-up", createdByName: "Upper Manager", createdByRole: "manager",
+    createdAt: "2026-09-02T00:00:00Z", authoredBy: "u-up", authoredByName: "Upper Manager", authoredByRole: "manager", updatedAt: "2026-09-02T00:00:00Z",
+  };
+  const ownInterview = { id: "i-own", company: "Own Interview Co", role: "Director", date: "2026-10-10", stage: "Screening", outcome: "", feedback: "", withdrawn: false };
+  const me = { ...employees.find(e => e.id === "BS-1004")!, assignments: [closed], evaluations: [evaluation], interviews: [ownInterview] };
+  const myRecord = { employee: me, entries: [], serverNow: "2026-09-28T06:00:00.000Z", current: none(), departmentOptions: [] };
+  const team = employees.filter(e => e.id === "BS-1001").map(e => ({ ...e, interviews: [] }));
+  const nav = () => within(screen.getByRole("navigation", { name: "Main navigation" }));
+
+  it.each(["manager", "admin"] as const)("adds a \"My record\" entry for a linked %s account, opening the self-service body", async role => {
+    const user = userEvent.setup();
+    await show(<Portal role={role} employees={team} current={none()} myRecord={myRecord} />);
+    await act(async () => { await user.click(nav().getByRole("button", { name: "My record" })); });
+    expect(screen.getByRole("heading", { level: 1, name: "My record" })).toBeInTheDocument();
+    expect(screen.getByText("Your own attendance, daily log, assignments, past projects, training and interviews.")).toBeInTheDocument();
+    const section = within(screen.getByRole("region", { name: "My record" }));
+    expect(section.getByRole("button", { name: "Clock in" })).toBeInTheDocument();
+    expect(section.getByRole("heading", { name: "Today's work log" })).toBeInTheDocument();
+    expect(section.getByRole("heading", { name: "Current enrolments" })).toBeInTheDocument();
+    expect(section.getByRole("heading", { name: "Completed training" })).toBeInTheDocument();
+    expect(section.getByRole("button", { name: "Add interview" })).toBeInTheDocument();
+    expect(section.getByRole("heading", { name: "My assignments" })).toBeInTheDocument();
+    // Their own interviews are in their own record.
+    expect(section.getByText("Own Interview Co")).toBeInTheDocument();
+    // No second brand header or sign-out: the portal's own sign-out buttons only.
+    expect(section.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+    expect(document.querySelector(".staff-header")).toBeNull();
+  });
+
+  it("has no accessibility violations in the \"My record\" section", async () => {
+    const user = userEvent.setup();
+    const { container } = await show(<Portal role="manager" employees={team} current={none()} myRecord={myRecord} />);
+    await act(async () => { await user.click(nav().getByRole("button", { name: "My record" })); });
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("shows their own evaluation read-only, with no write control", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={team} current={none()} myRecord={myRecord} />);
+    await act(async () => { await user.click(nav().getByRole("button", { name: "My record" })); });
+    const region = within(screen.getByRole("region", { name: "Evaluation of Own legacy migration" }));
+    expect(region.getByText("Led the migration well.")).toBeInTheDocument();
+    expect(region.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(region.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save evaluation|amend evaluation|evaluate/i })).not.toBeInTheDocument();
+    expect(createEvaluationAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["manager", "admin"] as const)("has no \"My record\" entry or section for a %s portal without a linked record", async role => {
+    await show(<Portal role={role} employees={team} current={none()} />);
+    expect(nav().queryByRole("button", { name: "My record" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "My record" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the rest of the navigation unchanged", async () => {
+    await show(<Portal role="manager" employees={team} current={none()} myRecord={myRecord} />);
+    expect(nav().getAllByRole("button").map(b => b.textContent?.replace(/\d+$/, ""))).toEqual(
+      ["Overview", "Employees", "Learning & development", "Attendance & leave", "My record"],
+    );
+  });
 });

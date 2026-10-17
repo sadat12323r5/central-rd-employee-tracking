@@ -82,3 +82,7 @@
 ## Blocked: Stories 5.2, 5.3, 5.4 (recorded 2026-10-14 by the unattended story loop)
 
 Story 5.2 counts working days "against the calendar (weekends and holidays excluded)" and rejects "a year outside the calendar". That calendar is Story 5.1, which is blocked on the System Owner-approved holiday calendar (sprint-status action item). Stories 5.3 and 5.4 build on 5.2's leave records. All three stay `backlog` with a `# blocked` note until 5.1 is unblocked.
+
+## Blocked: Story 8.4 (recorded 2026-10-16 by the unattended story loop)
+
+Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the activity export and depends on Epic 5 Stories 5.2–5.3 (epics.md). Those need Story 5.1's holiday calendar, which is blocked on the System Owner-approved calendar (sprint-status action item). Building only the assignment and evaluation rows would leave AC3 unbuildable and would split the story without a stakeholder decision. 8.4 stays `backlog` with a `# blocked` note until 5.1–5.3 are unblocked. Spec: `spec-8-4-exports-assignments-evaluations-leave.md`.

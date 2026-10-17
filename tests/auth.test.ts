@@ -8,10 +8,13 @@ vi.mock("../src/server/supabase", async () => (await import("./support/fake-auth
 
 // Staff sign-in and every staff session check confirm the linked, unarchived employee row through
 // employees-store (the JWT client); keep it offline. `archived` stands in for the row's archived_at.
-const { isActive, archived } = vi.hoisted(() => ({ isActive: vi.fn(), archived: new Set<string>() }));
+// Story 4.10: `links` maps an auth user id to its linked employee row (for the Administrator link lookup).
+const { isActive, archived, linkedEmployeeId, links } = vi.hoisted(() => ({
+  isActive: vi.fn(), archived: new Set<string>(), linkedEmployeeId: vi.fn(), links: new Map<string, string>(),
+}));
 vi.mock("../src/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/employees-store")>()),
-  employeesStore: { listFor: vi.fn(), getFor: vi.fn(), isActive },
+  employeesStore: { listFor: vi.fn(), getFor: vi.fn(), isActive, linkedEmployeeId },
 }));
 
 // Story 4.2: the per-request manager check (departments the auth user manages); `managers` holds the
@@ -36,6 +39,12 @@ function reset() {
   managers.clear();
   managesAny.mockReset();
   managesAny.mockImplementation(async (userId: string) => managers.has(userId));
+  links.clear();
+  linkedEmployeeId.mockReset();
+  linkedEmployeeId.mockImplementation(async (userId: string) => {
+    const id = links.get(userId);
+    return id && !archived.has(id) ? id : null;
+  });
 }
 
 describe("Administrator sign-in with a Supabase account", () => {
@@ -374,5 +383,61 @@ describe("department managers (Story 4.2)", () => {
     expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
     vi.setSystemTime(start + 12 * 60 * 60 * 1000 + 60 * 1000);
     expect(await getSession()).toBeNull();
+  });
+});
+
+describe("Administrator linked to an employee record (Story 4.10)", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    reset();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => errorSpy.mockRestore());
+
+  it("carries the linked employee id, looked up with the validated auth user id", async () => {
+    links.set("admin-1", "BS-1005");
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    expect(await getSession()).toEqual({ role: "admin", employeeId: "BS-1005" });
+    expect(await getActor()).toEqual({ identity: { role: "admin", employeeId: "BS-1005" }, userId: "admin-1" });
+    expect(linkedEmployeeId).toHaveBeenCalledWith("admin-1");
+    expect(await isSignedIn()).toBe(true);
+    expect(isActive).not.toHaveBeenCalled();
+  });
+
+  it("stays unlinked when no employee row is linked", async () => {
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    expect(await getSession()).toEqual({ role: "admin" });
+  });
+
+  it("stays unlinked (still signed in) when the linked row is archived", async () => {
+    links.set("admin-1", "BS-1005");
+    archived.add("BS-1005");
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    expect(await getSession()).toEqual({ role: "admin" });
+    expect(supabase.signOuts).toBe(0);
+  });
+
+  it("stays an unlinked admin, logged, when the link lookup fails; the session never ends", async () => {
+    links.set("admin-1", "BS-1005");
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    linkedEmployeeId.mockRejectedValue(new EmployeesUnavailableError());
+    expect(await getSession()).toEqual({ role: "admin" });
+    expect(errorSpy).toHaveBeenCalled();
+    expect(supabase.signOuts).toBe(0);
+    expect(cookieStore.get(AUTH_COOKIE)).toBeDefined();
+  });
+
+  it("ignores a malformed linked id", async () => {
+    links.set("admin-1", "not-an-id");
+    await signIn({ error: "" }, formData({ email: ADMIN.email, password: ADMIN.password }));
+    expect(await getSession()).toEqual({ role: "admin" });
+  });
+
+  it("never looks up a link for a staff or manager session (their id comes from app_metadata)", async () => {
+    await signIn({ error: "" }, formData({ email: STAFF.email, password: STAFF.password }));
+    expect(await getSession()).toEqual({ role: "staff", employeeId: STAFF.employeeId });
+    managers.add("staff-1");
+    expect(await getSession()).toEqual({ role: "manager", employeeId: STAFF.employeeId, userId: "staff-1" });
+    expect(linkedEmployeeId).not.toHaveBeenCalled();
   });
 });

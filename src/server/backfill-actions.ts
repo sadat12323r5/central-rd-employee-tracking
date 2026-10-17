@@ -9,7 +9,7 @@ import {
   BACKFILL_OUTCOME_MAX, BACKFILL_TEXT_MAX, BackfillDepartmentError, BackfillForbiddenError, BackfillInvalidError,
   BackfillNoEmployeeError, BackfillUnavailableError, BackfillWithdrawnError, backfilledProjectStore, type BackfillInput,
 } from "./backfilled-project-store";
-import type { SessionIdentity } from "./session";
+import { ownRecordIdentity, type StaffIdentity } from "./session";
 
 // Story 4.7: an employee adds, edits and withdraws their own past projects. The owner is always the
 // session's employee (never a form value); a session without one is refused before anything is read.
@@ -43,12 +43,13 @@ const field = (form: FormData, key: string) => {
 
 const fail = (error: string): ActionState => ({ error, message: "" });
 
-/** A signed-in session with its own employee record; everyone else (signed out, an unlinked Administrator) is refused first. */
-async function employeeSession(): Promise<SessionIdentity | null> {
-  const session = await getSession();
-  if (!session) return null;
-  const employeeId = "employeeId" in session ? (session as { employeeId?: unknown }).employeeId : undefined;
-  return typeof employeeId === "string" && employeeId !== "" ? session : null;
+/**
+ * A signed-in session with its own employee record, as `{ role: "staff", employeeId }` (Story 4.10: a manager
+ * or linked Administrator writes under the Staff own-record rules); everyone else (signed out, an unlinked
+ * Administrator) is refused first.
+ */
+async function employeeSession(): Promise<StaffIdentity | null> {
+  return ownRecordIdentity(await getSession());
 }
 
 /** Maps the store's refusals to messages. Unknown errors are rethrown. */
@@ -77,7 +78,7 @@ function parseInput(form: FormData): { input: BackfillInput } | { error: string 
 }
 
 /** The shared flow: session gate, zod, store, revalidate. */
-async function run(form: FormData, message: string, work: (session: SessionIdentity) => Promise<unknown>): Promise<ActionState> {
+async function run(form: FormData, message: string, work: (session: StaffIdentity) => Promise<unknown>): Promise<ActionState> {
   const session = await employeeSession();
   if (!session) return fail(NO_EMPLOYEE);
   try {

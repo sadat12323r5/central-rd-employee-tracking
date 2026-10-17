@@ -65,9 +65,9 @@ development_status:
   4-5-managers-create-and-close-assignments: review
   4-6-manager-evaluates-a-closed-assignment-employee-sees-it: review
   4-7-staff-backfills-a-past-project: review
-  4-8-higher-manager-transfers-an-employee-between-departments: backlog
+  4-8-higher-manager-transfers-an-employee-between-departments: review
   4-9-managers-archive-and-restore-accounts-in-their-own-departmen: review
-  4-10-managers-use-my-record-for-their-own-self-service: backlog
+  4-10-managers-use-my-record-for-their-own-self-service: review
   epic-4-retrospective: optional
 
   epic-5: backlog
@@ -92,7 +92,7 @@ development_status:
 
   epic-8: in-progress
   8-3-department-managers-export-within-their-department: review
-  8-4-exports-include-assignments-evaluations-and-leave: backlog
+  8-4-exports-include-assignments-evaluations-and-leave: backlog # blocked: its leave rows need Stories 5.2-5.3 (leave records), which wait on the 5.1 System Owner-approved holiday calendar
   epic-8-retrospective: optional
 
 action_items:
