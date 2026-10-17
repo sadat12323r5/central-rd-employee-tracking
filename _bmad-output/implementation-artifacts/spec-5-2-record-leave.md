@@ -2,10 +2,10 @@
 title: 'Story 5.2: Record a leave period'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '22d0ec89e6a52e27065552eee32fcd3f0f7ce8b4'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-5-1-holiday-calendar.md'
@@ -147,3 +147,19 @@ Continuity from 5.1: the active calendar is the highest version and every signed
 - `npm test` -- expected: all pass except live-DB tests that need the 5.1/5.2 migrations, which may fail only with schema-missing errors (42P01, PGRST205, PGRST202, 42703, PGRST204)
 - `npm run build` -- expected: success
 - `npm run test:e2e` -- expected: pass except specs needing the new schema, failing only on schema-missing errors
+
+## Auto Run Result
+
+Status: done (needs migrations 20261017000000_holiday_calendars.sql from Story 5.1 / PR #46, then 20261018000000_leave_records.sql; both ADDITIVE; then `npm run db:seed` for the provisional calendar)
+
+**Summary:** `leave_records` table with RLS (own / subtree manager / admin, insert + select only), a guard trigger (author/timestamps, latest calendar version, DB recount of working days and category band, year range, per-employee advisory-locked overlap backstop, no delete/truncate); `leaveStore.record/listFor`; `recordLeaveAction`; `Employee.leave` filled by employees-store; `LeavePanel` in the Staff portal / "My record" and on the profile Attendance tab.
+
+**Files:** `supabase/migrations/20261018000000_leave_records.sql`, `src/server/leave-store.ts`, `src/server/leave-actions.ts`, `src/components/leave-panel.tsx`, `src/components/staff-attendance.tsx`, `src/components/portal.tsx`, `src/data/employees.ts`, `src/server/employees-store.ts`, `src/app/styles.css`; tests `tests/leave-{store,actions,rls}.test.ts`, `tests/components/leave-panel.test.tsx`, `tests/e2e/leave.spec.ts` and wiring cases in employees-store / portal / staff-attendance tests.
+
+**Review:** 8 patches (1 medium, 7 low), 3 deferred (1 medium, 2 low), the rest rejected with reasons in the triage log.
+
+**Follow-up review recommended:** true -- the DB recount/category/latest-version checks were added in review and no SQL has run against Postgres; `tests/leave-rls.test.ts` is the check once both migrations are applied.
+
+**Verification:** typecheck clean; build succeeds; `npx vitest run` 2063 passed, 9 failed, all schema-missing: holiday-calendar-rls (PGRST205/PGRST202), leave-rls (setup PGRST205), assessments-rls and manager-scope-rls ("Employee records are temporarily unavailable" wrapping PGRST205 on `leave_records`, because profile reads now include leave). e2e: 8 passed, 32 failed -- every admin/staff page read now includes leave, so pages show "Employee records are unavailable"; the server log shows 62 × PGRST205 `public.leave_records` and 1 × `public.holiday_calendar_versions`, nothing else.
+
+**Residual risks:** none of the SQL has run against Postgres; the app's employee pages fail until the leave migration is applied (apply both migrations before merging).
