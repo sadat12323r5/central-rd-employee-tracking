@@ -16,6 +16,7 @@ import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-trainin
 import EvaluationView from "./evaluation-view";
 import ProvenanceLabel from "./provenance-label";
 import { EvaluationSummary, SKILL_SCALE, SkillList } from "./assessment-summary";
+import EmploymentHistoryPanel from "./employment-history-panel";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -291,13 +292,36 @@ function MyAssignments({ employee, departmentOptions, today }: { employee: Emplo
   </section>;
 }
 
-export default function StaffAttendance({ employee, entries, serverNow, current, departmentOptions = null }: {
+export type StaffSelfServiceProps = {
   employee: Employee; entries: TimesheetEntry[]; serverNow: string;
   /** Story 3.2: LMS enrolments, streamed (always resolves; `unavailable` is a value). */
   current: Promise<CurrentTraining>;
   /** Story 4.7: the departments to pick from when backfilling (id and name only); null when unavailable. */
   departmentOptions?: DepartmentOption[] | null;
-}) {
+};
+
+/** The staff portal: the page shell (brand, identity, sign-out) around the self-service body. */
+export default function StaffAttendance(props: StaffSelfServiceProps) {
+  const { employee } = props;
+  return <main className="staff-page">
+    <header className="staff-header">
+      <div className="brand"><span className="brand-mark">23</span><span>brain station <b>23</b><small>PEOPLE & DEVELOPMENT</small></span></div>
+      <div className="staff-identity">
+        <span className={`avatar ${employee.color}`}>{employee.initials}</span>
+        <span><strong>{employee.name}</strong><small>{employee.title} · {employee.id}</small></span>
+        <form action={signOut}><button className="secondary">Sign out</button></form>
+      </div>
+    </header>
+
+    <StaffSelfService {...props} />
+  </main>;
+}
+
+/**
+ * The self-service body without the page shell: attendance, daily log, assignments and backfill, training
+ * and interviews for the employee's own record. Story 4.10: also the management portal's "My record".
+ */
+export function StaffSelfService({ employee, entries, serverNow, current, departmentOptions = null }: StaffSelfServiceProps) {
   const [now, setNow] = useState(() => new Date(serverNow));
   const [inState, inAction, inPending] = useActionState(clockInAction, initial);
   const [outState, outAction, outPending] = useActionState(clockOutAction, initial);
@@ -336,17 +360,7 @@ export default function StaffAttendance({ employee, entries, serverNow, current,
     setTasks(rows => (rows.length > 1 ? rows.filter(r => r.key !== key) : rows));
   }
 
-  return <main className="staff-page">
-    <header className="staff-header">
-      <div className="brand"><span className="brand-mark">23</span><span>brain station <b>23</b><small>PEOPLE & DEVELOPMENT</small></span></div>
-      <div className="staff-identity">
-        <span className={`avatar ${employee.color}`}>{employee.initials}</span>
-        <span><strong>{employee.name}</strong><small>{employee.title} · {employee.id}</small></span>
-        <form action={signOut}><button className="secondary">Sign out</button></form>
-      </div>
-    </header>
-
-    <div className="staff-content">
+  return <div className="staff-content">
       <section className="panel staff-today" aria-labelledby="today-heading">
         <h1 id="today-heading">{longDate.format(now)}</h1>
         <p className="muted">Times are shown in Dhaka time (GMT+6).</p>
@@ -471,6 +485,12 @@ export default function StaffAttendance({ employee, entries, serverNow, current,
         <EvaluationSummary review={employee.review} headingLevel="h4" />
       </section>
 
+      <section className="panel staff-employment" aria-labelledby="employment-heading">
+        <h2 id="employment-heading">Employment history</h2>
+        <p className="muted">Your current role and previous employment, newest first. You can add, correct or remove your own entries.</p>
+        <EmploymentHistoryPanel employeeId={employee.id} entries={employee.history} canEdit />
+      </section>
+
       <section className="panel staff-interviews" aria-labelledby="interviews-heading">
         <h2 id="interviews-heading">External interviews</h2>
         <p className="muted">Interviews with other companies. Only you and the L&D Administrator can see them.</p>
@@ -521,6 +541,5 @@ export default function StaffAttendance({ employee, entries, serverNow, current,
           <Feedback state={interviewState} />
         </form>
       </section>
-    </div>
-  </main>;
+    </div>;
 }

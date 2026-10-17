@@ -1,12 +1,12 @@
 import Login from "@/components/login";
 import Portal from "@/components/portal";
-import StaffAttendance from "@/components/staff-attendance";
+import StaffAttendance, { type StaffSelfServiceProps } from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
 import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
 import { backfilledProjectStore, type DepartmentOption } from "@/server/backfilled-project-store";
 import { departmentsStore, DepartmentsUnavailableError } from "@/server/departments-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
-import type { SessionIdentity } from "@/server/session";
+import { ownRecordIdentity, type SessionIdentity } from "@/server/session";
 import { trainingStore, type CurrentTraining } from "@/server/training-store";
 
 export const dynamic = "force-dynamic";
@@ -31,13 +31,25 @@ export default async function Home() {
       // Story 4.3: everything is scoped to the manager's department subtree, worked out fresh by the stores.
       // Story 4.4: interviews are stripped here, server-side, so a manager's client payload can never carry
       // them whatever the store returns (FR-3); hiding the views in the portal is not the guarantee.
-      const [scoped, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
+      // Story 4.8: every department's name (id and name only), so history recorded under a department outside
+      // the subtree (before a transfer) still shows its name. Never used for choices; unavailable is null.
+      // Story 4.10: "My record" is read separately under the Staff own-record rules; it keeps the manager's own
+      // interviews (their own record), while the employees list stays interview-free.
+      const options = departmentOptionsFor();
+      const [scoped, departments, departmentNames, myRecord] = await Promise.all([
+        employeesStore.listFor(session), departmentsStore.listFor(session), options, myRecordFor(session, options),
+      ]);
       const employees = withoutInterviews(scoped);
-      return <Portal role="manager" employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
+      return <Portal role="manager" employees={employees} departments={departments} departmentNames={departmentNames}
+        current={currentTraining(session, employees.map(e => e.id))} myRecord={myRecord} />;
     }
     // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
-    const [employees, departments] = await Promise.all([employeesStore.listFor(session), departmentsStore.listFor(session)]);
-    return <Portal employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))} />;
+    // Story 4.10: an Administrator linked to an employee row also gets "My record".
+    const [employees, departments, myRecord] = await Promise.all([
+      employeesStore.listFor(session), departmentsStore.listFor(session), myRecordFor(session),
+    ]);
+    return <Portal employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))}
+      myRecord={myRecord} />;
   } catch (error) {
     // Never fall back to an empty or partial list: say plainly that records could not be loaded.
     if (error instanceof EmployeesUnavailableError) {
@@ -54,6 +66,23 @@ export default async function Home() {
     }
     throw error;
   }
+}
+
+/**
+ * Story 4.10: the "My record" props for an account linked to an employee (a manager, or a linked Administrator),
+ * or undefined. Every read uses only the derived `{ role: "staff", employeeId }` identity, so the stores and RLS
+ * apply the Staff own-record rules. A missing own record omits it; an unavailable store error propagates.
+ */
+async function myRecordFor(
+  session: SessionIdentity, options?: Promise<DepartmentOption[] | null>,
+): Promise<StaffSelfServiceProps | undefined> {
+  const own = ownRecordIdentity(session);
+  if (!own) return undefined;
+  const [employee, entries, departmentOptions] = await Promise.all([
+    employeesStore.getFor(own, own.employeeId), attendanceStore.listFor(own, own.employeeId), options ?? departmentOptionsFor(),
+  ]);
+  if (!employee) return undefined;
+  return { employee, entries, serverNow: new Date().toISOString(), current: currentTraining(own, [own.employeeId]), departmentOptions };
 }
 
 /** Every employee with `interviews: []`: what a manager session may receive (Story 4.4). Pure. */

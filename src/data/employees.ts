@@ -56,7 +56,11 @@ export type Employee = {
    * first. In this fixture they are seed-only (`skillSeedRows`).
    */
   skills: { name: string; level: number; evidence: string }[];
-  history: { role: string; company: string; period: string; detail: string }[];
+  /**
+   * Employment history (Story 7.3): read from the `employment_history` table through
+   * employment-history-store, active entries only, newest first. `company` is the employer.
+   */
+  history: { id: string; role: string; company: string; period: string; detail: string }[];
   /**
    * Stored completed training (Story 3.1, read through training-store from the `training_history` table):
    * `progress` 100, `date` = completion date, newest completion first. LMS enrolments (in progress, and
@@ -112,6 +116,26 @@ export function interviewSeedRows(list: Employee[]) {
   return list.flatMap(e => e.interviews.map(i => ({
     id: i.id, employee_id: e.id, company: i.company, role: i.role, stage: i.stage,
     interview_date: i.date, outcome: i.outcome, feedback: i.feedback,
+  })));
+}
+
+/**
+ * The deterministic `employment_history.id` of a fixture history entry, stable per employee and index,
+ * so `npm run db:seed` inserts the same rows on every run (e.g. BS-1001 #0 -> e4b10000-0000-4000-8000-000010010000).
+ */
+export function employmentHistorySeedId(employeeId: string, index: number): string {
+  const digits = /^BS-(\d{4})$/.exec(employeeId)?.[1];
+  if (!digits || !Number.isInteger(index) || index < 0 || index > 0xffff) throw new Error(`No employment history seed id for ${employeeId} #${index}.`);
+  return `e4b10000-0000-4000-8000-0000${digits}${index.toString(16).padStart(4, "0")}`;
+}
+
+/**
+ * The `employment_history` rows `npm run db:seed` inserts for the given employees' fixture history.
+ * The author, timestamps and `removed_at` are left to the table (the guard trigger sets them).
+ */
+export function employmentHistorySeedRows(list: Employee[]) {
+  return list.flatMap(e => e.history.map(h => ({
+    id: h.id, employee_id: e.id, role: h.role, employer: h.company, period: h.period, detail: h.detail,
   })));
 }
 
@@ -258,7 +282,7 @@ export const employees: Employee[] = people.map((p, index) => {
     email: `${name.toLowerCase().replace(" ", ".")}@example.com`, manager: "Ayesha Karim", location: "Dhaka, Bangladesh",
     summary: junior ? `Developing practical ${skillOne} skills through guided training and a supervised project.` : `${title} focused on ${skillOne} and ${skillTwo}, with experience delivering collaborative engineering projects.`,
     skills: [{ name: skillOne, level: junior ? 2 : 4, evidence: junior ? "Mentor-reviewed training exercise" : "Project deliverable and technical review" }, { name: skillTwo, level: junior ? 2 : 3, evidence: "Practical assessment" }, { name: "Communication", level: 3, evidence: "Mentor feedback and project presentation" }],
-    history: [{ role: title, company: "Brain Station 23", period: `${joined} – Present`, detail: `Working with the ${team} team.` }, ...(!junior ? [{ role: index === 1 ? "Junior Data Engineer" : `Associate ${title.replace(/ I+$/, "")}`, company: "Example Digital Ltd. (fictional)", period: "2021 – 2022", detail: "Delivered team projects and developed foundational professional skills." }] : [])],
+    history: [{ id: employmentHistorySeedId(id, 0), role: title, company: "Brain Station 23", period: `${joined} – Present`, detail: `Working with the ${team} team.` }, ...(!junior ? [{ id: employmentHistorySeedId(id, 1), role: index === 1 ? "Junior Data Engineer" : `Associate ${title.replace(/ I+$/, "")}`, company: "Example Digital Ltd. (fictional)", period: "2021 – 2022", detail: "Delivered team projects and developed foundational professional skills." }] : [])],
     training: [{ id: trainingSeedId(id, 0), name: `${skillOne} · practical foundations`, provider: "BS23 Learning & Development", progress: 100, date: "2026-08-20", result: junior ? "Completed · mentor reviewed" : "Completed · assessment passed" }, { id: trainingSeedId(id, 1), name: junior ? "Professional communication" : "Technical leadership & collaboration", provider: "BS23 Learning & Development", progress: 60 + (index % 3) * 10, date: "2026-09-28", result: "In progress" }],
     assignments: [],
     evaluations: [],

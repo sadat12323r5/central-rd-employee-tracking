@@ -89,7 +89,7 @@ describe("addBackfillAction", () => {
     it(`adds for a ${session.role} session, trimmed, never taking the owner from the form`, async () => {
       getSession.mockResolvedValue(session);
       expect(await addBackfillAction(blank, form({ ...valid, employeeId: "BS-1003" }))).toEqual({ error: "", message: "Past project added." });
-      expect(add).toHaveBeenCalledWith(session, parsed);
+      expect(add).toHaveBeenCalledWith({ role: "staff", employeeId: session.employeeId }, parsed);
       expect(revalidatePath).toHaveBeenCalledWith("/");
     });
   }
@@ -190,4 +190,21 @@ describe("withdrawBackfillAction", () => {
     getSession.mockResolvedValue(MANAGER);
     expect(await withdrawBackfillAction(blank, form({ id: ID }))).toEqual({ error: FORBIDDEN, message: "" });
   });
+});
+
+describe("own-record identity for managers and linked Administrators (Story 4.10)", () => {
+  const LINKED_ADMIN = { role: "admin", employeeId: "BS-1005" } as const;
+
+  for (const [label, session] of [["a manager", MANAGER], ["a linked Administrator", LINKED_ADMIN]] as const) {
+    it(`${label} adds, edits and withdraws through the store as { role: "staff", employeeId }`, async () => {
+      getSession.mockResolvedValue(session);
+      const own = { role: "staff", employeeId: session.employeeId };
+      expect(await addBackfillAction(blank, form({ ...valid, employeeId: "BS-1003" }))).toEqual({ error: "", message: "Past project added." });
+      expect(add).toHaveBeenCalledWith(own, parsed);
+      expect(await editBackfillAction(blank, form({ ...valid, id: ID }))).toEqual({ error: "", message: "Past project updated." });
+      expect(edit).toHaveBeenCalledWith(own, ID, parsed);
+      expect(await withdrawBackfillAction(blank, form({ id: ID }))).toEqual({ error: "", message: "Past project withdrawn." });
+      expect(withdraw).toHaveBeenCalledWith(own, ID);
+    });
+  }
 });

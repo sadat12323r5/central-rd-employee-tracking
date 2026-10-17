@@ -15,6 +15,7 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createEmploymentHistoryStore } from "@/server/employment-history-store";
 import { createEmployeesStore, EmployeeForbiddenError } from "@/server/employees-store";
 import { createAssessmentsStore } from "@/server/assessments-store";
 import { createAssignmentEvaluationsStore } from "@/server/assignment-evaluations-store";
@@ -128,10 +129,12 @@ describe.skipIf(!configured)("employee details update (shared Supabase project)"
       interviews: createInterviewsStore({ userClient }),
       training: createTrainingStore({ userClient, lms: createStubLmsClient({ userClient }) }),
       assessments: createAssessmentsStore({ userClient }),
-      // Epic 4 merge: the store also reads assignments (4.5), their evaluations (4.6) and backfilled projects (4.7).
+      // Epic 4 merge: the store also reads assignments (4.5), their evaluations (4.6) and backfilled projects (4.7);
+      // Story 7.3 merge: and employment history.
       assignments: createAssignmentsStore({ userClient, scope: createManagerScope({ userClient }) }),
       evaluations: createAssignmentEvaluationsStore({ userClient, scope: createManagerScope({ userClient }) }),
       backfilled: createBackfilledProjectStore({ userClient, scope: createManagerScope({ userClient }) }),
+      history: createEmploymentHistoryStore({ userClient, scope: createManagerScope({ userClient }) }),
       scope: createManagerScope({ userClient }),
     });
   }

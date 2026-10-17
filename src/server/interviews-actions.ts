@@ -9,9 +9,11 @@ import {
   interviewsStore, InterviewLockedError, InterviewNotFoundError, InterviewsForbiddenError, InterviewsUnavailableError,
   InterviewWithdrawnError,
 } from "./interviews-store";
+import { ownRecordIdentity } from "./session";
 
-const SIGN_IN = "Your session has ended. Sign in again as a staff member to add an interview.";
-const SIGN_IN_CHANGE = "Your session has ended. Sign in again as a staff member to change an interview.";
+const SIGN_IN = "Your session has ended. Sign in again to add an interview.";
+const SIGN_IN_CHANGE = "Your session has ended. Sign in again to change an interview.";
+const NOT_LINKED = "Your account isn't linked to an employee record, so there is nothing to record here.";
 const UNAVAILABLE = "External interviews could not be reached, so nothing was saved. Please try again in a moment.";
 const NOT_FOUND = "That interview was not found, or it is not yours, so nothing was saved.";
 const WITHDRAWN = "That interview has already been withdrawn and can no longer be changed.";
@@ -49,8 +51,12 @@ const field = (form: FormData, name: string) => {
 };
 
 export async function addInterviewAction(_previous: ActionState, form: FormData): Promise<ActionState> {
-  const session = await getSession();
-  if (session?.role !== "staff") return { error: SIGN_IN, message: "" };
+  // Story 4.10: the employee is only ever the session's own record (a manager or linked Administrator acts
+  // as `{ role: "staff", employeeId }`), so the store's Staff-only checks apply unchanged.
+  const signedIn = await getSession();
+  if (!signedIn) return { error: SIGN_IN, message: "" };
+  const session = ownRecordIdentity(signedIn);
+  if (!session) return { error: NOT_LINKED, message: "" };
 
   const parsed = newInterview.safeParse({
     company: field(form, "company"), role: field(form, "role"), date: field(form, "date"),
@@ -90,8 +96,12 @@ function refusal(error: unknown): ActionState {
 
 /** Story 2.2: the author changes the stage, outcome or feedback of their own, not-withdrawn interview. */
 export async function updateInterviewAction(_previous: ActionState, form: FormData): Promise<ActionState> {
-  const session = await getSession();
-  if (session?.role !== "staff") return { error: SIGN_IN_CHANGE, message: "" };
+  // Story 4.10: the employee is only ever the session's own record (a manager or linked Administrator acts
+  // as `{ role: "staff", employeeId }`), so the store's Staff-only checks apply unchanged.
+  const signedIn = await getSession();
+  if (!signedIn) return { error: SIGN_IN_CHANGE, message: "" };
+  const session = ownRecordIdentity(signedIn);
+  if (!session) return { error: NOT_LINKED, message: "" };
   // Locked fields are never accepted, not even unchanged: reject before validation or any store call.
   if (LOCKED_FIELDS.some(name => form.has(name))) return { error: LOCKED, message: "" };
 
@@ -112,8 +122,12 @@ export async function updateInterviewAction(_previous: ActionState, form: FormDa
 
 /** Story 2.2: the author withdraws their own interview. It stays in history; nothing is deleted. */
 export async function withdrawInterviewAction(_previous: ActionState, form: FormData): Promise<ActionState> {
-  const session = await getSession();
-  if (session?.role !== "staff") return { error: SIGN_IN_CHANGE, message: "" };
+  // Story 4.10: the employee is only ever the session's own record (a manager or linked Administrator acts
+  // as `{ role: "staff", employeeId }`), so the store's Staff-only checks apply unchanged.
+  const signedIn = await getSession();
+  if (!signedIn) return { error: SIGN_IN_CHANGE, message: "" };
+  const session = ownRecordIdentity(signedIn);
+  if (!session) return { error: NOT_LINKED, message: "" };
 
   const parsed = interviewId.safeParse(field(form, "id"));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Choose a valid interview.", message: "" };

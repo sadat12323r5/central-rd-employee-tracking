@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formData as form, resetAuth, STAFF, supabase } from "./support/fake-auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ADMIN, formData as form, resetAuth, STAFF, supabase } from "./support/fake-auth";
+
+const { adminLinks, managers } = vi.hoisted(() => ({ adminLinks: new Map<string, string>(), managers: new Set<string>() }));
 
 vi.mock("next/headers", async () => (await import("./support/fake-auth")).headersModule());
 vi.mock("next/navigation", async () => (await import("./support/fake-auth")).navigationModule());
@@ -10,13 +12,18 @@ vi.mock("../src/server/employees-store", async importOriginal => {
   const { employees } = await import("@/data/employees");
   return {
     ...(await importOriginal<typeof import("../src/server/employees-store")>()),
-    employeesStore: { getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn(), isActive: async (session: { employeeId: string }) => employees.some(e => e.id === session.employeeId) },
+    employeesStore: {
+      getFor: async (_session: unknown, id: string) => employees.find(e => e.id === id) ?? null, listFor: vi.fn(),
+      isActive: async (session: { employeeId: string }) => employees.some(e => e.id === session.employeeId),
+      // Story 4.10: the Administrator's link lookup; `adminLinks` maps an auth user id to an employee id.
+      linkedEmployeeId: async (userId: string) => adminLinks.get(userId) ?? null,
+    },
   };
 });
-// Story 4.2: every Staff request checks whether the account manages a department; none does here.
+// Story 4.2: every Staff request checks whether the account manages a department; `managers` holds those auth user ids.
 vi.mock("../src/server/departments-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/departments-store")>()),
-  departmentsStore: { list: vi.fn(), create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: async () => false },
+  departmentsStore: { list: vi.fn(), create: vi.fn(), update: vi.fn(), setManager: vi.fn(), managesAny: async (userId: string) => managers.has(userId) },
 }));
 // Attendance is backed by an in-memory AttendanceStore so these tests stay offline (the Supabase store
 // is covered by attendance-store.test.ts and, against the shared project, attendance-rls.test.ts).
@@ -34,6 +41,8 @@ const NADIA = { email: "nadia.rahman@example.com", password: "nadia-long-passphr
 
 function resetAccounts() {
   resetAuth();
+  adminLinks.clear();
+  managers.clear();
   supabase.users.set(NADIA.email, { id: "staff-2", password: NADIA.password, app_metadata: { role: "staff", employee_id: "BS-1001" } });
 }
 
@@ -118,6 +127,54 @@ describe("attendance actions", () => {
     } finally {
       saveSpy.mockRestore();
       errorSpy.mockRestore();
+    }
+    expect(await attendanceStore.listAll()).toHaveLength(0);
+  });
+});
+
+describe("attendance for managers and Administrators, own record only (Story 4.10)", () => {
+  beforeEach(async () => {
+    resetAccounts();
+    await attendanceStore.clear();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("records a manager's clock-in and log against their own employee id, ignoring a form id", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T09:00:00+06:00"));
+    managers.add("staff-2");
+    await signIn(blank, form(NADIA));
+    expect((await getSession())?.role).toBe("manager");
+    expect(await clockInAction(blank, form({ workMode: "Office", employeeId: "BS-1008" }))).toEqual({ error: "", message: "Clocked in." });
+    vi.setSystemTime(new Date("2026-09-28T11:00:00+06:00"));
+    const saved = await saveLogAction(blank, form({ summary: "Reviews", blockers: "", taskDescription: "Review", taskHours: "1", taskLink: "" }));
+    expect(saved).toEqual({ error: "", message: "Daily log saved." });
+    const all = await attendanceStore.listAll();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ employeeId: "BS-1001", workMode: "Office" });
+  });
+
+  it("records a linked Administrator's attendance against the linked employee", async () => {
+    adminLinks.set("admin-1", "BS-1003");
+    await signIn(blank, form(ADMIN));
+    expect(await getSession()).toEqual({ role: "admin", employeeId: "BS-1003" });
+    expect(await clockInAction(blank, form({ workMode: "Remote" }))).toEqual({ error: "", message: "Clocked in." });
+    expect(await attendanceStore.listAll()).toEqual([expect.objectContaining({ employeeId: "BS-1003" })]);
+  });
+
+  it("refuses an unlinked Administrator before any store call, saying the account is not linked", async () => {
+    await signIn(blank, form(ADMIN));
+    expect(await getSession()).toEqual({ role: "admin" });
+    const listSpy = vi.spyOn(attendanceStore, "listForEmployee");
+    try {
+      for (const result of [
+        await clockInAction(blank, form({ workMode: "Office" })),
+        await clockOutAction(blank, form({ breakMinutes: "0" })),
+        await saveLogAction(blank, form({ summary: "x", blockers: "", taskDescription: "x", taskHours: "1", taskLink: "" })),
+      ]) expect(result.error).toBe("Your account isn't linked to an employee record, so there is nothing to record here.");
+      expect(listSpy).not.toHaveBeenCalled();
+    } finally {
+      listSpy.mockRestore();
     }
     expect(await attendanceStore.listAll()).toHaveLength(0);
   });

@@ -18,14 +18,17 @@
 // The fixture's Git commit counts are not migrated. Story 7.4: after training, the fixture's skills go
 // into `employee_skills` (insert-only: a skill whose (employee, lower-cased name) already exists is
 // skipped, so a manager's later rating survives) and its evaluations into `employee_evaluations`
-// (insert-only, one per employee), both with updated_by null. Other nested profile data stays in the
-// fixture (read by employees-store); the fixture's interviews, training, current work, skills and
-// evaluations are never read at runtime.
+// (insert-only, one per employee), both with updated_by null. Story 7.3: the fixture's employment history
+// is inserted into `employment_history` (ids from employmentHistorySeedId), insert-only, so edits and
+// removals made in the app survive a re-seed. Other nested profile data (attendance) stays in the fixture
+// (read by employees-store); the fixture's interviews, training, current work, skills, evaluations and
+// history are never read at runtime.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
-  assignmentSeedRows as AssignmentSeedRows, Employee, evaluationSeedRows as EvaluationSeedRows,
+  assignmentSeedRows as AssignmentSeedRows, Employee, employmentHistorySeedRows as EmploymentHistorySeedRows,
+  evaluationSeedRows as EvaluationSeedRows,
   interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows,
   missingSkillSeedRows as MissingSkillSeedRows, skillSeedRows as SkillSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
@@ -44,12 +47,12 @@ if (!url || !key) {
 // Loaded by URL so Node runs the fixture directly while tsc still sees a plain module path above.
 const fixtureUrl = new URL("../src/data/employees.ts", import.meta.url).href;
 const {
-  employees, evaluationSeedRows, interviewSeedRows, lmsStubSeedRows, missingSkillSeedRows, skillSeedRows, trainingSeedRows,
+  employees, employmentHistorySeedRows, evaluationSeedRows, interviewSeedRows, lmsStubSeedRows, missingSkillSeedRows, skillSeedRows, trainingSeedRows,
   assignmentSeedRows,
 } = (await import(fixtureUrl)) as {
   employees: Employee[]; interviewSeedRows: typeof InterviewSeedRows; lmsStubSeedRows: typeof LmsStubSeedRows;
   trainingSeedRows: typeof TrainingSeedRows; skillSeedRows: typeof SkillSeedRows; missingSkillSeedRows: typeof MissingSkillSeedRows; evaluationSeedRows: typeof EvaluationSeedRows;
-  assignmentSeedRows: typeof AssignmentSeedRows;
+  assignmentSeedRows: typeof AssignmentSeedRows; employmentHistorySeedRows: typeof EmploymentHistorySeedRows;
 };
 
 // Loaded the same way: the seed departments and the default department for fixture employees.
@@ -161,6 +164,18 @@ if (assignmentRows.length > 0) {
   insertedAssignments = assignments.data?.length ?? 0;
 }
 console.log(`Inserted ${insertedAssignments} new open assignments (${withOpen.size} employees with an open assignment skipped; existing rows left unchanged).`);
+
+// After the employees: employment_history.employee_id references employees (ON DELETE RESTRICT).
+// Insert-only: existing rows are never updated, so edits and removals made in the app survive a re-seed
+// (a removed row can never change: the guard trigger refuses it). defaultToNull: false leaves the
+// columns a row does not name (created_by, timestamps, removed_at) to the table and its trigger.
+const history = await supabase.from("employment_history")
+  .upsert(employmentHistorySeedRows(employees), { onConflict: "id", ignoreDuplicates: true, defaultToNull: false }).select("id");
+if (history.error) {
+  console.error(`Seeding employment history failed: ${history.error.message}`);
+  process.exit(1);
+}
+console.log(`Inserted ${history.data?.length ?? 0} new employment history entries (existing ones left unchanged).`);
 
 // After the employees: external_interviews.employee_id references employees (ON DELETE RESTRICT).
 const interviewRows = interviewSeedRows(employees);

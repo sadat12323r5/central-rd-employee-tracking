@@ -1,6 +1,6 @@
 // Integration test against the shared Supabase project. Skipped unless the three Supabase env vars
 // are present. Uses its own throwaway auth users, departments (names carrying this run's id) and
-// employees (a per-run slot of BS-8600..BS-8647, a range no other test uses; the Story 7.4 e2e uses
+// employees (a per-run slot of BS-8200..BS-8247, a range no other test uses; the Story 7.4 e2e uses
 // BS-8650..BS-8699), never the seeded demo data, and removes everything it created in afterAll through
 // the service role.
 // Rules under test (Story 7.4): public.rate_employee_skill and public.update_employee_evaluation let the
@@ -35,9 +35,11 @@ const noSession = { auth: { persistSession: false, autoRefreshToken: false } };
 const run = randomBytes(4).toString("hex");
 const password = `Rls-${randomBytes(12).toString("hex")}!`;
 const PREFIX = `RLS Assess ${run}`;
-// One per-run slot of six consecutive ids (BS-8600..BS-8647).
+// One per-run slot of six consecutive ids (BS-8200..BS-8247). Moved from BS-8600..BS-8647 at integration:
+// earlier Story 4.8 transfer-rls runs left undeletable assignments on some BS-86xx ids in the shared project,
+// which made this test's cleanup (delete the slot's employees) fail with 23503.
 const base = randomInt(0, 8) * 6;
-const idAt = (offset: number) => `BS-86${String(base + offset).padStart(2, "0")}`;
+const idAt = (offset: number) => `BS-82${String(base + offset).padStart(2, "0")}`;
 const managerId = idAt(0);         // manager of P (linked Staff account, no department)
 const staffId = idAt(1);           // plain Staff in C, manages nothing
 const childEmployee = idAt(2);     // in C (inside the P manager's subtree)
