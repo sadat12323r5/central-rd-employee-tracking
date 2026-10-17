@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildCalendar } from "@/domain/holiday-calendar";
+import { categoryForWorkingDays, countWorkingDays, type CalendarPolicy } from "@/domain/leave";
 import { createHolidayCalendarStore } from "@/server/holiday-calendar-store";
 import { createLeaveStore, LeaveForbiddenError, LeaveOverlapError } from "@/server/leave-store";
 import { createManagerScope } from "@/server/manager-scope";
@@ -72,10 +73,22 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
   let ownUserId = "";
   let calendarVersionId = "";
   let createdCalendarId: string | null = null;
+  /** The active calendar's policy (read through the service role), so direct rows carry the database's own count. */
+  let policy: CalendarPolicy = { holidays: new Set(), supportedYearStart: 2026, supportedYearEnd: 2026 };
 
-  /** A direct row for `employee_id` (one working day, counted with the active calendar). */
+  /** The working days and category of a period under the active calendar (1 / 1–3 when it cannot be counted, e.g. outside its years). */
+  function counted(start: string, end: string) {
+    try {
+      const days = countWorkingDays(start, end, policy);
+      return { working_days: days, category: categoryForWorkingDays(days).category };
+    } catch {
+      return { working_days: 1, category: "ONE_TO_THREE" };
+    }
+  }
+
+  /** A direct row for `employee_id`, with the working days and category the guard trigger expects for the active calendar. */
   const period = (employee_id: string, start_date: string, end_date = start_date, extra: Record<string, unknown> = {}) => ({
-    employee_id, start_date, end_date, working_days: 1, category: "ONE_TO_THREE", calendar_version_id: calendarVersionId, ...extra,
+    employee_id, start_date, end_date, ...counted(start_date, end_date), calendar_version_id: calendarVersionId, ...extra,
   });
 
   async function createUser(address: string, app_metadata: Record<string, string>) {
@@ -165,6 +178,14 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     service = createClient(url!, serviceKey!, noSession);
     await retire(); // leftovers from an aborted run (the employees are re-used below)
     calendarVersionId = await ensureCalendar();
+    const years = await service.from("holiday_calendar_versions").select("supported_year_start,supported_year_end").eq("id", calendarVersionId).single();
+    if (years.error) throw new Error(`Could not read the active calendar's years (${years.error.code}): ${years.error.message}`);
+    const dates = await service.from("holiday_calendar_dates").select("holiday_date").eq("version_id", calendarVersionId).range(0, 999);
+    if (dates.error) throw new Error(`Could not read the active calendar's dates (${dates.error.code}): ${dates.error.message}`);
+    policy = {
+      holidays: new Set((dates.data ?? []).map(d => d.holiday_date as string)),
+      supportedYearStart: years.data.supported_year_start as number, supportedYearEnd: years.data.supported_year_end as number,
+    };
     await createUser(adminEmail, { role: "admin" });
     managerUserId = await createUser(managerEmail, { role: "staff", employee_id: managerId });
     ownUserId = await createUser(ownEmail, { role: "staff", employee_id: childEmployee });
@@ -255,6 +276,41 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     expect((await admin.from("leave_records").insert(period(childEmployee, "2099-03-02"))).error?.message).toContain("leave_outside_calendar");
     for (const extra of [{ working_days: 0 }, { category: "LONG" }, { end_date: "2026-02-28", start_date: "2026-03-02" }]) {
       expect((await admin.from("leave_records").insert(period(childEmployee, "2026-03-02", "2026-03-02", extra))).error?.code).toBe("23514");
+    }
+  });
+
+  it("recounts every insert: a wrong working-day count or category is refused (23514)", async () => {
+    const own = await signedIn(ownEmail);
+    // 2–6 Mar 2026: Mon–Fri with no holiday → 5 working days, 4–14.
+    expect(counted("2026-03-02", "2026-03-06")).toEqual({ working_days: 5, category: "FOUR_TO_FOURTEEN" });
+    const wrongCount = await own.from("leave_records").insert(period(childEmployee, "2026-03-02", "2026-03-06", { working_days: 4 }));
+    expect(wrongCount.error?.code).toBe("23514");
+    expect(wrongCount.error?.message).toContain("leave_working_days_mismatch");
+    const wrongCategory = await own.from("leave_records").insert(period(childEmployee, "2026-03-02", "2026-03-06", { category: "ONE_TO_THREE" }));
+    expect(wrongCategory.error?.code).toBe("23514");
+    expect(wrongCategory.error?.message).toContain("leave_category_mismatch");
+    // A holiday counted as a working day: 25–27 Mar 2026 (26 Mar is Independence Day) is 2, not 3.
+    expect((await own.from("leave_records").insert(period(childEmployee, "2026-03-25", "2026-03-27", { working_days: 3 }))).error?.message)
+      .toContain("leave_working_days_mismatch");
+  });
+
+  it("refuses a period counted with a calendar version that is no longer active (23514 leave_calendar_changed)", async () => {
+    const stale = calendarVersionId;
+    // A newer version with the same holidays (so counts stay the same while it is active); deleted at once (no leave uses it).
+    const calendar = buildCalendar([{ name: "bangladesh-2026.csv", text: PROVISIONAL }]);
+    const newer = await service.rpc("load_holiday_calendar", {
+      p_jurisdiction: `${PREFIX} Newer`, p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart, p_year_end: calendar.supportedYearEnd,
+      p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays,
+    }).single<{ id: string }>();
+    if (newer.error) throw new Error(`Could not load a newer calendar (${newer.error.code}): ${newer.error.message}`);
+    try {
+      const admin = await signedIn(adminEmail);
+      const refused = await admin.from("leave_records").insert(period(childEmployee, "2026-04-20", "2026-04-20", { calendar_version_id: stale }));
+      expect(refused.error?.code).toBe("23514");
+      expect(refused.error?.message).toContain("leave_calendar_changed");
+    } finally {
+      await service.from("holiday_calendar_dates").delete().eq("version_id", newer.data.id);
+      await service.from("holiday_calendar_versions").delete().eq("id", newer.data.id);
     }
   });
 

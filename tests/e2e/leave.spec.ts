@@ -32,9 +32,15 @@ async function cancelLeave(service: SupabaseClient) {
 }
 
 async function ensureCalendar(service: SupabaseClient) {
-  const active = await service.from("holiday_calendar_versions").select("id").order("version", { ascending: false }).limit(1).maybeSingle();
+  const active = await service.from("holiday_calendar_versions").select("id,supported_year_start,supported_year_end")
+    .order("version", { ascending: false }).limit(1).maybeSingle();
   if (active.error) throw new Error(`Could not read the active calendar (${active.error.code}): ${active.error.message}`);
-  if (active.data) return;
+  if (active.data) {
+    if (active.data.supported_year_start > 2026 || active.data.supported_year_end < 2026) {
+      throw new Error("The shared project's active holiday calendar does not cover 2026; this spec records 2026 leave.");
+    }
+    return;
+  }
   const calendar = buildCalendar([{ name: "bangladesh-2026.csv", text: readFileSync(CSV, "utf8") }]);
   const loaded = await service.rpc("load_holiday_calendar", {
     p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart, p_year_end: calendar.supportedYearEnd,

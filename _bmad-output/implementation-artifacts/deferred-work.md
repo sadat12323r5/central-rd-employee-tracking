@@ -101,3 +101,9 @@ Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the acti
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-1-holiday-calendar.md`
   summary: The service role can still delete dates from a stored calendar version (kept so live tests can clean up); the Holiday calendar panel lists versions but not the dates inside each, and has no preview/confirm before a load becomes active.
   evidence: Recorded in the spec's deferred list with locations.
+
+## Story 5.2 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-record-leave.md`
+  summary: Leave can be recorded for an archived employee (same gap as employment history); the profile Attendance tab still shows fixture stats beside the real leave list until 5.4; the leave guard trigger's UPDATE branch has no live test yet (5.3 should add it).
+  evidence: Recorded in the spec's deferred list with locations.

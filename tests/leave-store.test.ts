@@ -7,13 +7,13 @@ import {
   HolidayCalendarForbiddenError, HolidayCalendarUnavailableError, type CalendarVersion, type HolidayCalendarStore,
 } from "@/server/holiday-calendar-store";
 import {
-  createLeaveStore, LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError,
+  createLeaveStore, LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError,
   LeaveValidationFailedError, toLeaveRecord, type LeaveRow,
 } from "@/server/leave-store";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { many, pagedClient } from "./support/paged-client";
 
-type Mode = "ok" | "error" | "throw" | "foreign" | "overlap" | "overlap-bare" | "outside" | "denied" | "fk-employee" | "fk-other" | "check";
+type Mode = "ok" | "error" | "throw" | "foreign" | "overlap" | "overlap-bare" | "calendar-changed" | "outside" | "denied" | "fk-employee" | "fk-other" | "check";
 type Call = { table: string; method: string; args: unknown[] };
 
 /**
@@ -34,6 +34,7 @@ function fakeClient(rows: LeaveRow[], mode: Mode = "ok") {
         if (inserted) {
           if (mode === "overlap") return { data: null, error: { code: "23514", message: "leave_overlap", details: "2026-03-01,2026-03-04" } };
           if (mode === "overlap-bare") return { data: null, error: { code: "23514", message: "leave_overlap" } };
+          if (mode === "calendar-changed") return { data: null, error: { code: "23514", message: "leave_calendar_changed" } };
           if (mode === "outside") return { data: null, error: { code: "23514", message: "leave_outside_calendar" } };
           if (mode === "check") return { data: null, error: { code: "23514", message: "violates check constraint" } };
           if (mode === "denied") return { data: null, error: { code: "42501", message: "new row violates row-level security policy" } };
@@ -244,11 +245,12 @@ describe("leave-store record", () => {
     expect(error.existing).toEqual({ startDate: "2026-03-01", endDate: "2026-03-04" });
     const bare = await storeFor(fakeClient([], "overlap-bare").client).record(staff, "BS-1001", input).catch(e => e);
     expect(bare).toBeInstanceOf(LeaveOverlapError);
-    expect(bare.existing).toEqual(input);
+    expect(bare.existing).toBeNull();
   });
 
   it("maps the other refusals: outside the calendar, RLS, unknown employee; anything else is unavailable", async () => {
     const input = { startDate: "2026-03-02", endDate: "2026-03-05" };
+    await expect(storeFor(fakeClient([], "calendar-changed").client).record(staff, "BS-1001", input)).rejects.toBeInstanceOf(LeaveCalendarChangedError);
     await expect(storeFor(fakeClient([], "outside").client).record(admin, "BS-1001", input)).rejects.toMatchObject({ code: "UNSUPPORTED_YEAR" });
     await expect(storeFor(fakeClient([], "denied").client).record(staff, "BS-1001", input)).rejects.toBeInstanceOf(LeaveForbiddenError);
     await expect(storeFor(fakeClient([], "fk-employee").client).record(admin, "BS-1999", input)).rejects.toBeInstanceOf(LeaveEmployeeNotFoundError);

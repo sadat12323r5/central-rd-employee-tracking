@@ -8,7 +8,7 @@ import type { LeaveRecord } from "@/data/employees";
 const { recordMock } = vi.hoisted(() => ({ recordMock: vi.fn() }));
 vi.mock("@/server/leave-actions", () => ({ recordLeaveAction: (...args: unknown[]) => recordMock(...args) }));
 
-import LeavePanel, { categoryDisplay } from "@/components/leave-panel";
+import LeavePanel from "@/components/leave-panel";
 
 const leave = (id: string, startDate: string, endDate: string, workingDays: number, category: LeaveRecord["category"], cancelledAt: string | null = null): LeaveRecord => ({
   id, employeeId: "BS-1001", startDate, endDate, workingDays, category, calendarVersionId: "cal-v3", cancelledAt, createdAt: "2026-10-17T00:00:00Z",
@@ -20,16 +20,6 @@ const records = [
 ];
 const recordForm = () => within(screen.getByRole("form", { name: "Record leave" }));
 const setDate = (label: string, value: string) => fireEvent.change(recordForm().getByLabelText(label), { target: { value } });
-
-describe("categoryDisplay", () => {
-  it("gives every stored category its label and colour from the domain", () => {
-    expect(categoryDisplay("ONE_TO_THREE")).toEqual({ category: "ONE_TO_THREE", label: "1–3 working days", colour: "#22C55E" });
-    expect(categoryDisplay("FOUR_TO_FOURTEEN").label).toBe("4–14 working days");
-    expect(categoryDisplay("FIFTEEN_TO_THIRTY").label).toBe("15–30 working days");
-    expect(categoryDisplay("THIRTY_ONE_TO_NINETY").label).toBe("31–90 working days");
-    expect(categoryDisplay("NINETY_ONE_PLUS")).toMatchObject({ label: "91+ working days", colour: "#A855F7" });
-  });
-});
 
 describe("LeavePanel (Story 5.2)", () => {
   beforeEach(() => recordMock.mockReset());

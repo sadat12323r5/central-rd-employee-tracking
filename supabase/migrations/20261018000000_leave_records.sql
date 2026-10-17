@@ -13,8 +13,11 @@
 -- * There is no update or delete policy (Story 5.3 adds editing and cancelling). cancelled_at is always
 --   null in 5.2; a cancelled row is ignored by the overlap check.
 -- * The guard trigger owns created_by (auth.uid()) and created_at, locks id, employee_id, created_by and
---   created_at after creation, refuses any change to a cancelled row, checks the dates fall within the
---   calendar version's supported years (23514 leave_outside_calendar) and, holding a per-employee
+--   created_at after creation, refuses any change to a cancelled row, requires the active (highest)
+--   calendar version (23514 leave_calendar_changed), checks the dates fall within its supported years
+--   (23514 leave_outside_calendar), recounts the working days (Monday to Friday minus that version's
+--   holidays; 23514 leave_working_days_mismatch) and checks the category band for that count (23514
+--   leave_category_mismatch), so a direct API insert cannot store a wrong count; and, holding a per-employee
 --   transaction advisory lock, refuses a period that intersects (inclusive) another non-cancelled leave of
 --   the same employee (23514 leave_overlap, detail 'YYYY-MM-DD,YYYY-MM-DD' = the existing period). The
 --   store checks overlap first; the trigger is the backstop for concurrent saves.
@@ -48,6 +51,7 @@ as $$
 declare
   v_start integer;
   v_end integer;
+  v_days integer;
   v_existing record;
 begin
   if tg_op = 'INSERT' then
@@ -78,6 +82,13 @@ begin
     end if;
   end if;
 
+  -- A period is always counted with the active (highest) calendar version.
+  if new.calendar_version_id is distinct from (
+    select v.id from public.holiday_calendar_versions v order by v.version desc limit 1
+  ) then
+    raise exception 'leave_calendar_changed' using errcode = '23514';
+  end if;
+
   -- The dates must fall within the supported years of the calendar version they were counted with.
   select v.supported_year_start, v.supported_year_end into v_start, v_end
     from public.holiday_calendar_versions v
@@ -85,6 +96,27 @@ begin
   if found and (extract(year from new.start_date)::integer not between v_start and v_end
                 or extract(year from new.end_date)::integer not between v_start and v_end) then
     raise exception 'leave_outside_calendar' using errcode = '23514';
+  end if;
+
+  -- The working days and category are the database's check of the app's count (src/domain/leave.ts):
+  -- Monday to Friday, minus that version's holidays; categories 1–3, 4–14, 15–30, 31–90, 91+.
+  select count(*)::integer into v_days
+    from generate_series(new.start_date, new.end_date, interval '1 day') as d(day)
+    where extract(isodow from d.day) < 6
+      and not exists (
+        select 1 from public.holiday_calendar_dates h
+        where h.version_id = new.calendar_version_id and h.holiday_date = d.day::date
+      );
+  if new.working_days is distinct from v_days then
+    raise exception 'leave_working_days_mismatch' using errcode = '23514';
+  end if;
+  if new.category is distinct from (case
+      when v_days <= 3 then 'ONE_TO_THREE'
+      when v_days <= 14 then 'FOUR_TO_FOURTEEN'
+      when v_days <= 30 then 'FIFTEEN_TO_THIRTY'
+      when v_days <= 90 then 'THIRTY_ONE_TO_NINETY'
+      else 'NINETY_ONE_PLUS' end) then
+    raise exception 'leave_category_mismatch' using errcode = '23514';
   end if;
 
   if new.cancelled_at is null then

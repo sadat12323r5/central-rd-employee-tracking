@@ -10,7 +10,28 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-5-1-holiday-calendar.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Leave can be recorded for an archived employee.
+    evidence: |-
+      Neither the store, RLS nor the trigger checks employees.archived_at; employment history has the same gap (deferred in 7.3).
+    location: >-
+      src/server/leave-store.ts
+    severity: medium
+  - summary: >-
+      The profile Attendance tab still shows fixture stats next to the real leave list.
+    evidence: |-
+      Story 5.4 replaces the stats with real data.
+    location: >-
+      src/components/portal.tsx
+    severity: low
+  - summary: >-
+      The guard trigger's UPDATE branch has no live test.
+    evidence: |-
+      Only test cleanup updates rows in 5.2; Story 5.3 adds edit/cancel and should add service-role update cases.
+    location: >-
+      supabase/migrations/20261018000000_leave_records.sql
+    severity: low
 ---
 
 <intent-contract>
@@ -89,6 +110,31 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 2026-10-17 — Review pass
+- verdicts: 29 findings — high 0, medium 2, low 19, false 4, maybe-false 0 (plus descriptive intent rows noted at the end)
+- findings:
+  - `[medium]` `[patch]` (blind+edge+intent) Direct API insert could store any working_days/category or an old calendar version — guard trigger now requires the highest version, recounts working days in SQL and checks the category band; live cases added; RLS helper computes real counts.
+  - `[low]` `[patch]` (blind) Calendar version can go stale between read and insert — covered by the highest-version check; mapped to "The holiday calendar changed while saving. Try again."
+  - `[low]` `[patch]` (blind+edge) Staff shown the manager-only forbidden message — Staff now get "You can only record your own leave."
+  - `[false]` `[reject]` (blind) Manager cannot list own leave — a manager sees their own leave in "My record", which reads under the own-record identity; the profile list only shows their subtree.
+  - `[low]` `[reject]` (blind+intent+edge claim) "My record" form for a manager/admin follows their role rules, not Staff's — a tampered form can only do what that role may already do; no escalation.
+  - `[low]` `[defer]` (blind) Fixture attendance stats sit next to real leave with different numbers — Story 5.4 replaces them.
+  - `[low]` `[patch]` (blind) Category bands restated in the panel — label/colour now from `categoryForWorkingDays`.
+  - `[low]` `[patch]` (blind+edge) e2e ensureCalendar did not confirm 2026 coverage — now throws a clear setup error.
+  - `[low]` `[reject]` (blind) Concurrent e2e runs collide on the fixed BS-8390 — e2e runs serially (workers: 1, one CI job).
+  - `[low]` `[reject]` (blind) Advisory lock untested under concurrency — a reliable race test costs more than it buys; sequential overlap backstop is tested.
+  - `[medium]` `[defer]` (blind+edge) Leave can be recorded for an archived employee — same as employment history (deferred in 7.3); needs a cross-table archived rule decided once.
+  - `[false]` `[reject]` (blind) Spec unfinished / stale line refs — the spec is finalized at the end of the run; line refs were investigation anchors.
+  - `[low]` `[reject]` (blind) No client-side date bounds — server messages cover it; dynamic min needs extra state.
+  - `[low]` `[patch]` (edge) Overlap error without detail named the user's own dates — generic message now.
+  - `[low]` `[reject]` (edge) Panel has no catch around the action — same as every other panel; unexpected errors go to the error boundary by design.
+  - `[low]` `[reject]` (edge) Identical success messages not re-announced — same as other panels.
+  - `[low]` `[patch]` (edge) Quadratic grouping in listFor — pushes into the existing group.
+  - `[false]` `[reject]` (edge claim) Action tests miss the Adjacent row — covered in leave-store.test.ts, where the overlap rule lives.
+  - `[false]` `[reject]` (edge claim) RLS cleanup touches rows from earlier runs — intended: the fixed ids are reserved for this test file.
+  - `[low]` `[defer]` (gap) Guard trigger UPDATE branch (column locks, cancelled-row freeze, cancel stamping) untested — Story 5.3 adds the update path; add the cases there.
+  - intent rows (attendance views not yet reflecting leave = 5.4; subtree scope; app-path counting now backed by the DB recount; e2e covers Staff only, manager/admin covered at store and RLS) — descriptive, no further action.
 
 ## Design Notes
 

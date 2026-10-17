@@ -20,7 +20,7 @@ vi.mock("../src/server/leave-store", async importOriginal => ({
 
 const { recordLeaveAction } = await import("../src/server/leave-actions");
 const {
-  LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError, LeaveValidationFailedError,
+  LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError, LeaveValidationFailedError,
 } = await import("../src/server/leave-store");
 
 const blank = { error: "", message: "" };
@@ -104,6 +104,11 @@ describe("recordLeaveAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  it("refuses a Staff session the store forbids with the own-record message", async () => {
+    record.mockRejectedValue(new LeaveForbiddenError());
+    expect(await recordLeaveAction(blank, form(MARCH))).toEqual({ error: "You can only record your own leave.", message: "" });
+  });
+
   it.each([[{}], [{ employeeId: "" }], [{ employeeId: "1003" }]])("requires a valid Employee ID for an Administrator or manager (%o)", async extra => {
     getSession.mockResolvedValue(ADMIN);
     const result = await recordLeaveAction(blank, form({ ...MARCH, ...extra }));
@@ -135,6 +140,8 @@ describe("recordLeaveAction", () => {
 
   it.each([
     ["overlap", new LeaveOverlapError({ startDate: "2026-03-02", endDate: "2026-03-05" }), "This overlaps leave already recorded from 2 Mar 2026 to 5 Mar 2026."],
+    ["an overlap the database did not name", new LeaveOverlapError(null), "This overlaps leave already recorded for this employee."],
+    ["a calendar loaded while saving", new LeaveCalendarChangedError(), "The holiday calendar changed while saving. Try again."],
     ["a year outside the calendar", new LeaveValidationFailedError("UNSUPPORTED_YEAR", { year: 2027, supportedYearStart: 2026, supportedYearEnd: 2026 }),
       "The holiday calendar covers 2026 only, so leave in 2027 can't be counted yet."],
     ["a year outside a two-year calendar", new LeaveValidationFailedError("UNSUPPORTED_YEAR", { year: 2028, supportedYearStart: 2026, supportedYearEnd: 2027 }),

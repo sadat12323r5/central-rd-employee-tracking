@@ -28,8 +28,8 @@ export type LeaveInput = { startDate: string; endDate: string };
 export interface LeaveStore {
   /**
    * Records a leave period for `employeeId` (staff: must be their own; manager: their own or in their
-   * subtree). Throws LeaveForbiddenError, LeaveCalendarMissingError, LeaveValidationFailedError,
-   * LeaveOverlapError or LeaveUnavailableError.
+   * subtree). Throws LeaveForbiddenError, LeaveCalendarMissingError, LeaveCalendarChangedError,
+   * LeaveValidationFailedError, LeaveOverlapError or LeaveUnavailableError.
    */
   record(session: SessionIdentity, employeeId: string, input: LeaveInput): Promise<LeaveRecord>;
   /**
@@ -48,13 +48,24 @@ export class LeaveForbiddenError extends Error {
   }
 }
 
-/** The period intersects another non-cancelled leave of the same employee (`existing` is that period). */
+/**
+ * The period intersects another non-cancelled leave of the same employee. `existing` is that period, or null
+ * when the database refused the overlap without naming it.
+ */
 export class LeaveOverlapError extends Error {
-  readonly existing: LeaveInput;
-  constructor(existing: LeaveInput) {
-    super(`The period overlaps leave already recorded from ${existing.startDate} to ${existing.endDate}.`);
+  readonly existing: LeaveInput | null;
+  constructor(existing: LeaveInput | null) {
+    super(existing ? `The period overlaps leave already recorded from ${existing.startDate} to ${existing.endDate}.` : "The period overlaps leave already recorded.");
     this.name = "LeaveOverlapError";
     this.existing = existing;
+  }
+}
+
+/** A new holiday calendar version became active between counting the period and saving it. Nothing was saved. */
+export class LeaveCalendarChangedError extends Error {
+  constructor() {
+    super("The holiday calendar changed while saving.");
+    this.name = "LeaveCalendarChangedError";
   }
 }
 
@@ -119,10 +130,14 @@ export function toLeaveRecord(row: LeaveRow): LeaveRecord {
 /** Newest start first within each employee (id breaks ties); employees keep the order they first appear in. */
 function newestFirstPerEmployee(records: LeaveRecord[]): LeaveRecord[] {
   const groups = new Map<string, LeaveRecord[]>();
-  for (const record of records) groups.set(record.employeeId, [...(groups.get(record.employeeId) ?? []), record]);
+  for (const record of records) {
+    const group = groups.get(record.employeeId);
+    if (group) group.push(record);
+    else groups.set(record.employeeId, [record]);
+  }
   const order = (a: LeaveRecord, b: LeaveRecord) =>
     b.startDate.localeCompare(a.startDate) || b.endDate.localeCompare(a.endDate) || b.id.localeCompare(a.id);
-  return [...groups.values()].flatMap(group => [...group].sort(order));
+  return [...groups.values()].flatMap(group => group.sort(order));
 }
 
 type Result<T> = { data: T | null; error: unknown };
@@ -196,8 +211,9 @@ export function createLeaveStore({ userClient, scope = managerScope, calendar = 
       if (code === "42501") return new LeaveForbiddenError();
       if (code === "23514" && message.includes("leave_overlap")) {
         const match = OVERLAP_DETAIL.exec(details.trim());
-        return new LeaveOverlapError(match ? { startDate: match[1], endDate: match[2] } : input);
+        return new LeaveOverlapError(match ? { startDate: match[1], endDate: match[2] } : null);
       }
+      if (code === "23514" && message.includes("leave_calendar_changed")) return new LeaveCalendarChangedError();
       if (code === "23514" && message.includes("leave_outside_calendar")) {
         return new LeaveValidationFailedError("UNSUPPORTED_YEAR", { year: outsideYear(input, years), ...years });
       }

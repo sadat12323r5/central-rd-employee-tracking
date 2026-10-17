@@ -3,19 +3,9 @@
 import { startTransition, useActionState, type FormEvent } from "react";
 import type { LeaveRecord } from "@/data/employees";
 import { formatDisplayDate } from "@/domain/dates";
-import { categoryForWorkingDays, type LeaveCategory, type LeaveCategoryDisplay } from "@/domain/leave";
+import { categoryForWorkingDays } from "@/domain/leave";
 import type { ActionState } from "@/server/attendance-actions";
 import { recordLeaveAction } from "@/server/leave-actions";
-
-/** The smallest length of each category: its label and colour come from `categoryForWorkingDays`, never restated here. */
-const CATEGORY_MIN_DAYS: Record<LeaveCategory, number> = {
-  ONE_TO_THREE: 1, FOUR_TO_FOURTEEN: 4, FIFTEEN_TO_THIRTY: 15, THIRTY_ONE_TO_NINETY: 31, NINETY_ONE_PLUS: 91,
-};
-
-/** The label and colour of a stored category. */
-export function categoryDisplay(category: LeaveCategory): LeaveCategoryDisplay {
-  return categoryForWorkingDays(CATEGORY_MIN_DAYS[category]);
-}
 
 /** `attempt` counts successful submissions: the form is re-keyed (cleared) only then. */
 type CountedState = ActionState & { attempt: number };
@@ -33,9 +23,9 @@ const submitWith = (action: (form: FormData) => void) => (event: FormEvent<HTMLF
   startTransition(() => action(form));
 };
 
-/** A category always shows its text label next to its colour. */
-function Category({ category }: { category: LeaveCategory }) {
-  const display = categoryDisplay(category);
+/** A category always shows its text label next to its colour (from the domain, for the period's working days). */
+function Category({ workingDays }: { workingDays: number }) {
+  const display = categoryForWorkingDays(workingDays);
   return <span className="leave-category"><span className="leave-swatch" style={{ background: display.colour }} aria-hidden="true" />{display.label}</span>;
 }
 
@@ -57,7 +47,7 @@ export default function LeavePanel({ employeeId, records, canEdit, own = false }
       <thead><tr><th>From</th><th>To</th><th>Working days</th><th>Category</th><th>Status</th></tr></thead>
       <tbody>{records.map(r => <tr key={r.id}>
         <td>{formatDisplayDate(r.startDate)}</td><td>{formatDisplayDate(r.endDate)}</td><td>{r.workingDays}</td>
-        <td><Category category={r.category} /></td>
+        <td><Category workingDays={r.workingDays} /></td>
         <td>{r.cancelledAt ? <span className="badge withdrawn">Cancelled</span> : <span className="badge green"><span className="dot" />Recorded</span>}</td>
       </tr>)}</tbody>
     </table></div>}

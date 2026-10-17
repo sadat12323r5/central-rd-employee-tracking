@@ -8,7 +8,7 @@ import { categoryForWorkingDays } from "@/domain/leave";
 import type { ActionState } from "./attendance-actions";
 import { getSession } from "./auth";
 import {
-  LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, leaveStore, LeaveUnavailableError,
+  LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, leaveStore, LeaveUnavailableError,
   LeaveValidationFailedError,
 } from "./leave-store";
 
@@ -24,6 +24,8 @@ const FORBIDDEN = "You can only record leave for employees in your department.";
 const INVALID_DATE = "Enter real dates for the start and end of the leave.";
 const REVERSED = "The end date must be on or after the start date.";
 const ZERO_DAYS = "This period has no working days (only weekends and holidays).";
+const CALENDAR_CHANGED = "The holiday calendar changed while saving. Try again.";
+const OVERLAP_UNNAMED = "This overlaps leave already recorded for this employee.";
 const NO_CALENDAR = "No holiday calendar is loaded yet. Ask the Administrator to load it.";
 const NOT_FOUND = "No employee has this Employee ID.";
 const UNAVAILABLE = "Leave is temporarily unavailable. Nothing was saved.";
@@ -49,10 +51,12 @@ function namesSomeoneElse(form: FormData, own: string): boolean {
 const yearsText = (start: number, end: number) => (start === end ? `${start}` : `${start}–${end}`);
 const daysText = (days: number) => `${days} working ${days === 1 ? "day" : "days"}`;
 
-/** Maps the store's refusals to messages. Unknown errors are rethrown. */
-function refusal(error: unknown): ActionState {
-  if (error instanceof LeaveForbiddenError) return failure(FORBIDDEN);
+/** Maps the store's refusals to messages (`staff`: the session is a Staff one). Unknown errors are rethrown. */
+function refusal(error: unknown, staff: boolean): ActionState {
+  if (error instanceof LeaveForbiddenError) return failure(staff ? OWN_ONLY : FORBIDDEN);
+  if (error instanceof LeaveCalendarChangedError) return failure(CALENDAR_CHANGED);
   if (error instanceof LeaveOverlapError) {
+    if (!error.existing) return failure(OVERLAP_UNNAMED);
     return failure(`This overlaps leave already recorded from ${formatDisplayDate(error.existing.startDate)} to ${formatDisplayDate(error.existing.endDate)}.`);
   }
   if (error instanceof LeaveCalendarMissingError) return failure(NO_CALENDAR);
@@ -101,7 +105,7 @@ export async function recordLeaveAction(_previous: ActionState, form: FormData):
   try {
     saved = await leaveStore.record(session, subject, parsed.data);
   } catch (error) {
-    return refusal(error);
+    return refusal(error, session.role === "staff");
   }
   revalidatePath("/");
   return { error: "", message: `Leave recorded: ${daysText(saved.workingDays)} (${categoryForWorkingDays(saved.workingDays).label}).` };
