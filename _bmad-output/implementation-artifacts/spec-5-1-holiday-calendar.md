@@ -1,0 +1,102 @@
+---
+title: 'Story 5.1: Administrator loads the approved holiday calendar'
+type: 'feature'
+created: '2026-10-17'
+status: 'in-progress'
+baseline_revision: '0a1482ab2d0dd708858e266a749e7211079ddc24'
+review_loop_iteration: 0
+followup_review_recommended: false
+context:
+  - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
+  - '{project-root}/docs/holiday-calendars/README.md'
+warnings: ['oversized']
+deferred: []
+---
+
+<intent-contract>
+
+## Intent
+
+**Problem:** `src/domain/leave.ts` counts working days against a `CalendarPolicy`, but nothing stores one: there is no holiday calendar in the database, so Stories 5.2–5.4 cannot count real leave. The System Owner adopted `docs/holiday-calendars/bangladesh-2026.csv` (2026-10-17) as the provisional calendar, and it must stay adjustable.
+
+**Approach:** Add versioned holiday-calendar storage (Supabase, additive migration, RLS), a pure CSV parser, a store that loads a calendar (Administrator only) and returns the active version as a `CalendarPolicy`, an Administrator-only server action and a small "Holiday calendar" panel in the Administrator's Attendance & leave section, plus an idempotent seed of the provisional 2026 calendar.
+
+## Boundaries & Constraints
+
+**Always:**
+- A load is one or more CSV files (header exactly `date,name,kind`; `kind` ∈ `general` / `executive order` / `special`) plus a jurisdiction (form text, 1–100 chars, default `Bangladesh`). Timezone is always the org timezone `Asia/Dhaka`. Supported years = the years the dates fall in, which must be contiguous; a year with no dates between two that have dates is rejected ("add that year's file too").
+- Every load creates a NEW immutable version (version number increments); the active calendar is the highest version. Versions and their dates are never updated or deleted (no UPDATE/DELETE policy). Each version records who loaded it, when, and the source file name(s).
+- The version row and its dates are written atomically (one Postgres function called via RPC, `security invoker`, so RLS applies; it also refuses any caller that is not an Administrator or the service role).
+- Store returns `CalendarPolicy` (`holidays` as ISO date strings, `supportedYearStart/End`) usable unchanged by `countWorkingDays`; a date outside the supported years throws the existing `LeaveValidationError` `UNSUPPORTED_YEAR`.
+- Administrator check in the action AND the store before any query; RLS insert admin-only; every signed-in role may SELECT (5.2 counts staff leave through the user's JWT). Uses `getUserClient` at runtime, never the service role (seed only).
+- zod validation in the action; `{ error, message }` results; dates shown `D MMM YYYY`; an unavailable store is reported, never shown as "no calendar".
+- Migration is ADDITIVE only.
+
+**Never:** No leave records, leave UI or attendance changes (5.2–5.4). No editing of a stored version in place. No guessing of dates outside supported years. No hard-coded holidays in code. No approvals workflow.
+
+## I/O & Edge-Case Matrix
+
+| Scenario | Input / State | Expected Output / Behavior | Error Handling |
+|----------|--------------|---------------------------|----------------|
+| Load provisional file | Admin, `bangladesh-2026.csv`, jurisdiction Bangladesh | Version N+1 stored with all 28+ holidays, years 2026–2026, Asia/Dhaka; it becomes active | "Holiday calendar version N+1 loaded (… holidays, 2026)." |
+| Reload corrected file | Admin loads a changed 2026 file | New version; previous version still stored unchanged | — |
+| Two years | 2026 + 2027 files in one load | One version, supported 2026–2027 | — |
+| Gap in years | 2026 + 2028 files | Nothing saved | "The calendar must cover consecutive years: add 2027 too." |
+| Bad header / kind / date / duplicate date / empty file / no files / too large (>200 KB total or >1000 rows) | malformed CSV | Nothing saved | Specific message naming the line number where applicable |
+| Non-admin | staff or manager session calls the action or store load | Nothing saved | "Only an Administrator can load the holiday calendar." / `HolidayCalendarForbiddenError` |
+| Count inside years | active policy, `2026-02-01..2026-02-28` | `countWorkingDays` excludes weekends and Feb holidays | — |
+| Count outside years | active policy, a 2027 date | `LeaveValidationError` `UNSUPPORTED_YEAR` | — |
+| No calendar loaded | empty tables | `active()` returns null; panel says none loaded yet | — |
+| DB down | query error | `HolidayCalendarUnavailableError`; action says nothing saved | panel says unavailable |
+
+</intent-contract>
+
+## Code Map
+
+- `src/domain/leave.ts` -- READ-ONLY. `CalendarPolicy`, `countWorkingDays`, `LeaveValidationError("UNSUPPORTED_YEAR")`. Reuse, do not change.
+- `src/domain/dates.ts` -- `isCalendarDate`, `formatDisplayDate`, `formatDisplayDateTime` for validation/display.
+- `src/domain/csv.ts` -- existing CSV writer only; the parser is new.
+- `src/server/departments-store.ts` -- golden store pattern: `createXStore({ userClient })`, `run`/`runMaybe`, `refusal()` mapping DB codes to typed errors, `requireAdmin`, typed `*UnavailableError`/`*ForbiddenError`, exported singleton.
+- `src/server/department-actions.ts` -- golden action pattern: `"use server"`, `getSession()`, admin check first, zod `safeParse`, `refusal()` to `ActionState`, `revalidatePath("/")`.
+- `src/server/attendance-actions.ts` -- exports `ActionState`.
+- `src/components/departments-panel.tsx` -- panel/form markup and classes (`staff-log`, `staff-field`, `Feedback`, `useActionState`).
+- `src/components/portal.tsx:217` -- "Attendance & leave" section; add the panel for `role === "admin"` only. Portal props at ~line 115.
+- `src/app/page.tsx` -- admin branch: read calendar versions alongside employees/departments; an error becomes `null` (logged), not a page failure.
+- `supabase/migrations/20261014000000_departments.sql` -- migration/RLS style (`auth.jwt() -> 'app_metadata' ->> 'role'`).
+- `tests/departments-rls.test.ts` -- live-DB test pattern: skipIf unconfigured, throwaway users, one sign-in per user per file, service-role cleanup.
+- `tests/departments-store.test.ts`, `tests/components/departments-panel.test.tsx`, `tests/e2e/departments.spec.ts` -- unit/component/e2e patterns.
+- `scripts/seed-employees.ts` -- idempotent insert-only seed; add the calendar seed here.
+- `docs/holiday-calendars/bangladesh-2026.csv` -- the provisional calendar (fixture for tests and seed).
+
+## Tasks & Acceptance
+
+**Execution:**
+- `supabase/migrations/20261017000000_holiday_calendars.sql` -- ADDITIVE: tables `holiday_calendar_versions` (uuid id, `version` int identity unique, jurisdiction, timezone check = 'Asia/Dhaka', supported_year_start/end with end ≥ start, source text, loaded_by uuid default auth.uid(), loaded_at timestamptz) and `holiday_calendar_dates` (version_id FK on delete restrict, holiday_date date, name 1–200, kind check, PK(version_id, holiday_date)); RLS select for authenticated, insert admin-only, no update/delete; function `load_holiday_calendar(p_jurisdiction, p_timezone, p_year_start, p_year_end, p_source, p_holidays jsonb)` security invoker, `set search_path = ''`, refuses non-admin non-service-role callers (raise 42501), checks each date within years (raise check_violation), inserts version + dates, returns the version row; execute granted to authenticated and service_role only.
+- `src/domain/holiday-calendar.ts` -- pure: `parseHolidayCsv(text, fileName)` (quoted fields, CRLF/LF, BOM, blank trailing lines) and `buildCalendar(files)` → `{ supportedYearStart, supportedYearEnd, holidays: {date,name,kind}[] }` sorted by date, with `HolidayCalendarInputError(message)` for every rule in the matrix; `toCalendarPolicy(...)`.
+- `src/server/holiday-calendar-store.ts` -- `load(session, input)`, `active(session)` → `{ version: CalendarVersion; policy: CalendarPolicy } | null`, `versions(session)` (admin, newest first, with holiday counts). Typed errors as in the matrix.
+- `src/server/holiday-calendar-actions.ts` -- `loadHolidayCalendarAction(prev, form)`: admin check, zod on jurisdiction, files from `form.getAll("files")` (File, `.csv`, size limits), parse, store.load, revalidate.
+- `src/components/holiday-calendar-panel.tsx` -- shows the active version (version, jurisdiction, timezone, years, holiday count, loaded at, source) and earlier versions, the load form (file input `multiple accept=".csv"`, jurisdiction), feedback; `null` versions → "unavailable" alert.
+- `src/components/portal.tsx`, `src/app/page.tsx` -- wire the panel for Administrators only.
+- `scripts/seed-employees.ts` -- if no calendar version exists, load `docs/holiday-calendars/bangladesh-2026.csv` through the RPC with the service role (insert-only, idempotent).
+- Tests: `tests/holiday-calendar.test.ts` (parser/build matrix rows + policy with `countWorkingDays`, incl. UNSUPPORTED_YEAR), `tests/holiday-calendar-store.test.ts` (fake client: admin-only, mapping, active null, policy), `tests/holiday-calendar-actions.test.ts`, `tests/components/holiday-calendar-panel.test.tsx`, `tests/holiday-calendar-rls.test.ts` (live: admin loads, staff refused at RLS/RPC, staff can read, no update/delete, store `active()` policy + UNSUPPORTED_YEAR), `tests/e2e/holiday-calendar.spec.ts` (admin uploads the CSV, sees new version).
+
+**Acceptance Criteria:**
+- Given an Administrator and the provisional CSV, when they load it from the Attendance & leave section, then a new version is stored and shown as active, and `holidayCalendarStore.active()` returns a `CalendarPolicy` that `countWorkingDays` accepts.
+- Given the stored calendar and a date outside its supported years, when `countWorkingDays` is called with the returned policy, then it throws `UNSUPPORTED_YEAR`.
+- Given a Staff or manager session, when it calls the load action, the store load, or the RPC/table insert directly, then it is rejected at the server and nothing is stored.
+
+## Spec Change Log
+
+## Review Triage Log
+
+## Design Notes
+
+A version is a complete calendar (all its years), so "add a year" = load the existing year's file together with the new one; the active policy is never assembled from several versions. This keeps `CalendarPolicy`'s contiguous year range honest and makes "which calendar counted this leave" a single version id for 5.2.
+
+## Verification
+
+**Commands:**
+- `npm run typecheck` -- expected: no errors
+- `npm test` -- expected: all pass; live-DB holiday-calendar tests may fail only with schema-missing errors (42P01, PGRST205, PGRST202) until the migration is applied
+- `npm run build` -- expected: success
+- `npm run test:e2e` -- expected: pass except the holiday-calendar spec, which may fail only on schema-missing errors until the migration is applied
