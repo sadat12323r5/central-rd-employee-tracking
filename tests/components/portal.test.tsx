@@ -26,6 +26,9 @@ vi.mock("@/server/assignment-evaluation-actions", () => ({
   createEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation saved." })),
   amendEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation updated." })),
 }));
+vi.mock("@/server/employment-history-actions", () => ({
+  addEmploymentHistoryAction: vi.fn(), updateEmploymentHistoryAction: vi.fn(), removeEmploymentHistoryAction: vi.fn(),
+}));
 vi.mock("@/server/employee-actions", () => ({
   createEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
   updateEmployeeDetailsAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -1589,5 +1592,51 @@ describe("Portal \"My record\" (Story 4.10)", () => {
     expect(nav().getAllByRole("button").map(b => b.textContent?.replace(/\d+$/, ""))).toEqual(
       ["Overview", "Employees", "Learning & development", "Attendance & leave", "My record"],
     );
+  });
+});
+
+describe("Portal Employment tab (Story 7.3)", () => {
+  const fahim = employees.find(e => e.id === "BS-1008")!;
+
+  async function openEmployment(role: "admin" | "manager" = "admin", people = employees) {
+    const user = userEvent.setup();
+    await show(<Portal employees={people} role={role} current={none()} />);
+    await user.click(screen.getByRole("button", { name: `View ${fahim.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Employment" }));
+    return within(screen.getByRole("tabpanel"));
+  }
+
+  it("keeps the heading, the intro line and the timeline (newest first, same markup)", async () => {
+    const panel = await openEmployment();
+    expect(panel.getByRole("heading", { level: 2, name: "Employment history" })).toBeInTheDocument();
+    expect(panel.getByText("Current role and previous employment.")).toBeInTheDocument();
+    const items = [...screen.getByRole("tabpanel").querySelectorAll(".timeline > .timeline-item")];
+    expect(items.map(item => [item.querySelector(":scope > small")?.textContent, item.querySelector(":scope > h3")?.textContent, item.querySelector(":scope > strong")?.textContent, item.querySelector(":scope > p")?.textContent]))
+      .toEqual(fahim.history.map(h => [h.period, h.role, h.company, h.detail]));
+  });
+
+  it.each([["admin"], ["manager"]] as const)("offers add, edit and remove to the %s", async role => {
+    const panel = await openEmployment(role);
+    expect(panel.getByRole("form", { name: "Add employment entry" })).toBeInTheDocument();
+    for (const h of fahim.history) {
+      expect(panel.getByRole("button", { name: `Edit employment entry: ${h.role}, ${h.company}` })).toBeInTheDocument();
+      expect(panel.getByRole("button", { name: `Remove employment entry: ${h.role}, ${h.company}` })).toBeInTheDocument();
+    }
+  });
+
+  it("shows the empty state when no history is recorded", async () => {
+    const panel = await openEmployment("admin", employees.map(e => (e.id === fahim.id ? { ...e, history: [] } : e)));
+    expect(panel.getByText("No employment history has been recorded.")).toBeInTheDocument();
+  });
+
+  it("shows a removed entry's absence once the refreshed props drop it", async () => {
+    const user = userEvent.setup();
+    const view = await show(<Portal employees={employees} current={none()} />);
+    await user.click(screen.getByRole("button", { name: `View ${fahim.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Employment" }));
+    const updated = employees.map(e => (e.id === fahim.id ? { ...e, history: e.history.slice(0, 1) } : e));
+    await act(async () => { view.rerender(<Portal employees={updated} current={none()} />); });
+    expect(screen.queryByText(fahim.history[1].role)).not.toBeInTheDocument();
+    expect(screen.getByText(fahim.history[0].period)).toBeInTheDocument();
   });
 });

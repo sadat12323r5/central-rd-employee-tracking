@@ -86,3 +86,9 @@ Story 5.2 counts working days "against the calendar (weekends and holidays exclu
 ## Blocked: Story 8.4 (recorded 2026-10-16 by the unattended story loop)
 
 Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the activity export and depends on Epic 5 Stories 5.2–5.3 (epics.md). Those need Story 5.1's holiday calendar, which is blocked on the System Owner-approved calendar (sprint-status action item). Building only the assignment and evaluation rows would leave AC3 unbuildable and would split the story without a stakeholder decision. 8.4 stays `backlog` with a `# blocked` note until 5.1–5.3 are unblocked. Spec: `spec-8-4-exports-assignments-evaluations-leave.md`.
+
+## Story 7.3 (recorded 2026-10-16)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-3-employment-history.md`
+  summary: Employment-history edits are last-write-wins (no optimistic concurrency), like interviews; archived employees and archived subjects can still have history written (no archived_at check in RLS or store, as with interviews); the db:seed history write is untested; no e2e drives Staff self-service or a manager.
+  evidence: Recorded in the spec's deferred list with locations.

@@ -16,6 +16,10 @@ const { addBackfillAction, editBackfillAction, withdrawBackfillAction } = vi.hoi
   addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn(),
 }));
 vi.mock("@/server/backfill-actions", () => ({ addBackfillAction, editBackfillAction, withdrawBackfillAction }));
+const { addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploymentHistoryAction } = vi.hoisted(() => ({
+  addEmploymentHistoryAction: vi.fn(), updateEmploymentHistoryAction: vi.fn(), removeEmploymentHistoryAction: vi.fn(),
+}));
+vi.mock("@/server/employment-history-actions", () => ({ addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploymentHistoryAction }));
 
 import StaffAttendance, { StaffSelfService } from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
@@ -112,7 +116,9 @@ describe("StaffAttendance external interviews", () => {
 
   it("offers a labelled add form with required company, role, date and stage, and an optional outcome", async () => {
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
-    for (const label of ["Company", "Role", "Stage"]) expect(screen.getByRole("textbox", { name: label })).toBeRequired();
+    // Scoped to the interviews section: the Employment history form (Story 7.3) has its own "Role".
+    const interviews = within(screen.getByRole("region", { name: "External interviews" }));
+    for (const label of ["Company", "Role", "Stage"]) expect(interviews.getByRole("textbox", { name: label })).toBeRequired();
     expect(screen.getByLabelText("Interview date")).toHaveAttribute("type", "date");
     expect(screen.getByLabelText("Interview date")).toBeRequired();
     expect(screen.getByRole("textbox", { name: "Outcome (optional)" })).not.toBeRequired();
@@ -126,7 +132,7 @@ describe("StaffAttendance external interviews", () => {
     const user = userEvent.setup();
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
     await user.type(screen.getByRole("textbox", { name: "Company" }), "Orbit Analytics");
-    await user.type(screen.getByRole("textbox", { name: "Role" }), "AI Engineer");
+    await user.type(within(screen.getByRole("region", { name: "External interviews" })).getByRole("textbox", { name: "Role" }), "AI Engineer");
     await user.type(screen.getByLabelText("Interview date"), "2026-10-20");
     await user.type(screen.getByRole("textbox", { name: "Stage" }), "Recruiter screen");
     await user.click(screen.getByRole("button", { name: "Add interview" }));
@@ -141,7 +147,7 @@ describe("StaffAttendance external interviews", () => {
     const user = userEvent.setup();
     await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
     await user.type(screen.getByRole("textbox", { name: "Company" }), "Orbit");
-    await user.type(screen.getByRole("textbox", { name: "Role" }), "AI Engineer");
+    await user.type(within(screen.getByRole("region", { name: "External interviews" })).getByRole("textbox", { name: "Role" }), "AI Engineer");
     await user.type(screen.getByLabelText("Interview date"), "2026-10-20");
     await user.type(screen.getByRole("textbox", { name: "Stage" }), "Screen");
     await user.click(screen.getByRole("button", { name: "Add interview" }));
@@ -533,7 +539,11 @@ describe("StaffAttendance past projects (Story 4.7)", () => {
   });
 
   it("withdrawing one entry leaves the other entries' controls enabled", async () => {
-    withdrawBackfillAction.mockReturnValue(new Promise(() => {}));
+    // Held open while the assertions run, then released at the end: React entangles pending async
+    // actions, so a never-settled one would keep every later test's action (e.g. Story 7.3's employment
+    // history add, which now runs after this describe) pending forever. Integration of 4.7 with 7.3.
+    let release!: (state: { error: string; message: string }) => void;
+    withdrawBackfillAction.mockReturnValue(new Promise(resolve => { release = resolve; }));
     const second: Past = { ...active, id: "bf000000-0000-4000-8000-000000000003", projectName: "Mobile wallet", completionDate: "2025-11-01" };
     const user = userEvent.setup({ advanceTimers: () => {} });
     await show(<StaffAttendance employee={{ ...employee, backfilledProjects: [active, second] }} entries={[]} serverNow={now} current={none()} departmentOptions={options} />);
@@ -543,6 +553,7 @@ describe("StaffAttendance past projects (Story 4.7)", () => {
     expect(within(other).getByRole("button", { name: /^Withdraw past project: Mobile wallet/ })).toBeEnabled();
     await user.click(within(other).getByText("Edit"));
     expect(within(other).getByRole("button", { name: "Save changes" })).toBeEnabled();
+    await act(async () => { release({ error: "", message: "" }); });
   });
 
   it("shows the stored department name even when the department list is unavailable", async () => {
@@ -635,5 +646,33 @@ describe("StaffSelfService (Story 4.10)", () => {
     shell.unmount();
     const body = await show(<StaffSelfService employee={employee} entries={[open]} serverNow={now} current={none()} />);
     expect(body.container.innerHTML).toBe(inner);
+  });
+});
+
+describe("StaffAttendance employment history (Story 7.3)", () => {
+  it("shows the employee's own history, newest first, with add, edit and remove", async () => {
+    const { container } = await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const section = within(screen.getByRole("region", { name: "Employment history" }));
+    const items = [...screen.getByRole("region", { name: "Employment history" }).querySelectorAll(".timeline > .timeline-item")];
+    expect(items.map(item => item.querySelector(":scope > h3")?.textContent)).toEqual(employee.history.map(h => h.role));
+    expect(section.getByRole("form", { name: "Add employment entry" })).toBeInTheDocument();
+    for (const h of employee.history) {
+      expect(section.getByRole("button", { name: `Edit employment entry: ${h.role}, ${h.company}` })).toBeInTheDocument();
+      expect(section.getByRole("button", { name: `Remove employment entry: ${h.role}, ${h.company}` })).toBeInTheDocument();
+    }
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("sends the session's own Employee ID with an add (the server ignores anyone else's)", async () => {
+    addEmploymentHistoryAction.mockResolvedValue({ error: "", message: "Employment entry added." });
+    const user = userEvent.setup();
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const form = within(screen.getByRole("form", { name: "Add employment entry" }));
+    await user.type(form.getByLabelText("Role"), "Intern");
+    await user.type(form.getByLabelText("Employer"), "Orbit");
+    await user.type(form.getByLabelText("Period"), "2019");
+    await user.click(form.getByRole("button", { name: "Add entry" }));
+    expect(await screen.findByText("Employment entry added.")).toBeInTheDocument();
+    expect((addEmploymentHistoryAction.mock.calls[0][1] as FormData).get("employeeId")).toBe(employee.id);
   });
 });

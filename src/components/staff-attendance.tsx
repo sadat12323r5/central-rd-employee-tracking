@@ -16,6 +16,7 @@ import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-trainin
 import EvaluationView from "./evaluation-view";
 import ProvenanceLabel from "./provenance-label";
 import { EvaluationSummary, SKILL_SCALE, SkillList } from "./assessment-summary";
+import EmploymentHistoryPanel from "./employment-history-panel";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -482,6 +483,12 @@ export function StaffSelfService({ employee, entries, serverNow, current, depart
         <SkillList skills={employee.skills} />
         <h3 id="manager-evaluation-heading">Manager evaluation</h3>
         <EvaluationSummary review={employee.review} headingLevel="h4" />
+      </section>
+
+      <section className="panel staff-employment" aria-labelledby="employment-heading">
+        <h2 id="employment-heading">Employment history</h2>
+        <p className="muted">Your current role and previous employment, newest first. You can add, correct or remove your own entries.</p>
+        <EmploymentHistoryPanel employeeId={employee.id} entries={employee.history} canEdit />
       </section>
 
       <section className="panel staff-interviews" aria-labelledby="interviews-heading">
