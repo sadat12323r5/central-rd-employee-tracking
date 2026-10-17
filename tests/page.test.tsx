@@ -2,10 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-const { getSession, listFor, getFor, loginProps, attendanceListFor, currentFor, portalProps, staffProps, listDepartments, departmentOptions } = vi.hoisted(() => ({
+const { getSession, listFor, getFor, loginProps, attendanceListFor, currentFor, portalProps, staffProps, listDepartments, departmentOptions, calendarVersions, summariesFor } = vi.hoisted(() => ({
   getSession: vi.fn(), listFor: vi.fn(), getFor: vi.fn(), loginProps: vi.fn(), attendanceListFor: vi.fn(async (..._args: unknown[]) => [] as unknown[]),
   currentFor: vi.fn(), portalProps: vi.fn(), staffProps: vi.fn(), listDepartments: vi.fn(async () => [] as unknown[]),
   departmentOptions: vi.fn(async () => [] as { id: string; name: string }[]),
+  calendarVersions: vi.fn(async (..._args: unknown[]) => [] as unknown[]),
+  summariesFor: vi.fn(async (..._args: unknown[]) => ({ unavailable: "no-calendar" }) as unknown),
 }));
 
 vi.mock("@/server/auth", () => ({ getSession }));
@@ -14,6 +16,8 @@ vi.mock("@/server/attendance-store", async importOriginal => ({
   // Story 4.3: the page reads attendance through the session-aware listFor.
   attendanceStore: { listFor: attendanceListFor },
 }));
+// Story 5.4: the attendance summaries the portal shows.
+vi.mock("@/server/attendance-summary", () => ({ attendanceSummariesFor: summariesFor }));
 vi.mock("@/server/employees-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/employees-store")>()),
   employeesStore: { listFor, getFor, isActive: vi.fn(async () => true) },
@@ -27,6 +31,11 @@ vi.mock("@/server/backfilled-project-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/backfilled-project-store")>()),
   // Story 4.7: the staff portal's department options for the backfill form.
   backfilledProjectStore: { listFor: vi.fn(), departmentOptions, add: vi.fn(), edit: vi.fn(), withdraw: vi.fn() },
+}));
+vi.mock("@/server/holiday-calendar-store", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/server/holiday-calendar-store")>()),
+  // Story 5.1: the Administrator's holiday calendar versions.
+  holidayCalendarStore: { versions: calendarVersions, active: vi.fn(), load: vi.fn() },
 }));
 vi.mock("@/server/training-store", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/training-store")>()),
@@ -521,5 +530,110 @@ describe("Home builds \"My record\" for linked management accounts (Story 4.10)"
     getFor.mockRejectedValue(new EmployeesUnavailableError());
     render(await Home());
     expect(screen.getByRole("alert")).toHaveTextContent(/employee records are unavailable/i);
+  });
+});
+
+describe("Home loads the holiday calendar versions for the Administrator (Story 5.1)", () => {
+  const versions = [{
+    id: "v-1", version: 1, jurisdiction: "Bangladesh", timezone: "Asia/Dhaka", supportedYearStart: 2026, supportedYearEnd: 2026,
+    source: "bangladesh-2026.csv", loadedBy: "u", loadedAt: "2026-10-17T04:30:00Z", holidayCount: 31,
+  }];
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listFor.mockReset(); getFor.mockReset(); portalProps.mockReset(); calendarVersions.mockReset();
+    currentFor.mockResolvedValue({ status: "unavailable" });
+    listDepartments.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    calendarVersions.mockReset();
+    calendarVersions.mockResolvedValue([]);
+  });
+
+  it("passes the versions to the portal, read with the admin session", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    calendarVersions.mockResolvedValue(versions);
+    render(await Home());
+    expect(calendarVersions).toHaveBeenCalledWith({ role: "admin" });
+    expect(portalProps.mock.calls[0][0].holidayCalendars).toEqual(versions);
+  });
+
+  it("passes null (logged), not a page failure, when the calendar is unavailable", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    calendarVersions.mockRejectedValue(new Error("PGRST205"));
+    render(await Home());
+    expect(screen.getByText("Employee directory")).toBeInTheDocument();
+    expect(portalProps.mock.calls[0][0].holidayCalendars).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("never reads the versions for a manager", async () => {
+    getSession.mockResolvedValue({ role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" });
+    listFor.mockResolvedValue([]);
+    render(await Home());
+    expect(calendarVersions).not.toHaveBeenCalled();
+    expect(portalProps.mock.calls[0][0].holidayCalendars).toBeUndefined();
+  });
+});
+
+describe("Home attendance summaries (Story 5.4)", () => {
+  const summaries = { period: { from: "2026-10-01", to: "2026-10-17" }, byEmployee: {} };
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listFor.mockReset(); getFor.mockReset(); portalProps.mockReset(); summariesFor.mockReset();
+    currentFor.mockResolvedValue({ status: "unavailable" });
+    listDepartments.mockResolvedValue([]);
+    summariesFor.mockResolvedValue(summaries);
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    summariesFor.mockReset();
+    summariesFor.mockResolvedValue({ unavailable: "no-calendar" });
+  });
+
+  it.each([
+    ["admin", { role: "admin" }],
+    ["manager", { role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" }],
+  ] as const)("passes the %s's summaries, computed for the listed employees and today in Dhaka, to the portal", async (_name, session) => {
+    const { employees } = await import("@/data/employees");
+    const { todayInDhaka } = await import("@/domain/dates");
+    getSession.mockResolvedValue(session);
+    listFor.mockResolvedValue(employees.slice(0, 2));
+    render(await Home());
+    const [passedSession, passedEmployees, today] = summariesFor.mock.calls[0] as [unknown, { id: string }[], string];
+    expect(passedSession).toEqual(session);
+    expect(passedEmployees.map(e => e.id)).toEqual(employees.slice(0, 2).map(e => e.id));
+    expect(today).toBe(todayInDhaka());
+    expect(portalProps.mock.calls[0][0].attendance).toEqual(summaries);
+  });
+
+  it("shows the attendance alert when the attendance read fails", async () => {
+    getSession.mockResolvedValue({ role: "admin" });
+    listFor.mockResolvedValue([]);
+    summariesFor.mockRejectedValue(new AttendanceUnavailableError());
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/attendance is unavailable/i);
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+  });
+
+  it("shows the attendance alert for a manager when the attendance read fails", async () => {
+    getSession.mockResolvedValue({ role: "manager", employeeId: "BS-1002", userId: "aaaa0000-0000-4000-8000-000000000001" });
+    listFor.mockResolvedValue([]);
+    summariesFor.mockRejectedValue(new AttendanceUnavailableError());
+    render(await Home());
+    expect(screen.getByRole("alert")).toHaveTextContent(/attendance is unavailable/i);
+    expect(screen.queryByText("Employee directory")).not.toBeInTheDocument();
+  });
+
+  it("never computes summaries for a staff session", async () => {
+    const { employees } = await import("@/data/employees");
+    getSession.mockResolvedValue({ role: "staff", employeeId: "BS-1003" });
+    getFor.mockResolvedValue(employees.find(e => e.id === "BS-1003"));
+    render(await Home());
+    expect(summariesFor).not.toHaveBeenCalled();
   });
 });

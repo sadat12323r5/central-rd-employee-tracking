@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { employees as fixture, type Employee } from "@/data/employees";
+import type { Employee, LeaveRecord } from "@/data/employees";
 import {
   derivedFields, invalidEmployeeDetailsFields, invalidNewEmployeeFields, normalizeEmployeeDetails, normalizeNewEmployee,
   type EmployeeDetailsInput, type NewEmployeeField, type NewEmployeeInput,
@@ -19,6 +19,7 @@ import {
   createEmploymentHistoryStore, employmentHistoryStore, EmploymentHistoryUnavailableError, type EmploymentHistoryEntry,
   type EmploymentHistoryStore,
 } from "./employment-history-store";
+import { createLeaveStore, leaveStore, LeaveUnavailableError, type LeaveStore } from "./leave-store";
 import { interviewsStore, InterviewsUnavailableError, type ExternalInterview, type InterviewsStore } from "./interviews-store";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { ManagerIdentity, SessionIdentity, StaffIdentity } from "./session";
@@ -30,10 +31,10 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // table, external interviews from the `external_interviews` table (through interviews-store,
 // Story 2.1), training through training-store (Story 3.1), assignments through assignments-store
 // (Story 4.5), skills and the evaluation (`review`) through assessments-store (Story 7.4) and employment
-// history through employment-history-store (Story 7.3, active entries, newest first); the other nested
-// profile data (attendance summary) still comes from the fixture, merged by Employee ID, so callers see
-// the same shape. The fixture's interviews, training, former "current work", skills, review and history
-// are never read here.
+// history through employment-history-store (Story 7.3, active entries, newest first) and leave through
+// leave-store (Story 5.2, newest start first, cancelled periods included and marked). The attendance
+// summary is not part of a profile: it is computed from real records by attendance-summary (Story 5.4).
+// The fixture's interviews, training, former "current work", skills, review and history are never read here.
 //
 // Every read (Administrator and Staff, Story 1.3) goes through a per-request client carrying the
 // signed-in user's Supabase JWT, so the employees RLS policies are the enforced rule: an admin
@@ -234,20 +235,6 @@ const MANAGER_COLUMNS = `${COLUMNS},department_id,archived_at`;
 /** Which extra fields a read maps: Administrator (account, archived, department), manager (archived, department) or none. */
 export type EmployeeView = "admin" | "manager" | "basic";
 
-type NestedProfile = Pick<Employee, "attendance">;
-
-const emptyProfile = (): NestedProfile => ({
-  attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
-});
-
-/** The fixture's remaining nested data (never skills or the review, from assessments-store, Story 7.4, nor history, from employment-history-store, Story 7.3). */
-function nestedFor(id: string): NestedProfile {
-  const source = fixture.find(e => e.id === id);
-  if (!source) return emptyProfile();
-  const { attendance } = structuredClone(source);
-  return { attendance };
-}
-
 /** No evaluation recorded yet: every field empty (the UI says so rather than showing a blank date). */
 export const emptyReview = (): Employee["review"] => ({ date: "", reviewer: "", readiness: "", strengths: "", next: "" });
 
@@ -265,7 +252,7 @@ const reviewOf = (all: Assessments, employeeId: string): Employee["review"] => {
 
 /**
  * Maps a row to an Employee with the given interviews (from interviews-store), training (from
- * training-store), assignments (from assignments-store, Story 4.5), assignment evaluations (Story 4.6), backfilled projects (Story 4.7), and skills and review (from assessments-store, Story 7.4), and employment history (from employment-history-store, Story 7.3). The `admin` view (`true` is the same) adds `hasAccount` from `auth_user_id`,
+ * training-store), assignments (from assignments-store, Story 4.5), assignment evaluations (Story 4.6), backfilled projects (Story 4.7), and skills and review (from assessments-store, Story 7.4), and employment history (from employment-history-store, Story 7.3), and leave (from leave-store, Story 5.2). The `admin` view (`true` is the same) adds `hasAccount` from `auth_user_id`,
  * `archived` from `archived_at` and `departmentId` from `department_id`; the `manager` view (Story 4.3)
  * adds `archived` and `departmentId` only.
  */
@@ -275,6 +262,7 @@ export function toEmployee(
   backfilledProjects: Employee["backfilledProjects"] = [],
   skills: Employee["skills"] = [], review: Employee["review"] = emptyReview(),
   history: Employee["history"] = [],
+  leave: Employee["leave"] = [],
 ): Employee {
   const mode = view === true ? "admin" : view === false ? "basic" : view;
   return {
@@ -283,7 +271,6 @@ export function toEmployee(
     color: row.avatar_color, summary: row.summary,
     ...(mode === "admin" ? { hasAccount: Boolean(row.auth_user_id) } : {}),
     ...(mode !== "basic" ? { archived: Boolean(row.archived_at), departmentId: row.department_id ?? null } : {}),
-    ...nestedFor(row.employee_id),
     skills,
     review,
     history,
@@ -292,6 +279,7 @@ export function toEmployee(
     assignments,
     evaluations,
     backfilledProjects,
+    leave,
   };
 }
 
@@ -318,6 +306,10 @@ const backfilledOf = (all: BackfilledProject[], employeeId: string): Employee["b
 /** The employment history of one employee, in the store's order (newest first), without the store's extra fields. */
 const historyOf = (all: EmploymentHistoryEntry[], employeeId: string): Employee["history"] =>
   all.filter(h => h.employeeId === employeeId).map(({ employeeId: _, createdAt: __, ...entry }) => entry);
+
+/** The leave periods of one employee, in the store's order (newest start first; Story 5.2). */
+const leaveOf = (all: LeaveRecord[], employeeId: string): Employee["leave"] =>
+  all.filter(l => l.employeeId === employeeId);
 
 type Result<T> = { data: T | null; error: unknown };
 type DbError = { code?: string; message?: string; details?: string };
@@ -365,6 +357,11 @@ export type EmployeesStoreClients = {
    * default: an employment-history-store on the same `userClient` and `scope`, like `assessments`).
    */
   history?: Pick<EmploymentHistoryStore, "listFor">;
+  /**
+   * Story 5.2: where profile leave comes from (RLS-scoped through the same per-request JWT; default: a
+   * leave-store on the same `userClient` and `scope`, like `history`).
+   */
+  leave?: Pick<LeaveStore, "listFor">;
   /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
   scope?: ManagerScope;
 };
@@ -373,6 +370,7 @@ export function createEmployeesStore({
   userClient, interviews, training, assignments, evaluations, backfilled, scope = managerScope,
   assessments = createAssessmentsStore({ userClient, scope }),
   history = createEmploymentHistoryStore({ userClient, scope }),
+  leave = createLeaveStore({ userClient, scope }),
 }: EmployeesStoreClients): EmployeesStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T | null> {
     let result: Result<T>;
@@ -455,6 +453,16 @@ export function createEmployeesStore({
     }
   }
 
+  /** A failed leave read makes the whole record unavailable: never a profile with missing leave. */
+  async function leaveFor(session: SessionIdentity, employeeId?: string): Promise<LeaveRecord[]> {
+    try {
+      return await leave.listFor(session, employeeId);
+    } catch (cause) {
+      if (cause instanceof LeaveUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   const columnsFor = (session: SessionIdentity) => (session.role === "admin" ? ADMIN_COLUMNS : COLUMNS);
 
   /** The employee ids in a manager's subtree. A scope that cannot be read makes the records unavailable: never a partial list. */
@@ -471,7 +479,7 @@ export function createEmployeesStore({
   async function listForManager(session: ManagerIdentity): Promise<Employee[]> {
     const ids = await managedEmployeeIds(session);
     if (ids.size === 0) return [];
-    const [rows, allTraining, allAssignments, allEvaluations, allBackfilled, allAssessments, allHistory] = await Promise.all([
+    const [rows, allTraining, allAssignments, allEvaluations, allBackfilled, allAssessments, allHistory, allLeave] = await Promise.all([
       // Paged (Story 8.2) like the Administrator list: employee_id is the primary key, so the order is total.
       readAllPages(async (from, to) => {
         const page = await run<EmployeeRow[]>(t => t.select(MANAGER_COLUMNS).in("employee_id", [...ids])
@@ -485,6 +493,7 @@ export function createEmployeesStore({
       backfilledFor(session),
       assessmentsFor(session),
       historyFor(session),
+      leaveFor(session),
     ]);
     // Defence in depth: never a row outside the scope, whatever the query returned.
     return rows.filter(row => ids.has(row.employee_id))
@@ -492,6 +501,7 @@ export function createEmployeesStore({
         row, "manager", [], trainingOf(allTraining, row.employee_id), assignmentsOf(allAssignments, row.employee_id),
         evaluationsOf(allEvaluations, row.employee_id), backfilledOf(allBackfilled, row.employee_id),
         skillsOf(allAssessments, row.employee_id), reviewOf(allAssessments, row.employee_id), historyOf(allHistory, row.employee_id),
+        leaveOf(allLeave, row.employee_id),
       ));
   }
 
@@ -500,13 +510,13 @@ export function createEmployeesStore({
     if (!(await managedEmployeeIds(session)).has(id)) return null;
     const row = await run<EmployeeRow>(t => t.select(MANAGER_COLUMNS).eq("employee_id", id).maybeSingle<EmployeeRow>());
     if (!row) return null;
-    const [ownTraining, ownAssignments, ownEvaluations, ownBackfilled, own, ownHistory] = await Promise.all([
+    const [ownTraining, ownAssignments, ownEvaluations, ownBackfilled, own, ownHistory, ownLeave] = await Promise.all([
       trainingFor(session, id), assignmentsFor(session, id), evaluationsFor(session, id), backfilledFor(session, id),
-      assessmentsFor(session, id), historyFor(session, id),
+      assessmentsFor(session, id), historyFor(session, id), leaveFor(session, id),
     ]);
     return toEmployee(
       row, "manager", [], trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id), evaluationsOf(ownEvaluations, id),
-      backfilledOf(ownBackfilled, id), skillsOf(own, id), reviewOf(own, id), historyOf(ownHistory, id),
+      backfilledOf(ownBackfilled, id), skillsOf(own, id), reviewOf(own, id), historyOf(ownHistory, id), leaveOf(ownLeave, id),
     );
   }
 
@@ -573,7 +583,7 @@ export function createEmployeesStore({
     async listFor(session) {
       if (session.role === "manager") return listForManager(session);
       // One interviews, training, assignments, evaluations, backfilled-projects, assessments and history read for the whole list: everyone's for an admin, the caller's own for staff.
-      const [rows, all, allTraining, allAssignments, allEvaluations, allBackfilled, allAssessments, allHistory] = await Promise.all([
+      const [rows, all, allTraining, allAssignments, allEvaluations, allBackfilled, allAssessments, allHistory, allLeave] = await Promise.all([
         // Paged (Story 8.2): one request is capped at PostgREST's max_rows. employee_id is the primary
         // key, so ordering by it alone is total.
         readAllPages(async (from, to) => {
@@ -592,13 +602,14 @@ export function createEmployeesStore({
         backfilledFor(session),
         assessmentsFor(session),
         historyFor(session),
+        leaveFor(session),
       ]);
       return rows.map(row => toEmployee(
         row, session.role === "admin", interviewsOf(all, row.employee_id), trainingOf(allTraining, row.employee_id),
         assignmentsOf(allAssignments, row.employee_id), evaluationsOf(allEvaluations, row.employee_id),
         backfilledOf(allBackfilled, row.employee_id),
         skillsOf(allAssessments, row.employee_id), reviewOf(allAssessments, row.employee_id),
-        historyOf(allHistory, row.employee_id),
+        historyOf(allHistory, row.employee_id), leaveOf(allLeave, row.employee_id),
       ));
     },
     async getFor(session, id) {
@@ -606,14 +617,14 @@ export function createEmployeesStore({
       if (session.role !== "admin" && id !== session.employeeId) return null;
       const row = await run<EmployeeRow>(t => t.select(columnsFor(session)).eq("employee_id", id).maybeSingle<EmployeeRow>());
       if (!row) return null;
-      const [own, ownTraining, ownAssignments, ownEvaluations, ownBackfilled, ownAssessments, ownHistory] = await Promise.all([
+      const [own, ownTraining, ownAssignments, ownEvaluations, ownBackfilled, ownAssessments, ownHistory, ownLeave] = await Promise.all([
         interviewsFor(session, id), trainingFor(session, id), assignmentsFor(session, id), evaluationsFor(session, id),
-        backfilledFor(session, id), assessmentsFor(session, id), historyFor(session, id),
+        backfilledFor(session, id), assessmentsFor(session, id), historyFor(session, id), leaveFor(session, id),
       ]);
       return toEmployee(
         row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id),
         evaluationsOf(ownEvaluations, id), backfilledOf(ownBackfilled, id),
-        skillsOf(ownAssessments, id), reviewOf(ownAssessments, id), historyOf(ownHistory, id),
+        skillsOf(ownAssessments, id), reviewOf(ownAssessments, id), historyOf(ownHistory, id), leaveOf(ownLeave, id),
       );
     },
     async isActive(session) {
@@ -680,5 +691,5 @@ export function createEmployeesStore({
 export const employeesStore: EmployeesStore = createEmployeesStore({
   userClient: getUserClient, interviews: interviewsStore, training: trainingStore, assignments: assignmentsStore,
   evaluations: assignmentEvaluationsStore, backfilled: backfilledProjectStore, assessments: assessmentsStore,
-  history: employmentHistoryStore,
+  history: employmentHistoryStore, leave: leaveStore,
 });

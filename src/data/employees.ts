@@ -1,4 +1,6 @@
-﻿/**
+﻿import type { LeaveCategory } from "@/domain/leave";
+
+/**
  * Story 4.5: one assignment (what the employee did, for whom, under which department). `department_id`
  * is the employee's department when it was created, never caller-chosen. Only `latestUpdate` changes
  * while open; closing sets `completionDate` (a calendar date) and `closedAt`; nothing is ever deleted.
@@ -9,6 +11,16 @@ export type Assignment = {
   completionDate: string | null; createdAt: string; closedAt: string | null;
   /** Story 4.7: materialized by assignments-store (`toAssignment`): a manager-created record. Never inferred in the UI. */
   provenance: "assignment";
+};
+
+/**
+ * Story 5.2: one recorded leave period, read through leave-store from the `leave_records` table. The
+ * working days (weekends and calendar holidays excluded) and the category are counted when recorded, against
+ * the holiday calendar version `calendarVersionId`. `cancelledAt` is always null until Story 5.3.
+ */
+export type LeaveRecord = {
+  id: string; employeeId: string; startDate: string; endDate: string; workingDays: number;
+  category: LeaveCategory; calendarVersionId: string; cancelledAt: string | null; createdAt: string;
 };
 
 /**
@@ -88,11 +100,15 @@ export type Employee = {
    */
   backfilledProjects: BackfilledProject[];
   /**
+   * Story 5.2: the employee's recorded leave periods, read through leave-store from the `leave_records`
+   * table, newest start first, cancelled ones included and marked. The fixture's own list is always empty.
+   */
+  leave: LeaveRecord[];
+  /**
    * External interviews (Story 2.1): read from the `external_interviews` table, newest first.
    * `withdrawn` (Story 2.2) marks an entry its author withdrew: it leaves active views but stays in history.
    */
   interviews: { id: string; company: string; role: string; date: string; stage: string; outcome: string; feedback: string; withdrawn: boolean }[];
-  attendance: { scheduled: number; worked: number; leave: number; unrecorded: number; records: { date: string; type: string; days: number; status: string }[] };
   /**
    * The manager evaluation (Story 7.4, read through assessments-store from the `employee_evaluations` table):
    * `date` is the review date, `next` the development priorities. All empty when none is recorded yet. In
@@ -287,8 +303,8 @@ export const employees: Employee[] = people.map((p, index) => {
     assignments: [],
     evaluations: [],
     backfilledProjects: [],
+    leave: [],
     interviews: index === 2 || index === 5 ? [] : [{ id: interviewSeedId(id, 0), company: ["Northstar Labs", "Orbit Analytics", "", "Cedar Software", "Canvas Digital", "", "Summit Cloud", "Harbour Systems"][index] + " (fictional)", role: title, date: index === 0 ? "2026-09-23" : "2026-09-16", stage: index === 0 ? "Technical interview" : "Technical round completed", outcome: index === 0 ? "Scheduled" : index === 3 ? "Not selected" : "Awaiting feedback", feedback: index === 3 ? "Needs more practice explaining test strategy. Mentor follow-up planned." : "Preparation focus: project examples, technical reasoning and communication. No offer recorded.", withdrawn: false }],
-    attendance: { scheduled: 14, worked: index === 2 ? 11 : 12, leave: index === 2 ? 2 : 1, unrecorded: 1, records: [{ date: "2026-09-10", type: "Leave", days: index === 2 ? 2 : 1, status: "Recorded" }, { date: "2026-09-17", type: "Attendance", days: 1, status: "Missing record" }] },
     review: { date: "2026-09-14", reviewer: "Ayesha Karim · L&D Manager", readiness: junior ? "Developing · mentor support" : "Ready for role-matched interviews", strengths: junior ? "Consistent learning progress, asks thoughtful questions and responds well to feedback." : "Clear technical reasoning, collaborative delivery and well-documented project contributions.", next: junior ? "Complete the capstone and practise a short technical presentation." : `Strengthen advanced ${skillTwo} skills and prepare two project case studies.` },
   };
 });

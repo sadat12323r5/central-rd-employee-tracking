@@ -186,6 +186,20 @@ describe.skipIf(!configured)("attendance RLS and persistence (shared Supabase pr
     expect(ids.has(otherId)).toBe(true);
   });
 
+  it("windows attendance by date and session scope for the summaries (Story 5.4 listInPeriod)", async () => {
+    const february = { from: "2026-02-01", to: "2026-02-28" };
+    const staffSession = { role: "staff", employeeId: ownId } as const;
+    const staffStore = createAttendanceStore({ userClient: async () => signedIn(staffEmail) });
+    expect((await staffStore.listInPeriod(staffSession, february)).map(e => e.id)).toEqual([ownPastRow.id]);
+    expect(await staffStore.listInPeriod(staffSession, february, [otherId])).toEqual([]);
+    const adminStore = createAttendanceStore({ userClient: async () => signedIn(adminEmail) });
+    const adminRead = await adminStore.listInPeriod({ role: "admin" }, february, employeeIds);
+    expect(adminRead.map(e => e.id)).toEqual([otherRow.id, ownPastRow.id]);
+    expect(await adminStore.listInPeriod({ role: "admin" }, { from: "2026-02-03", to: "2026-02-03" }, employeeIds))
+      .toEqual([expect.objectContaining({ id: ownPastRow.id })]);
+    expect(await adminStore.listInPeriod({ role: "admin" }, { from: "2026-01-01", to: "2026-01-31" }, employeeIds)).toEqual([]);
+  });
+
   it("returns nothing to an anonymous client", async () => {
     const anon = createClient(url!, anonKey!, noSession);
     const { data } = await anon.from("attendance_entries").select("id").in("employee_id", employeeIds);

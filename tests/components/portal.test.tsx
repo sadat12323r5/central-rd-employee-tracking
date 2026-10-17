@@ -42,12 +42,20 @@ vi.mock("@/server/assessment-actions", () => ({
 vi.mock("@/server/attendance-actions", () => ({ clockInAction: vi.fn(), clockOutAction: vi.fn(), saveLogAction: vi.fn() }));
 vi.mock("@/server/interviews-actions", () => ({ addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn() }));
 vi.mock("@/server/backfill-actions", () => ({ addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn() }));
+// Story 5.1: the Administrator's holiday calendar panel in Attendance & leave.
+// Story 5.2: the leave panel on the profile Attendance tab and in "My record".
+vi.mock("@/server/leave-actions", () => ({
+  recordLeaveAction: vi.fn(async () => ({ error: "", message: "" })),
+  updateLeaveAction: vi.fn(async () => ({ error: "", message: "" })),
+  cancelLeaveAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
+vi.mock("@/server/holiday-calendar-actions", () => ({ loadHolidayCalendarAction: vi.fn(async () => ({ error: "", message: "" })) }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
 }));
 
-import Portal from "@/components/portal";
+import Portal, { type PortalAttendance } from "@/components/portal";
 import { employees, type Assignment, type AssignmentEvaluation, type BackfilledProject } from "@/data/employees";
 import { closeAssignmentAction, createAssignmentAction, updateAssignmentNoteAction } from "@/server/assignment-actions";
 import { amendEvaluationAction, createEvaluationAction } from "@/server/assignment-evaluation-actions";
@@ -57,6 +65,12 @@ import type { CurrentTraining, TrainingEntry } from "@/server/training-store";
 const ok = (extra: Partial<Extract<CurrentTraining, { status: "ok" }>> = {}): Promise<CurrentTraining> =>
   Promise.resolve({ status: "ok", asOf: "2026-09-28T05:00:00.000Z", stale: false, inProgress: [], lmsCompleted: [], freshness: {}, ...extra });
 const none = () => ok();
+
+/** Story 5.4: attendance summaries as page.tsx passes them, the same summary for each listed employee. */
+type Summary = Extract<PortalAttendance, { byEmployee: unknown }>["byEmployee"][string];
+const zeroSummary: Summary = { scheduled: 0, worked: 0, leave: 0, missing: 0, exceptions: [] };
+const summariesFor = (list: { id: string }[], summary: Summary = zeroSummary): PortalAttendance =>
+  ({ period: { from: "2026-10-01", to: "2026-10-17" }, byEmployee: Object.fromEntries(list.map(e => [e.id, summary])) });
 const pending = (): Promise<CurrentTraining> => new Promise(() => {});
 
 /** Renders inside an awaited act, so a Suspense boundary reading a resolved promise can reveal its content. */
@@ -219,7 +233,6 @@ describe("Portal employee profile", () => {
     const bare = {
       ...employees[0], id: "BS-9801", name: "Bare Employee", skills: [], history: [], training: [], interviews: [],
       assignments: [],
-      attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
       review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" }, hasAccount: false,
     };
     await show(<Portal employees={[...employees, bare]} current={none()} />);
@@ -729,7 +742,7 @@ describe("Portal scoped to a manager's departments (Story 4.3)", () => {
 
   it("shows only scoped employees in Attendance & leave and Learning & development", async () => {
     const user = userEvent.setup();
-    await show(<Portal role="manager" employees={scoped} departments={departments} current={none()} />);
+    await show(<Portal role="manager" employees={scoped} departments={departments} current={none()} attendance={summariesFor(scoped)} />);
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
     const attendance = screen.getByRole("table");
     expect(within(attendance).getAllByRole("row")).toHaveLength(scoped.length + 1);
@@ -1302,8 +1315,9 @@ describe("Interview privacy for managers (Story 4.4)", () => {
     expectNoInterviewText();
 
     await user.click(tabs.getByRole("tab", { name: "Attendance" }));
-    expect(panel().getByText("Scheduled days")).toBeInTheDocument();
-    expect(panel().getAllByRole("row")).toHaveLength(leaky.attendance.records.length + 1);
+    // Story 5.4: without summaries the tab says so; the recorded leave list is still shown.
+    expect(panel().getByText("No attendance summary is available.")).toBeInTheDocument();
+    expect(panel().getByRole("heading", { name: "Recorded leave" })).toBeInTheDocument();
     expectNoInterviewText();
   });
 
@@ -1638,5 +1652,182 @@ describe("Portal Employment tab (Story 7.3)", () => {
     await act(async () => { view.rerender(<Portal employees={updated} current={none()} />); });
     expect(screen.queryByText(fahim.history[1].role)).not.toBeInTheDocument();
     expect(screen.getByText(fahim.history[0].period)).toBeInTheDocument();
+  });
+});
+
+describe("Portal holiday calendar (Story 5.1)", () => {
+  const calendar = [{
+    id: "v-1", version: 1, jurisdiction: "Bangladesh", timezone: "Asia/Dhaka", supportedYearStart: 2026, supportedYearEnd: 2026,
+    source: "bangladesh-2026.csv", loadedBy: "u", loadedAt: "2026-10-17T04:30:00Z", holidayCount: 31,
+  }];
+
+  it("shows the Administrator the holiday calendar panel in Attendance & leave", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} holidayCalendars={calendar} />);
+    expect(screen.queryByRole("heading", { name: "Holiday calendar" })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByRole("heading", { name: "Holiday calendar" })).toBeInTheDocument();
+    expect(screen.getByText("Version 1 (active)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load calendar" })).toBeInTheDocument();
+  });
+
+  it("says the calendar is unavailable when the Administrator's versions could not be read", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} holidayCalendars={null} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/holiday calendar is unavailable/i);
+  });
+
+  it("never shows the panel to a manager", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={employees} current={none()} holidayCalendars={calendar} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.queryByRole("heading", { name: "Holiday calendar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load calendar" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Portal leave (Story 5.2)", () => {
+  const fahim = employees.find(e => e.id === "BS-1008")!;
+  const recorded = {
+    id: "l-1", employeeId: fahim.id, startDate: "2026-03-25", endDate: "2026-03-27", workingDays: 2, category: "ONE_TO_THREE" as const,
+    calendarVersionId: "cal-v3", cancelledAt: null, createdAt: "2026-10-17T00:00:00Z",
+  };
+  const people = employees.map(e => (e.id === fahim.id ? { ...e, leave: [recorded] } : e));
+
+  it.each([["admin"], ["manager"]] as const)("shows the recorded leave below the attendance stats on the Attendance tab, editable for the %s", async role => {
+    const user = userEvent.setup();
+    await show(<Portal employees={people} role={role} current={none()} attendance={summariesFor(people)} />);
+    await user.click(screen.getByRole("button", { name: `View ${fahim.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    const panel = within(screen.getByRole("tabpanel"));
+    // Story 5.4: the stats and exceptions come from the summaries.
+    expect(panel.getByText("Scheduled days")).toBeInTheDocument();
+    expect(panel.getByRole("heading", { name: "Leave & attendance exceptions" })).toBeInTheDocument();
+    const leave = within(panel.getByRole("article", { name: "Recorded leave" }));
+    const row = leave.getByRole("table", { name: "Recorded leave" }).querySelectorAll("tbody tr")[0];
+    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["25 Mar 2026", "27 Mar 2026", "2", "1–3 working days", "Recorded", "EditCancel leave"]);
+    const form = leave.getByRole("form", { name: "Record leave" });
+    expect((form.querySelector("input[name=employeeId]") as HTMLInputElement).value).toBe(fahim.id);
+    expect(await axe(screen.getByRole("tabpanel"))).toHaveNoViolations();
+  });
+
+  it("puts the own-record Leave section in \"My record\"", async () => {
+    const me = { ...employees.find(e => e.id === "BS-1004")!, leave: [{ ...recorded, employeeId: "BS-1004" }] };
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={[employees[0]]} current={none()} myRecord={{ employee: me, entries: [], serverNow: "2026-09-28T06:00:00.000Z", current: none(), departmentOptions: [] }} />);
+    await act(async () => { await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "My record" })); });
+    const section = within(within(screen.getByRole("region", { name: "My record" })).getByRole("region", { name: "Leave" }));
+    expect(section.getByRole("table", { name: "Your leave" })).toBeInTheDocument();
+    expect((section.getByRole("form", { name: "Record leave" }).querySelector("input[name=employeeId]") as HTMLInputElement).value).toBe("BS-1004");
+  });
+});
+
+describe("Portal attendance summaries (Story 5.4)", () => {
+  const [first, second] = employees;
+  const leave = {
+    id: "l-9", employeeId: first.id, startDate: "2026-10-05", endDate: "2026-10-06", workingDays: 2, category: "ONE_TO_THREE" as const,
+    calendarVersionId: "cal-v1", cancelledAt: null, createdAt: "2026-10-01T00:00:00Z",
+  };
+  const firstSummary: Summary = {
+    scheduled: 13, worked: 9, leave: 2, missing: 3,
+    exceptions: [
+      { date: "2026-10-05", kind: "leave", leave }, { date: "2026-10-06", kind: "leave", leave },
+      { date: "2026-10-12", kind: "missing" }, { date: "2026-10-13", kind: "missing" }, { date: "2026-10-14", kind: "missing" },
+    ],
+  };
+  const secondSummary: Summary = { scheduled: 13, worked: 13, leave: 0, missing: 0, exceptions: [] };
+  const attendance: PortalAttendance = {
+    period: { from: "2026-10-01", to: "2026-10-17" },
+    byEmployee: { [first.id]: firstSummary, [second.id]: secondSummary },
+  };
+  const list = [first, second];
+
+  it("shows real totals, per-employee rows and the current-month label in Attendance & leave", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={list} current={none()} attendance={attendance} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByText(/^1–17 October 2026 · Monday–Friday schedule/)).toBeInTheDocument();
+    expect(within(screen.getByRole("heading", { name: "Attendance summary" }).parentElement!).queryByText(/September/)).not.toBeInTheDocument();
+    const stats = [...document.querySelectorAll(".stat-card")].map(c => [c.querySelector("span")?.textContent, c.querySelector("strong")?.textContent]);
+    expect(stats).toEqual([["Recorded days worked", "22"], ["Leave days", "02"], ["Missing records", "03"]]);
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1).map(r => [...r.querySelectorAll("td")].slice(1).map(td => td.textContent));
+    expect(rows).toEqual([["13", "9", "2", "3"], ["13", "13", "0", "0"]]);
+  });
+
+  it("shows the profile's totals and exceptions, leave rows with the category label next to its colour", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={list} current={none()} attendance={attendance} />);
+    await user.click(screen.getByRole("button", { name: `View ${first.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    const panel = within(screen.getByRole("tabpanel"));
+    const stats = [...document.querySelectorAll(".stat-card")].map(c => [c.querySelector("span")?.textContent, c.querySelector("strong")?.textContent, c.querySelector("small")?.textContent]);
+    expect(stats[0]).toEqual(["Scheduled days", "13", "1–17 October 2026"]);
+    expect(stats.slice(1).map(s => s.slice(0, 2))).toEqual([["Recorded days worked", "09"], ["Leave days", "02"], ["Missing records", "03"]]);
+    const exceptions = panel.getAllByRole("table")[0];
+    const rows = within(exceptions).getAllByRole("row").slice(1).map(r => [...r.querySelectorAll("td")].map(td => td.textContent));
+    expect(rows).toEqual([
+      ["5 Oct 2026", "Leave · 1–3 working days", "Recorded"], ["6 Oct 2026", "Leave · 1–3 working days", "Recorded"],
+      ["12 Oct 2026", "Attendance", "Missing record"], ["13 Oct 2026", "Attendance", "Missing record"], ["14 Oct 2026", "Attendance", "Missing record"],
+    ]);
+    expect(exceptions.querySelector(".leave-swatch")).toHaveStyle({ background: "#22C55E" });
+    expect(await axe(screen.getByRole("tabpanel"))).toHaveNoViolations();
+  });
+
+  it("says when an employee has no leave or missing records in the period", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={list} current={none()} attendance={attendance} />);
+    await user.click(screen.getByRole("button", { name: `View ${second.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    expect(within(screen.getByRole("tabpanel")).getByText("No leave or missing records in this period.")).toBeInTheDocument();
+  });
+
+  it("puts the real missing total and the period on the overview, never the old demo month", async () => {
+    await show(<Portal employees={list} current={none()} attendance={attendance} />);
+    expect(screen.getByText("3 attendance records to review")).toBeInTheDocument();
+    expect(screen.getByText("Missing entries · 1–17 October 2026")).toBeInTheDocument();
+    expect(document.querySelector(".period-label span")).toHaveTextContent("1–17 October 2026");
+    expect(document.querySelector(".page-footer")).toHaveTextContent("Demo workspace · fictional records · 1–17 October 2026");
+    expect(document.body).not.toHaveTextContent(/September 2026/);
+  });
+
+  it("drops the period from the overview and footer when summaries cannot be counted", async () => {
+    await show(<Portal employees={list} current={none()} attendance={{ unavailable: "no-calendar" }} />);
+    expect(document.querySelector(".period-label span")).toBeNull();
+    expect(document.querySelector(".page-footer")).toHaveTextContent(/fictional records$/);
+    expect(document.body).not.toHaveTextContent(/September 2026/);
+  });
+
+  it("says summaries cover active employees only on an archived employee's profile", async () => {
+    const user = userEvent.setup();
+    const archived = { ...second, archived: true };
+    await show(<Portal employees={[first, archived]} current={none()} attendance={{ period: attendance.period, byEmployee: { [first.id]: firstSummary } }} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Employees/ }));
+    await user.selectOptions(screen.getByLabelText("Show employees"), "Archived employees");
+    await user.click(screen.getByRole("button", { name: `View ${second.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    const panel = within(screen.getByRole("tabpanel"));
+    expect(panel.getByText("Attendance summaries cover active employees only.")).toBeInTheDocument();
+    expect(panel.queryByText("Scheduled days")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [{ unavailable: "no-calendar" } as const, "No holiday calendar is loaded yet, so scheduled days can't be counted."],
+    [{ unavailable: "year", year: 2027 } as const, "The holiday calendar doesn't cover 2027 yet."],
+    [{ unavailable: "calendar-error" } as const, "The holiday calendar could not be read, so scheduled days can't be counted. Please refresh the page in a moment."],
+  ])("shows a message and no numbers when the summary cannot be counted (%o)", async (value, message) => {
+    const user = userEvent.setup();
+    await show(<Portal employees={list} current={none()} attendance={value} />);
+    expect(screen.getByText("Attendance totals unavailable")).toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByText("Recorded days worked")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Employees/ }));
+    await user.click(screen.getByRole("button", { name: `View ${first.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    const panel = within(screen.getByRole("tabpanel"));
+    expect(panel.getByText(message)).toBeInTheDocument();
+    expect(panel.queryByText("Scheduled days")).not.toBeInTheDocument();
   });
 });

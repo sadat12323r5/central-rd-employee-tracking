@@ -252,6 +252,22 @@ describe.skipIf(!configured)("manager scope RLS (shared Supabase project)", () =
     expect([...childScope.employeeIds].sort()).toEqual([childEmployee, staffId].sort());
   });
 
+  it("windows attendance to the manager's subtree for the summaries (Story 5.4 listInPeriod)", async () => {
+    const period = { from: "2026-02-01", to: "2026-02-28" };
+    const parent = await signedIn(parentManagerEmail);
+    const parentSession = { role: "manager", employeeId: parentManagerId, userId: parentManagerUserId } as const;
+    const parentStore = createAttendanceStore({ userClient: async () => parent, scope: createManagerScope({ userClient: async () => parent }) });
+    const parentRead = await parentStore.listInPeriod(parentSession, period);
+    expect(parentRead.map(e => e.employeeId).sort()).toEqual([parentEmployee, childEmployee].sort());
+    const child = await signedIn(childManagerEmail);
+    const childSession = { role: "manager", employeeId: childManagerId, userId: childManagerUserId } as const;
+    const childStore = createAttendanceStore({ userClient: async () => child, scope: createManagerScope({ userClient: async () => child }) });
+    expect((await childStore.listInPeriod(childSession, period)).map(e => e.employeeId)).toEqual([childEmployee]);
+    // Asking for an employee outside the subtree reads nothing of theirs.
+    expect(await childStore.listInPeriod(childSession, period, [parentEmployee, outsideEmployee])).toEqual([]);
+    expect(await childStore.listInPeriod(childSession, { from: "2026-03-01", to: "2026-03-31" })).toEqual([]);
+  }, 30_000);
+
   it("scopes the employees, training, attendance and departments stores for a manager", async () => {
     const client = await signedIn(childManagerEmail);
     const session = { role: "manager", employeeId: childManagerId, userId: childManagerUserId } as const;
