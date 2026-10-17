@@ -199,7 +199,10 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
     expect(version.error?.code).toBe("42501");
     const [existing] = await ownVersions();
     const date = await client.from("holiday_calendar_dates").insert({ version_id: existing.id, holiday_date: "2026-01-05", name: "Late", kind: "general" });
-    expect(date.error?.code).toBe("42501");
+    // Refused either by RLS (42501) or, first, by the dates table's BEFORE trigger (23514): Postgres runs
+    // BEFORE ROW triggers before the RLS WITH CHECK, so which code arrives depends on the row. Both refuse,
+    // and the count below proves nothing was stored.
+    expect(["42501", "23514"]).toContain(date.error?.code);
     expect((await ownVersions()).length).toBe(before);
     const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true })
       .eq("version_id", existing.id).eq("holiday_date", "2026-01-05");
