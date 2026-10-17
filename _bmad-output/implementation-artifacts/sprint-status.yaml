@@ -71,10 +71,10 @@ development_status:
   epic-4-retrospective: optional
 
   epic-5: backlog
-  5-1-administrator-loads-the-approved-holiday-calendar: backlog # blocked: needs the System Owner-approved holiday calendar (action item open)
-  5-2-record-a-leave-period: backlog # blocked: needs Story 5.1 holiday calendar (System Owner approval, action item open)
-  5-3-edit-or-cancel-a-leave-period: backlog # blocked: depends on Story 5.2, which needs the approved holiday calendar
-  5-4-attendance-views-use-real-data: backlog # blocked: scheduled days need the approved holiday calendar (Story 5.1)
+  5-1-administrator-loads-the-approved-holiday-calendar: backlog
+  5-2-record-a-leave-period: backlog
+  5-3-edit-or-cancel-a-leave-period: backlog
+  5-4-attendance-views-use-real-data: backlog
   epic-5-retrospective: optional
 
   epic-6: done
@@ -92,7 +92,7 @@ development_status:
 
   epic-8: in-progress
   8-3-department-managers-export-within-their-department: review
-  8-4-exports-include-assignments-evaluations-and-leave: backlog # blocked: depends on Stories 5.2-5.3 (leave), blocked on the holiday calendar
+  8-4-exports-include-assignments-evaluations-and-leave: backlog
   epic-8-retrospective: optional
 
 action_items:
@@ -111,4 +111,4 @@ action_items:
   - epic: 5
     action: "Blocker for Story 5.1: System Owner approves the holiday calendar (jurisdiction, timezone, supported years, holiday dates)"
     owner: "Safay"
-    status: open
+    status: done  # 2026-10-17: provisional Bangladesh 2026 calendar adopted (docs/holiday-calendars/), adjustable by reloading
