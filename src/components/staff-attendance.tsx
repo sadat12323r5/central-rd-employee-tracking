@@ -17,6 +17,7 @@ import EvaluationView from "./evaluation-view";
 import ProvenanceLabel from "./provenance-label";
 import { EvaluationSummary, SKILL_SCALE, SkillList } from "./assessment-summary";
 import EmploymentHistoryPanel from "./employment-history-panel";
+import LeavePanel from "./leave-panel";
 
 const initial: ActionState = { error: "", message: "" };
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dhaka" });
@@ -454,6 +455,12 @@ export function StaffSelfService({ employee, entries, serverNow, current, depart
             </tr>;
           })}</tbody>
         </table></div>}
+      </section>
+
+      <section className="panel staff-leave" aria-labelledby="leave-heading">
+        <h2 id="leave-heading">Leave</h2>
+        <p className="muted">Your recorded leave periods, newest first, with their working days and category.</p>
+        <LeavePanel key={`leave-${employee.id}`} employeeId={employee.id} records={employee.leave} canEdit own />
       </section>
 
       <MyAssignments employee={employee} departmentOptions={departmentOptions} today={todayInDhaka(now)} />

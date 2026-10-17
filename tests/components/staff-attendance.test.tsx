@@ -20,6 +20,8 @@ const { addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploym
   addEmploymentHistoryAction: vi.fn(), updateEmploymentHistoryAction: vi.fn(), removeEmploymentHistoryAction: vi.fn(),
 }));
 vi.mock("@/server/employment-history-actions", () => ({ addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploymentHistoryAction }));
+const { recordLeaveAction } = vi.hoisted(() => ({ recordLeaveAction: vi.fn() }));
+vi.mock("@/server/leave-actions", () => ({ recordLeaveAction }));
 
 import StaffAttendance, { StaffSelfService } from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
@@ -674,5 +676,37 @@ describe("StaffAttendance employment history (Story 7.3)", () => {
     await user.click(form.getByRole("button", { name: "Add entry" }));
     expect(await screen.findByText("Employment entry added.")).toBeInTheDocument();
     expect((addEmploymentHistoryAction.mock.calls[0][1] as FormData).get("employeeId")).toBe(employee.id);
+  });
+});
+
+describe("StaffAttendance leave (Story 5.2)", () => {
+  const recorded = {
+    id: "l-1", employeeId: employee.id, startDate: "2026-03-02", endDate: "2026-03-05", workingDays: 4, category: "FOUR_TO_FOURTEEN" as const,
+    calendarVersionId: "cal-v3", cancelledAt: null, createdAt: "2026-10-17T00:00:00Z",
+  };
+
+  it("shows a Leave section after Recent days, listing the employee's own leave with a record form", async () => {
+    const { container } = await show(<StaffAttendance employee={{ ...employee, leave: [recorded] }} entries={[]} serverNow={now} current={none()} />);
+    const headings = screen.getAllByRole("heading", { level: 2 }).map(h => h.textContent);
+    expect(headings.indexOf("Leave")).toBe(headings.indexOf("Recent days") + 1);
+    const section = within(screen.getByRole("region", { name: "Leave" }));
+    const row = section.getByRole("table", { name: "Your leave" }).querySelectorAll("tbody tr")[0];
+    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["2 Mar 2026", "5 Mar 2026", "4", "4–14 working days", "Recorded"]);
+    expect(section.getByRole("form", { name: "Record leave" })).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("sends the session's own Employee ID with a record (the server ignores anyone else's)", async () => {
+    recordLeaveAction.mockResolvedValue({ error: "", message: "Leave recorded: 4 working days (4–14 working days)." });
+    const user = userEvent.setup();
+    await show(<StaffAttendance employee={employee} entries={[]} serverNow={now} current={none()} />);
+    const section = within(screen.getByRole("region", { name: "Leave" }));
+    expect(section.getByText("You have not recorded any leave yet.")).toBeInTheDocument();
+    const form = within(section.getByRole("form", { name: "Record leave" }));
+    await user.type(form.getByLabelText("First day of leave"), "2026-03-02");
+    await user.type(form.getByLabelText("Last day of leave"), "2026-03-05");
+    await user.click(form.getByRole("button", { name: "Record leave" }));
+    expect(await screen.findByText("Leave recorded: 4 working days (4–14 working days).")).toBeInTheDocument();
+    expect((recordLeaveAction.mock.calls[0][1] as FormData).get("employeeId")).toBe(employee.id);
   });
 });

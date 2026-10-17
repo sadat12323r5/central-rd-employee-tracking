@@ -42,6 +42,10 @@ vi.mock("@/server/assessment-actions", () => ({
 vi.mock("@/server/attendance-actions", () => ({ clockInAction: vi.fn(), clockOutAction: vi.fn(), saveLogAction: vi.fn() }));
 vi.mock("@/server/interviews-actions", () => ({ addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn() }));
 vi.mock("@/server/backfill-actions", () => ({ addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn() }));
+// Story 5.1: the Administrator's holiday calendar panel in Attendance & leave.
+// Story 5.2: the leave panel on the profile Attendance tab and in "My record".
+vi.mock("@/server/leave-actions", () => ({ recordLeaveAction: vi.fn(async () => ({ error: "", message: "" })) }));
+vi.mock("@/server/holiday-calendar-actions", () => ({ loadHolidayCalendarAction: vi.fn(async () => ({ error: "", message: "" })) }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -1638,5 +1642,73 @@ describe("Portal Employment tab (Story 7.3)", () => {
     await act(async () => { view.rerender(<Portal employees={updated} current={none()} />); });
     expect(screen.queryByText(fahim.history[1].role)).not.toBeInTheDocument();
     expect(screen.getByText(fahim.history[0].period)).toBeInTheDocument();
+  });
+});
+
+describe("Portal holiday calendar (Story 5.1)", () => {
+  const calendar = [{
+    id: "v-1", version: 1, jurisdiction: "Bangladesh", timezone: "Asia/Dhaka", supportedYearStart: 2026, supportedYearEnd: 2026,
+    source: "bangladesh-2026.csv", loadedBy: "u", loadedAt: "2026-10-17T04:30:00Z", holidayCount: 31,
+  }];
+
+  it("shows the Administrator the holiday calendar panel in Attendance & leave", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} holidayCalendars={calendar} />);
+    expect(screen.queryByRole("heading", { name: "Holiday calendar" })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByRole("heading", { name: "Holiday calendar" })).toBeInTheDocument();
+    expect(screen.getByText("Version 1 (active)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load calendar" })).toBeInTheDocument();
+  });
+
+  it("says the calendar is unavailable when the Administrator's versions could not be read", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} holidayCalendars={null} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/holiday calendar is unavailable/i);
+  });
+
+  it("never shows the panel to a manager", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={employees} current={none()} holidayCalendars={calendar} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.queryByRole("heading", { name: "Holiday calendar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load calendar" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Portal leave (Story 5.2)", () => {
+  const fahim = employees.find(e => e.id === "BS-1008")!;
+  const recorded = {
+    id: "l-1", employeeId: fahim.id, startDate: "2026-03-25", endDate: "2026-03-27", workingDays: 2, category: "ONE_TO_THREE" as const,
+    calendarVersionId: "cal-v3", cancelledAt: null, createdAt: "2026-10-17T00:00:00Z",
+  };
+  const people = employees.map(e => (e.id === fahim.id ? { ...e, leave: [recorded] } : e));
+
+  it.each([["admin"], ["manager"]] as const)("shows the recorded leave below the unchanged attendance stats on the Attendance tab, editable for the %s", async role => {
+    const user = userEvent.setup();
+    await show(<Portal employees={people} role={role} current={none()} />);
+    await user.click(screen.getByRole("button", { name: `View ${fahim.name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Attendance" }));
+    const panel = within(screen.getByRole("tabpanel"));
+    // The fixture-based stats and exceptions stay as they were (Story 5.4 replaces them).
+    expect(panel.getByText("Scheduled days")).toBeInTheDocument();
+    expect(panel.getByRole("heading", { name: "Leave & attendance exceptions" })).toBeInTheDocument();
+    const leave = within(panel.getByRole("article", { name: "Recorded leave" }));
+    const row = leave.getByRole("table", { name: "Recorded leave" }).querySelectorAll("tbody tr")[0];
+    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["25 Mar 2026", "27 Mar 2026", "2", "1–3 working days", "Recorded"]);
+    const form = leave.getByRole("form", { name: "Record leave" });
+    expect((form.querySelector("input[name=employeeId]") as HTMLInputElement).value).toBe(fahim.id);
+    expect(await axe(screen.getByRole("tabpanel"))).toHaveNoViolations();
+  });
+
+  it("puts the own-record Leave section in \"My record\"", async () => {
+    const me = { ...employees.find(e => e.id === "BS-1004")!, leave: [{ ...recorded, employeeId: "BS-1004" }] };
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={[employees[0]]} current={none()} myRecord={{ employee: me, entries: [], serverNow: "2026-09-28T06:00:00.000Z", current: none(), departmentOptions: [] }} />);
+    await act(async () => { await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "My record" })); });
+    const section = within(within(screen.getByRole("region", { name: "My record" })).getByRole("region", { name: "Leave" }));
+    expect(section.getByRole("table", { name: "Your leave" })).toBeInTheDocument();
+    expect((section.getByRole("form", { name: "Record leave" }).querySelector("input[name=employeeId]") as HTMLInputElement).value).toBe("BS-1004");
   });
 });
