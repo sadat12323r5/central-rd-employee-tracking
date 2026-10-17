@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Employee } from "../src/data/employees";
+import type { Assignment, AssignmentEvaluation, BackfilledProject, Employee, LeaveRecord } from "../src/data/employees";
 import type { TimesheetEntry } from "../src/domain/timesheet";
 import type { ManagerScopeSet } from "../src/server/manager-scope";
 import type { CurrentTraining } from "../src/server/training-store";
@@ -38,6 +38,10 @@ const { TrainingUnavailableError, trainingStore } = await import("../src/server/
 const { EmployeesUnavailableError, employeesStore } = await import("../src/server/employees-store");
 const { AuditEmployeeNotFoundError, AuditUnavailableError, AuditValidationError } = await import("../src/server/audit-store");
 const { managerScope, ManagerScopeUnavailableError } = await import("../src/server/manager-scope");
+const { AssignmentsUnavailableError, assignmentsStore } = await import("../src/server/assignments-store");
+const { BackfillUnavailableError, backfilledProjectStore } = await import("../src/server/backfilled-project-store");
+const { EvaluationsUnavailableError, assignmentEvaluationsStore } = await import("../src/server/assignment-evaluations-store");
+const { LeaveUnavailableError, leaveStore } = await import("../src/server/leave-store");
 
 const admin = { role: "admin" } as const;
 const actorId = "11111111-1111-4111-8111-111111111111";
@@ -50,9 +54,24 @@ const entry = (date: string): TimesheetEntry => ({
   workMode: "Office", log: null,
 });
 
+/** The Story 8.4 stores, empty unless a test fills them. */
+function fakeRecordStores() {
+  return {
+    assignments: { listFor: vi.fn(async (_s: unknown, _id?: string): Promise<Assignment[]> => []) },
+    backfilledProjects: { listFor: vi.fn(async (_s: unknown, _id?: string): Promise<BackfilledProject[]> => []) },
+    evaluations: { listFor: vi.fn(async (_s: unknown, _id?: string): Promise<AssignmentEvaluation[]> => []) },
+    leave: { listFor: vi.fn(async (_s: unknown, _id?: string): Promise<LeaveRecord[]> => []) },
+  };
+}
+
+const recordReads = (deps: ReturnType<typeof fakeRecordStores>) => [
+  deps.assignments.listFor, deps.backfilledProjects.listFor, deps.evaluations.listFor, deps.leave.listFor,
+].map(fn => fn.mock.calls.length);
+
 function fakeDeps() {
   const audit = vi.fn(async () => {});
   const deps = {
+    ...fakeRecordStores(),
     employees: { getFor: vi.fn(async (_s: unknown, id: string) => (id === "BS-1001" ? nadia : null)) },
     attendance: { listFor: vi.fn(async () => [entry("2026-09-02"), entry("2026-10-01")]) },
     interviews: {
@@ -76,8 +95,10 @@ function fakeDeps() {
 }
 
 const reads = (deps: ReturnType<typeof fakeDeps>) => [
-  deps.attendance.listFor, deps.interviews.listFor, deps.training.listFor, deps.training.currentFor,
-].map(fn => fn.mock.calls.length);
+  ...[deps.attendance.listFor, deps.interviews.listFor, deps.training.listFor, deps.training.currentFor].map(fn => fn.mock.calls.length),
+  ...recordReads(deps),
+];
+const NO_READS = [0, 0, 0, 0, 0, 0, 0, 0];
 
 describe("exportActivity", () => {
   it("exports a month: rows of all four types in the period, the filename, and one audit row after every read", async () => {
@@ -172,7 +193,7 @@ describe("exportActivity", () => {
     expect(error).toBeInstanceOf(ActivityValidationError);
     expect(error.message).toBe(message);
     expect(deps.employees.getFor).not.toHaveBeenCalled();
-    expect(reads(deps)).toEqual([0, 0, 0, 0]);
+    expect(reads(deps)).toEqual(NO_READS);
     expect(deps.audit.recordActivityExport).not.toHaveBeenCalled();
   });
 
@@ -185,7 +206,7 @@ describe("exportActivity", () => {
   it("rejects an unknown employee: no source reads, no audit", async () => {
     const deps = fakeDeps();
     await expect(exportActivity(deps, admin, actorId, { employeeId: "BS-1999", period: "all" }, now)).rejects.toBeInstanceOf(ActivityEmployeeNotFoundError);
-    expect(reads(deps)).toEqual([0, 0, 0, 0]);
+    expect(reads(deps)).toEqual(NO_READS);
     expect(deps.audit.recordActivityExport).not.toHaveBeenCalled();
   });
 
@@ -194,7 +215,7 @@ describe("exportActivity", () => {
     await expect(exportActivity(deps, { role: "staff", employeeId: "BS-1001" }, actorId, { employeeId: "BS-1001", period: "all" }, now))
       .rejects.toBeInstanceOf(ActivityForbiddenError);
     expect(deps.employees.getFor).not.toHaveBeenCalled();
-    expect(reads(deps)).toEqual([0, 0, 0, 0]);
+    expect(reads(deps)).toEqual(NO_READS);
   });
 
   it.each([
@@ -232,6 +253,16 @@ describe("exportActivity", () => {
   });
 });
 
+/** The four Story 8.4 stores spied empty, so the actions never reach the (mocked) user client. */
+function spyRecordStores() {
+  return [
+    vi.spyOn(assignmentsStore, "listFor").mockResolvedValue([]),
+    vi.spyOn(backfilledProjectStore, "listFor").mockResolvedValue([]),
+    vi.spyOn(assignmentEvaluationsStore, "listFor").mockResolvedValue([]),
+    vi.spyOn(leaveStore, "listFor").mockResolvedValue([]),
+  ];
+}
+
 describe("exportActivityAction", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   const spies: { mockRestore(): void }[] = [];
@@ -248,6 +279,7 @@ describe("exportActivityAction", () => {
     recordActivityExport.mockResolvedValue(undefined);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     spies.push(
+      ...spyRecordStores(),
       vi.spyOn(employeesStore, "getFor").mockResolvedValue(nadia),
       vi.spyOn(attendanceStore, "listFor").mockResolvedValue([entry("2026-09-02")]),
       vi.spyOn(interviewsStore, "listFor").mockResolvedValue([]),
@@ -324,6 +356,7 @@ function fakeBulkDeps() {
     }),
   ];
   const deps = {
+    ...fakeRecordStores(),
     employees: { listFor: vi.fn(async () => list.map(e => ({ ...e }))) },
     attendance: {
       listAll: vi.fn(async () => [
@@ -349,8 +382,10 @@ function fakeBulkDeps() {
 }
 
 const bulkReads = (deps: ReturnType<typeof fakeBulkDeps>) => [
-  deps.employees.listFor, deps.attendance.listAll, deps.training.currentFor,
-].map(fn => fn.mock.calls.length);
+  ...[deps.employees.listFor, deps.attendance.listAll, deps.training.currentFor].map(fn => fn.mock.calls.length),
+  ...recordReads(deps),
+];
+const NO_BULK_READS = [0, 0, 0, 0, 0, 0, 0];
 
 /** [employee_id, date, type] of each data row. */
 const cells = (csv: string) => csv.split("\r\n").slice(1).map(l => l.slice(1, -1).split('","')).map(c => [c[0], c[2], c[3]]);
@@ -373,7 +408,7 @@ describe("exportAllActivity", () => {
     expect(deps.audit.recordBulkActivityExport).toHaveBeenCalledExactlyOnceWith({ actorId, includeArchived: false, from: "2026-09-01", to: "2026-09-30" });
     expect(order).toEqual(["read", "audit"]);
     // Each source is read once for the whole export, with the Administrator's session; the LMS only for the included employees.
-    expect(bulkReads(deps)).toEqual([1, 1, 1]);
+    expect(bulkReads(deps)).toEqual([1, 1, 1, 1, 1, 1, 1]);
     expect(deps.employees.listFor).toHaveBeenCalledWith(admin);
     expect(deps.training.currentFor).toHaveBeenCalledWith(admin, ["BS-1001", "BS-1002"]);
   });
@@ -442,7 +477,7 @@ describe("exportAllActivity", () => {
     const error = await exportAllActivity(deps, admin, actorId, fields, now).catch(e => e);
     expect(error).toBeInstanceOf(ActivityValidationError);
     expect(error.message).toBe(message);
-    expect(bulkReads(deps)).toEqual([0, 0, 0]);
+    expect(bulkReads(deps)).toEqual(NO_BULK_READS);
     expect(deps.audit.recordBulkActivityExport).not.toHaveBeenCalled();
   });
 
@@ -450,7 +485,7 @@ describe("exportAllActivity", () => {
     const deps = fakeBulkDeps();
     await expect(exportAllActivity(deps, { role: "staff", employeeId: "BS-1001" }, actorId, { period: "all" }, now))
       .rejects.toBeInstanceOf(ActivityForbiddenError);
-    expect(bulkReads(deps)).toEqual([0, 0, 0]);
+    expect(bulkReads(deps)).toEqual(NO_BULK_READS);
   });
 
   it.each([
@@ -492,6 +527,7 @@ describe("exportAllActivityAction", () => {
     recordBulkActivityExport.mockResolvedValue(undefined);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     spies.push(
+      ...spyRecordStores(),
       vi.spyOn(employeesStore, "listFor").mockResolvedValue([person("BS-1001", "Nadia Rahman", false), person("BS-1003", "Archived Person", true)]),
       vi.spyOn(attendanceStore, "listAll").mockResolvedValue([attendanceOf("BS-1001", "2026-09-02"), attendanceOf("BS-1003", "2026-08-01")]),
       vi.spyOn(trainingStore, "currentFor").mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} }),
@@ -577,7 +613,7 @@ describe("exportActivity for a department manager", () => {
     expect(error).toBeInstanceOf(ActivityForbiddenError);
     expect(error.message).toBe(OUT_OF_SCOPE);
     expect(activityErrorMessage(error)).toBe(OUT_OF_SCOPE);
-    expect(reads(deps)).toEqual([0, 0, 0, 0]);
+    expect(reads(deps)).toEqual(NO_READS);
     expect(deps.audit.recordActivityExport).not.toHaveBeenCalled();
   });
 
@@ -681,7 +717,7 @@ describe("exportAllActivity for a department manager", () => {
     await expect(exportAllActivity(deps, manager, actorId, { period: "custom", from: "2026-10-01", to: "2026-10-14" }, now))
       .rejects.toBeInstanceOf(ActivityValidationError);
     expect(deps.scope.forManager).not.toHaveBeenCalled();
-    expect(bulkReads(deps)).toEqual([0, 0, 0]);
+    expect(bulkReads(deps)).toEqual(NO_BULK_READS);
     expect(deps.audit.recordDepartmentActivityExport).not.toHaveBeenCalled();
   });
 
@@ -733,6 +769,7 @@ describe("activity export actions for a department manager", () => {
     recordDepartmentActivityExport.mockResolvedValue(undefined);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     spies.push(
+      ...spyRecordStores(),
       vi.spyOn(employeesStore, "getFor").mockResolvedValue(nadia),
       vi.spyOn(employeesStore, "listFor").mockResolvedValue([person("BS-1001", "Nadia Rahman", false, {
         interviews: [{ id: "i9", company: "Orbit", role: "QA", date: "2026-09-02", stage: "Screening", outcome: "", feedback: "", withdrawn: false }],
@@ -783,5 +820,214 @@ describe("activity export actions for a department manager", () => {
     vi.mocked(managerScope.forManager).mockRejectedValue(new ManagerScopeUnavailableError());
     expect(await exportAllActivityAction({ error: "", message: "" }, form({ period: "all" }))).toEqual({ error: UNAVAILABLE, message: "" });
     expect(recordDepartmentActivityExport).not.toHaveBeenCalled();
+  });
+});
+
+// ---- Story 8.4: assignments, backfilled projects, evaluations and leave ----
+
+const assignmentRecord = (employeeId: string, over: Partial<Assignment> = {}): Assignment => ({
+  id: `as-${employeeId}`, employeeId, departmentId: DEPT_A, client: "Acme Bank", projectName: "Core banking", role: "Frontend lead",
+  allocation: 100, startDate: "2026-09-01", latestUpdate: "", status: "open", completionDate: null, createdAt: "2026-09-01T03:00:00Z",
+  closedAt: null, provenance: "assignment", ...over,
+});
+
+const backfilledRecord = (employeeId: string, over: Partial<BackfilledProject> = {}): BackfilledProject => ({
+  id: `bf-${employeeId}`, employeeId, departmentId: DEPT_A, departmentName: "Engineering", client: "Old Co", projectName: "Legacy portal",
+  completionDate: "2025-06-30", outcome: "Delivered", status: "active", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+  withdrawnAt: null, provenance: "backfilled", ...over,
+});
+
+const evaluationRecord = (employeeId: string, over: Partial<AssignmentEvaluation> = {}): AssignmentEvaluation => ({
+  id: `ev-${employeeId}`, assignmentId: `as-${employeeId}`, employeeId, departmentId: DEPT_A, evaluation: "Strong delivery",
+  clientFeedback: "Would hire again", createdBy: "u1", createdByName: "Farhana Ahmed", createdByRole: "manager", createdAt: "2026-10-05T20:00:00Z",
+  authoredBy: "u1", authoredByName: "Farhana Ahmed", authoredByRole: "manager", updatedAt: "2026-10-05T20:00:00Z", ...over,
+});
+
+const leaveRecord = (employeeId: string, over: Partial<LeaveRecord> = {}): LeaveRecord => ({
+  id: `lv-${employeeId}`, employeeId, startDate: "2026-09-29", endDate: "2026-10-02", workingDays: 4, category: "FOUR_TO_FOURTEEN",
+  calendarVersionId: "cal-1", cancelledAt: null, createdAt: "2026-09-20T00:00:00Z", ...over,
+});
+
+/** Fills the four stores with one record of each kind per employee id. */
+function fillRecordStores(deps: ReturnType<typeof fakeRecordStores>, ids: string[]) {
+  deps.assignments.listFor.mockResolvedValue(ids.map(id => assignmentRecord(id, { status: "closed", completionDate: "2026-10-03" })));
+  deps.backfilledProjects.listFor.mockResolvedValue(ids.map(id => backfilledRecord(id)));
+  deps.evaluations.listFor.mockResolvedValue(ids.map(id => evaluationRecord(id)));
+  deps.leave.listFor.mockResolvedValue(ids.map(id => leaveRecord(id)));
+}
+
+/** [date, type, title, details, status] of each data row. */
+const fullCells = (csv: string) => csv.split("\r\n").slice(1).map(l => l.slice(1, -1).split('","')).map(c => c.slice(2));
+
+describe("exportActivity with assignments, evaluations and leave (Story 8.4)", () => {
+  it("reads each new store with the session and the employee, and adds assignment, evaluation and leave rows", async () => {
+    const deps = fakeDeps();
+    fillRecordStores(deps, ["BS-1001"]);
+    const result = await exportActivity(deps, admin, actorId, { employeeId: "BS-1001", period: "month", month: "10", year: "2026" }, now);
+    for (const fn of [deps.assignments.listFor, deps.backfilledProjects.listFor, deps.evaluations.listFor, deps.leave.listFor]) {
+      expect(fn).toHaveBeenCalledExactlyOnceWith(admin, "BS-1001");
+    }
+    expect(fullCells(result.csv)).toEqual([
+      ["2026-09-01", "assignment", "Core banking — Acme Bank", "Role: Frontend lead; start: 2026-09-01; end: 2026-10-03; provenance: assignment", "Closed"],
+      ["2026-09-29", "leave", "4–14 working days", "From 2026-09-29 to 2026-10-02; 4 working days", "Recorded"],
+      ["2026-10-01", "attendance", "Attendance", "Clock in 09:00, clock out 17:00, break 0 min, Office", "Completed"],
+      ["2026-10-06", "evaluation", "Evaluation — Core banking (Acme Bank)", "Evaluator: Farhana Ahmed; outcome: Strong delivery; client feedback: Would hire again", "Written"],
+    ]);
+    expect(deps.audit.recordActivityExport).toHaveBeenCalledExactlyOnceWith({ actorId, employeeId: "BS-1001", from: "2026-10-01", to: "2026-10-31" });
+  });
+
+  it("includes backfilled past projects in their completion period, withdrawn ones as Withdrawn", async () => {
+    const deps = fakeDeps();
+    deps.backfilledProjects.listFor.mockResolvedValue([backfilledRecord("BS-1001"), backfilledRecord("BS-1001", { id: "bf2", projectName: "Kiosk", status: "withdrawn" })]);
+    const result = await exportActivity(deps, admin, actorId, { employeeId: "BS-1001", period: "year", year: "2025" }, now);
+    expect(fullCells(result.csv).filter(c => c[1] === "assignment")).toEqual([
+      ["2025-06-30", "assignment", "Kiosk — Old Co", "Self-reported past project; completed: 2025-06-30; outcome: Delivered; provenance: backfilled", "Withdrawn"],
+      ["2025-06-30", "assignment", "Legacy portal — Old Co", "Self-reported past project; completed: 2025-06-30; outcome: Delivered; provenance: backfilled", "Self-reported"],
+    ]);
+  });
+
+  it("drops any record of another employee a store returns", async () => {
+    const deps = fakeDeps();
+    fillRecordStores(deps, ["BS-1001", "BS-1002"]);
+    const result = await exportActivity(deps, admin, actorId, { employeeId: "BS-1001", period: "month", month: "10", year: "2026" }, now);
+    expect(fullCells(result.csv).filter(c => c[1] !== "attendance")).toHaveLength(3);
+  });
+
+  it("gives a manager the client feedback too, but never interviews", async () => {
+    const deps = fakeDeps();
+    fillRecordStores(deps, ["BS-1001"]);
+    const result = await exportActivity(deps, manager, actorId, { employeeId: "BS-1001", period: "month", month: "10", year: "2026" }, now);
+    expect(result.csv).toContain("client feedback: Would hire again");
+    expect(result.csv).not.toContain('"interview"');
+    expect(deps.leave.listFor).toHaveBeenCalledWith(manager, "BS-1001");
+  });
+
+  it("spans all time across the new records too (an open assignment ends today)", async () => {
+    const deps = fakeDeps();
+    deps.leave.listFor.mockResolvedValue([leaveRecord("BS-1001", { startDate: "2024-03-10", endDate: "2024-03-12", workingDays: 3 })]);
+    deps.assignments.listFor.mockResolvedValue([assignmentRecord("BS-1001")]);
+    const result = await exportActivity(deps, admin, actorId, { employeeId: "BS-1001", period: "all" }, now);
+    expect(result.filename).toBe("activity-BS-1001-2024-03-10_to_2026-10-13.csv");
+  });
+
+  it.each([
+    ["assignments", (d: ReturnType<typeof fakeDeps>) => d.assignments.listFor.mockRejectedValue(new AssignmentsUnavailableError())],
+    ["backfilled projects", (d: ReturnType<typeof fakeDeps>) => d.backfilledProjects.listFor.mockRejectedValue(new BackfillUnavailableError())],
+    ["evaluations", (d: ReturnType<typeof fakeDeps>) => d.evaluations.listFor.mockRejectedValue(new EvaluationsUnavailableError())],
+    ["leave", (d: ReturnType<typeof fakeDeps>) => d.leave.listFor.mockRejectedValue(new LeaveUnavailableError())],
+  ])("fails as a whole when %s is unavailable: no CSV, no audit", async (_name, breakSource) => {
+    for (const session of [admin, manager]) {
+      const deps = fakeDeps();
+      breakSource(deps);
+      const error = await exportActivity(deps, session, actorId, { employeeId: "BS-1001", period: "all" }, now).catch(e => e);
+      expect(error).toBeInstanceOf(ActivityUnavailableError);
+      expect(error.message).toBe(UNAVAILABLE);
+      expect(deps.audit.recordActivityExport).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("exportAllActivity with assignments, evaluations and leave (Story 8.4)", () => {
+  it("reads each new store once for the whole export with the session, grouped by employee", async () => {
+    const deps = fakeBulkDeps();
+    fillRecordStores(deps, ["BS-1002", "BS-1001", "BS-1003"]);
+    const result = await exportAllActivity(deps, admin, actorId, { period: "month", month: "10", year: "2026" }, now);
+    for (const fn of [deps.assignments.listFor, deps.backfilledProjects.listFor, deps.evaluations.listFor, deps.leave.listFor]) {
+      expect(fn).toHaveBeenCalledExactlyOnceWith(admin);
+    }
+    // BS-1003 is archived and left out.
+    expect(cells(result.csv)).toEqual([
+      ["BS-1001", "2026-09-01", "assignment"], ["BS-1001", "2026-09-29", "leave"], ["BS-1001", "2026-10-06", "evaluation"],
+      ["BS-1001", "2026-10-10", "attendance"],
+      ["BS-1002", "2026-09-01", "assignment"], ["BS-1002", "2026-09-29", "leave"], ["BS-1002", "2026-10-06", "evaluation"],
+    ]);
+    expect(result.csv).toContain("client feedback: Would hire again");
+  });
+
+  it("spans all time across the new records of the included employees", async () => {
+    const deps = fakeBulkDeps();
+    deps.leave.listFor.mockResolvedValue([leaveRecord("BS-1002", { startDate: "2024-03-10", endDate: "2024-03-12", workingDays: 3 }), leaveRecord("BS-1003", { startDate: "2020-01-06", endDate: "2020-01-06", workingDays: 1 })]);
+    const result = await exportAllActivity(deps, admin, actorId, { period: "all" }, now);
+    expect(result.filename).toBe("activity-all-employees-2024-03-10_to_2026-10-10.csv");
+  });
+
+  it("gives a manager only the subtree's rows of the new types, with no interviews", async () => {
+    const deps = fakeBulkDeps();
+    deps.scope.forManager.mockResolvedValue(subtree(["BS-1001"]));
+    fillRecordStores(deps, ["BS-1001", "BS-1002"]);
+    const result = await exportAllActivity(deps, manager, actorId, { period: "month", month: "10", year: "2026" }, now);
+    expect(new Set(cells(result.csv).map(c => c[0]))).toEqual(new Set(["BS-1001"]));
+    expect(cells(result.csv).map(c => c[2])).toEqual(["assignment", "leave", "evaluation", "attendance"]);
+    expect(result.csv).not.toContain('"interview"');
+    expect(deps.evaluations.listFor).toHaveBeenCalledExactlyOnceWith(manager);
+    expect(deps.audit.recordDepartmentActivityExport).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["assignments", (d: ReturnType<typeof fakeBulkDeps>) => d.assignments.listFor.mockRejectedValue(new AssignmentsUnavailableError())],
+    ["backfilled projects", (d: ReturnType<typeof fakeBulkDeps>) => d.backfilledProjects.listFor.mockRejectedValue(new BackfillUnavailableError())],
+    ["evaluations", (d: ReturnType<typeof fakeBulkDeps>) => d.evaluations.listFor.mockRejectedValue(new EvaluationsUnavailableError())],
+    ["leave", (d: ReturnType<typeof fakeBulkDeps>) => d.leave.listFor.mockRejectedValue(new LeaveUnavailableError())],
+  ])("fails as a whole when %s is unavailable: no CSV, no audit", async (_name, breakSource) => {
+    for (const session of [admin, manager]) {
+      const deps = fakeManagerBulkDeps();
+      breakSource(deps);
+      const error = await exportAllActivity(deps, session, actorId, { period: "all" }, now).catch(e => e);
+      expect(error).toBeInstanceOf(ActivityUnavailableError);
+      expect(deps.audit.recordBulkActivityExport).not.toHaveBeenCalled();
+      expect(deps.audit.recordDepartmentActivityExport).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("activity export actions read the Story 8.4 stores", () => {
+  const spies: { mockRestore(): void }[] = [];
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  function form(fields: Record<string, string>) {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) data.set(key, value);
+    return data;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActor.mockResolvedValue({ identity: admin, userId: actorId });
+    recordActivityExport.mockResolvedValue(undefined);
+    recordBulkActivityExport.mockResolvedValue(undefined);
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    spies.push(
+      vi.spyOn(assignmentsStore, "listFor").mockResolvedValue([assignmentRecord("BS-1001")]),
+      vi.spyOn(backfilledProjectStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(assignmentEvaluationsStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(leaveStore, "listFor").mockResolvedValue([leaveRecord("BS-1001")]),
+      vi.spyOn(employeesStore, "getFor").mockResolvedValue(nadia),
+      vi.spyOn(employeesStore, "listFor").mockResolvedValue([person("BS-1001", "Nadia Rahman", false)]),
+      vi.spyOn(attendanceStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(attendanceStore, "listAll").mockResolvedValue([]),
+      vi.spyOn(interviewsStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(trainingStore, "listFor").mockResolvedValue([]),
+      vi.spyOn(trainingStore, "currentFor").mockResolvedValue({ status: "ok", asOf: "", stale: false, inProgress: [], lmsCompleted: [], freshness: {} }),
+    );
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+    while (spies.length) spies.pop()!.mockRestore();
+  });
+
+  it("wires the real stores into the single and the bulk export", async () => {
+    const single = await exportActivityAction({ error: "", message: "" }, form({ employeeId: "BS-1001", period: "month", month: "10", year: "2026" }));
+    expect(single.csv).toContain('"assignment"');
+    expect(single.csv).toContain('"leave"');
+    expect(leaveStore.listFor).toHaveBeenCalledWith(admin, "BS-1001");
+    const bulk = await exportAllActivityAction({ error: "", message: "" }, form({ period: "month", month: "10", year: "2026" }));
+    expect(bulk.csv).toContain('"leave"');
+    expect(assignmentsStore.listFor).toHaveBeenCalledWith(admin);
+  });
+
+  it("shows the unavailable message when a new store is down", async () => {
+    vi.mocked(leaveStore.listFor).mockRejectedValue(new LeaveUnavailableError());
+    expect(await exportActivityAction({ error: "", message: "" }, form({ employeeId: "BS-1001", period: "all" }))).toEqual({ error: UNAVAILABLE, message: "" });
+    expect(recordActivityExport).not.toHaveBeenCalled();
   });
 });

@@ -6,10 +6,14 @@ import {
 import type { Employee } from "@/data/employees";
 import { isCalendarDate } from "@/domain/dates";
 import { dhakaDate } from "@/domain/timesheet";
+import { EvaluationsUnavailableError, type AssignmentEvaluationsStore } from "./assignment-evaluations-store";
+import { AssignmentsUnavailableError, type AssignmentsStore } from "./assignments-store";
 import { AttendanceUnavailableError, type AttendanceStore } from "./attendance-store";
 import { AuditEmployeeNotFoundError, AuditUnavailableError, AuditValidationError, type AuditStore } from "./audit-store";
 import { EmployeesUnavailableError, type EmployeesStore } from "./employees-store";
+import { BackfillUnavailableError, type BackfilledProjectStore } from "./backfilled-project-store";
 import { InterviewsUnavailableError, type InterviewsStore } from "./interviews-store";
+import { LeaveUnavailableError, type LeaveStore } from "./leave-store";
 import { ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
 import type { SessionIdentity } from "./session";
 import { TrainingUnavailableError, type TrainingStore } from "./training-store";
@@ -28,8 +32,20 @@ import { TrainingUnavailableError, type TrainingStore } from "./training-store";
 // store is not even called for them (on top of it returning [] for managers). A manager's single export
 // is audited like the Administrator's (target = the employee); a manager's bulk export records the
 // subtree's department ids, read during the export, through record_department_activity_export.
+//
+// Story 8.4 adds assignments, backfilled past projects, evaluations and leave, each read through its own
+// session-scoped store (RLS + store scoping; single: listFor(session, id), bulk: one listFor(session) per
+// store, grouped by employee) and re-filtered by employee. Any of them unavailable fails the whole export.
 
-export type ActivityExportDeps = {
+/** The Story 8.4 sources: each read through its own store with the exporter's session. */
+type RecordStores = {
+  assignments: Pick<AssignmentsStore, "listFor">;
+  backfilledProjects: Pick<BackfilledProjectStore, "listFor">;
+  evaluations: Pick<AssignmentEvaluationsStore, "listFor">;
+  leave: Pick<LeaveStore, "listFor">;
+};
+
+export type ActivityExportDeps = RecordStores & {
   employees: Pick<EmployeesStore, "getFor">;
   attendance: Pick<AttendanceStore, "listFor">;
   interviews: Pick<InterviewsStore, "listFor">;
@@ -37,7 +53,7 @@ export type ActivityExportDeps = {
   audit: Pick<AuditStore, "recordActivityExport">;
 };
 
-export type BulkActivityExportDeps = {
+export type BulkActivityExportDeps = RecordStores & {
   /** Every employee, with their stored interviews and training (one read of each for everyone). */
   employees: Pick<EmployeesStore, "listFor">;
   attendance: Pick<AttendanceStore, "listAll">;
@@ -157,12 +173,18 @@ function fixedPeriod(input: PeriodInput, today: string): Period | undefined {
 
 const UNAVAILABLE_ERRORS = [
   AttendanceUnavailableError, InterviewsUnavailableError, TrainingUnavailableError, EmployeesUnavailableError, AuditUnavailableError,
-  ManagerScopeUnavailableError,
+  ManagerScopeUnavailableError, AssignmentsUnavailableError, BackfillUnavailableError, EvaluationsUnavailableError, LeaveUnavailableError,
 ];
 
 /** Who may export at all (Story 8.3): the Administrator and department managers. */
 export const mayExport = (session: SessionIdentity) => session.role === "admin" || session.role === "manager";
 const isUnavailable = (error: unknown) => UNAVAILABLE_ERRORS.some(type => error instanceof type);
+
+/**
+ * Whether evaluation client feedback goes into the export: only for an Administrator or a manager exporter
+ * (every exporter today; coded on the role so it holds if export access ever widens).
+ */
+const showsClientFeedback = (session: SessionIdentity) => session.role === "admin" || session.role === "manager";
 
 /**
  * Exports one employee's activity timeline for the requested period. `actorId` is the exporting
@@ -188,12 +210,16 @@ export async function exportActivity(
     // A manager is told only that the employee is out of scope, whether or not the id exists.
     if (!employee) throw manager ? new ActivityForbiddenError(OUT_OF_SCOPE) : new ActivityEmployeeNotFoundError();
 
-    const [attendance, interviews, training, current] = await Promise.all([
+    const [attendance, interviews, training, current, assignments, backfilledProjects, evaluations, leave] = await Promise.all([
       deps.attendance.listFor(session, employeeId),
       // Never read for a manager: interviews are visible only to the employee and the Administrator.
       manager ? [] : deps.interviews.listFor(session, employeeId),
       deps.training.listFor(session, employeeId),
       deps.training.currentFor(session, [employeeId]),
+      deps.assignments.listFor(session, employeeId),
+      deps.backfilledProjects.listFor(session, employeeId),
+      deps.evaluations.listFor(session, employeeId),
+      deps.leave.listFor(session, employeeId),
     ]);
     if (current.status !== "ok") throw new ActivityUnavailableError({ cause: "LMS unavailable" });
 
@@ -207,9 +233,15 @@ export async function exportActivity(
         asOf: freshness?.asOf ?? current.asOf,
         stale: freshness?.stale ?? current.stale,
       },
+      assignments: assignments.filter(a => a.employeeId === employeeId),
+      backfilledProjects: backfilledProjects.filter(p => p.employeeId === employeeId),
+      evaluations: evaluations.filter(e => e.employeeId === employeeId),
+      leave: leave.filter(l => l.employeeId === employeeId),
     };
-    const resolved = period ?? resolvePeriod(periodInput, today, recordSpan(sources));
-    const csv = timelineCsv(buildTimeline({ id: employee.id, name: employee.name }, sources, resolved, now));
+    const resolved = period ?? resolvePeriod(periodInput, today, recordSpan(sources, today));
+    const csv = timelineCsv(buildTimeline({ id: employee.id, name: employee.name }, sources, resolved, now, {
+      clientFeedback: showsClientFeedback(session),
+    }));
 
     await deps.audit.recordActivityExport({ actorId, employeeId, from: resolved.from, to: resolved.to });
     return { csv, filename: activityFilename(employeeId, resolved), ...resolved };
@@ -221,6 +253,17 @@ export async function exportActivity(
 }
 
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Records grouped by their employee id. */
+function byEmployee<T extends { employeeId: string }>(records: readonly T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const record of records) {
+    const own = grouped.get(record.employeeId);
+    if (own) own.push(record);
+    else grouped.set(record.employeeId, [record]);
+  }
+  return grouped;
+}
 
 /** The earliest start and latest end of the spans (for "All time" across employees), or null when none. */
 function combinedSpan(spans: (Period | null)[]): Period | null {
@@ -265,22 +308,26 @@ export async function exportAllActivity(
     const scopeRead = session.role === "manager" ? deps.scope.forManager(session) : Promise.resolve(null);
     const includedRead = Promise.all([deps.employees.listFor(session), scopeRead])
       .then(([all, scope]) => inScope(scope ? all.filter(e => scope.employeeIds.has(e.id)) : all));
-    const [included, scope, attendance, current] = await Promise.all([
+    const [included, scope, attendance, current, assignments, backfilledProjects, evaluations, leave] = await Promise.all([
       includedRead,
       scopeRead,
       deps.attendance.listAll(),
       includedRead.then(list => deps.training.currentFor(session, list.map(e => e.id))),
+      // One scoped read per store for the whole export (paged by the stores), grouped by employee below.
+      deps.assignments.listFor(session),
+      deps.backfilledProjects.listFor(session),
+      deps.evaluations.listFor(session),
+      deps.leave.listFor(session),
     ]);
     if (current.status !== "ok") throw new ActivityUnavailableError({ cause: "LMS unavailable" });
     // A manager with no department in scope (e.g. just unassigned) has nothing to export.
     if (scope && scope.departmentIds.size === 0) throw new ActivityForbiddenError(OUT_OF_SCOPE);
 
-    const attendanceOf = new Map<string, typeof attendance>();
-    for (const entry of attendance) {
-      const own = attendanceOf.get(entry.employeeId);
-      if (own) own.push(entry);
-      else attendanceOf.set(entry.employeeId, [entry]);
-    }
+    const attendanceOf = byEmployee(attendance);
+    const assignmentsOf = byEmployee(assignments);
+    const backfilledOf = byEmployee(backfilledProjects);
+    const evaluationsOf = byEmployee(evaluations);
+    const leaveOf = byEmployee(leave);
     const enrolments = [...current.inProgress, ...current.lmsCompleted];
 
     const employees = included.map(employee => {
@@ -295,13 +342,18 @@ export async function exportAllActivity(
           asOf: freshness?.asOf ?? current.asOf,
           stale: freshness?.stale ?? current.stale,
         },
+        assignments: assignmentsOf.get(employee.id) ?? [],
+        backfilledProjects: backfilledOf.get(employee.id) ?? [],
+        evaluations: evaluationsOf.get(employee.id) ?? [],
+        leave: leaveOf.get(employee.id) ?? [],
       };
       return { employee, sources };
     });
 
-    const resolved = period ?? resolvePeriod(periodInput, today, combinedSpan(employees.map(e => recordSpan(e.sources))));
+    const resolved = period ?? resolvePeriod(periodInput, today, combinedSpan(employees.map(e => recordSpan(e.sources, today))));
+    const options = { clientFeedback: showsClientFeedback(session) };
     const rows: ActivityRow[] = employees.flatMap(({ employee, sources }) =>
-      buildTimeline({ id: employee.id, name: employee.name }, sources, resolved, now));
+      buildTimeline({ id: employee.id, name: employee.name }, sources, resolved, now, options));
     const csv = timelineCsv(rows);
 
     if (scope) {

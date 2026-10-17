@@ -54,6 +54,31 @@ describe("ActivityExportPanel", () => {
     expect(Object.fromEntries(submitted)).toEqual({ employeeId: "BS-1001", period: "month", month: "9", year: "2026" });
   });
 
+  it("restores the BOM when the action result arrives without it (a long result's text chunk drops it), never doubling it", async () => {
+    const readBytes = async () => new Uint8Array(await new Promise<ArrayBuffer>(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.readAsArrayBuffer(saved.blob!);
+    }));
+    exportMock.mockResolvedValue({ error: "", message: "", csv: CSV.slice(1), filename: "activity-BS-1001-2026-09-01_to_2026-09-30.csv" });
+    const user = userEvent.setup();
+    render(<ActivityExportPanel employeeId="BS-1001" />);
+    await user.selectOptions(screen.getByLabelText("Period"), "all");
+    await user.click(screen.getByRole("button", { name: "Download activity" }));
+    await screen.findByRole("status");
+    const bytes = await readBytes();
+    expect([...bytes.slice(0, 4)]).toEqual([0xef, 0xbb, 0xbf, 0x22]);
+    expect(bytes.length).toBe(new TextEncoder().encode(CSV).length);
+
+    // Already carrying the BOM: saved as is, with exactly one BOM.
+    exportMock.mockResolvedValue({ error: "", message: "", csv: CSV, filename: "activity-BS-1001-2026-09-01_to_2026-09-30.csv" });
+    await user.click(screen.getByRole("button", { name: "Download activity" }));
+    await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(2));
+    const again = await readBytes();
+    expect([...again.slice(0, 6)]).toEqual([0xef, 0xbb, 0xbf, 0x22, 0x65, 0x6d]);
+    expect(again.length).toBe(new TextEncoder().encode(CSV).length);
+  });
+
   it("sends a custom range's dates", async () => {
     exportMock.mockResolvedValue({ error: "", message: "", csv: CSV, filename: "activity-BS-1001-2026-09-01_to_2026-09-05.csv" });
     const user = userEvent.setup();

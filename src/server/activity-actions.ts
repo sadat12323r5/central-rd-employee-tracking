@@ -3,12 +3,16 @@
 import {
   activityErrorMessage, exportActivity, exportAllActivity, mayExport, NOT_ALLOWED, type ActivityExportInput, type BulkActivityExportInput,
 } from "./activity-export";
+import { assignmentEvaluationsStore } from "./assignment-evaluations-store";
+import { assignmentsStore } from "./assignments-store";
 import { attendanceStore } from "./attendance-store";
 import type { ActionState } from "./attendance-actions";
 import { createAuditStore } from "./audit-store";
 import { getActor } from "./auth";
 import { employeesStore } from "./employees-store";
+import { backfilledProjectStore } from "./backfilled-project-store";
 import { interviewsStore } from "./interviews-store";
+import { leaveStore } from "./leave-store";
 import { managerScope } from "./manager-scope";
 import { getServiceClient } from "./supabase";
 import { trainingStore } from "./training-store";
@@ -20,6 +24,11 @@ import { trainingStore } from "./training-store";
 // Story 8.2 adds the bulk export of every employee (exportAllActivityAction), with the same checks.
 // Story 8.3 opens both to department managers: the role is checked here, and the subtree scope (and the
 // absence of interviews) is enforced in activity-export.ts through the session-aware stores.
+// Story 8.4 adds the assignment, backfilled-project, evaluation and leave stores (the user's session, never the service role).
+
+const RECORD_STORES = {
+  assignments: assignmentsStore, backfilledProjects: backfilledProjectStore, evaluations: assignmentEvaluationsStore, leave: leaveStore,
+};
 
 export type ActivityExportState = ActionState & { csv?: string; filename?: string };
 
@@ -34,7 +43,7 @@ export async function exportActivityAction(_previous: ActivityExportState, form:
     const result = await exportActivity(
       {
         employees: employeesStore, attendance: attendanceStore, interviews: interviewsStore, training: trainingStore,
-        audit: createAuditStore(getServiceClient),
+        audit: createAuditStore(getServiceClient), ...RECORD_STORES,
       },
       actor.identity, actor.userId, input, new Date(),
     );
@@ -64,7 +73,7 @@ export async function exportAllActivityAction(_previous: ActivityExportState, fo
     const result = await exportAllActivity(
       {
         employees: employeesStore, attendance: attendanceStore, training: trainingStore, audit: createAuditStore(getServiceClient),
-        scope: managerScope,
+        scope: managerScope, ...RECORD_STORES,
       },
       actor.identity, actor.userId, input, new Date(),
     );
