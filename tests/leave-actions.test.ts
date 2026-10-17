@@ -190,6 +190,10 @@ describe("updateLeaveAction (Story 5.3)", () => {
 
   it.each([[""], ["not-a-uuid"], ["123"]])("refuses an id that is not a uuid (%o) without a store call", async id => {
     expect(await updateLeaveAction(blank, form({ id, ...MARCH }))).toEqual({ error: "Choose a valid leave period.", message: "" });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing id without a store call", async () => {
     expect(await updateLeaveAction(blank, form(MARCH))).toEqual({ error: "Choose a valid leave period.", message: "" });
     expect(update).not.toHaveBeenCalled();
   });
@@ -274,5 +278,11 @@ describe("cancelLeaveAction (Story 5.3)", () => {
     cancel.mockRejectedValue(error);
     expect(await cancelLeaveAction(blank, form({ id: ID }))).toEqual({ error: message, message: "" });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("rethrows an unexpected error", async () => {
+    const bug = new TypeError("bug");
+    cancel.mockRejectedValue(bug);
+    await expect(cancelLeaveAction(blank, form({ id: ID }))).rejects.toBe(bug);
   });
 });

@@ -312,7 +312,7 @@ export function createLeaveStore({ userClient, scope = managerScope, calendar = 
 
   /**
    * Writes `values` to the active period `current`, filtered by id, employee and `cancelled_at is null`, so a
-   * period cancelled in between changes nothing (reported as cancelled).
+   * period cancelled in between changes nothing (reported as cancelled; a row no longer visible as not found).
    */
   async function write(current: LeaveRow, values: Partial<LeaveRow>, refusal: (error: unknown) => Error): Promise<LeaveRecord> {
     const saved = await runMaybe<LeaveRow>(t => t.update(values)

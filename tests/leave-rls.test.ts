@@ -452,6 +452,12 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     const anon = createClient(url!, anonKey!, noSession);
     expect((await anon.from("leave_records").select("id").eq("id", row.id)).data ?? []).toHaveLength(0);
     expect((await anon.from("leave_records").insert(period(childEmployee, "2026-03-10"))).error).not.toBeNull();
+    // Story 5.3: the update policy is for authenticated users only; anon edits and cancels change nothing.
+    const edited = await anon.from("leave_records").update({ end_date: "2026-03-10", working_days: 2 }).eq("id", row.id).select("id");
+    expect(edited.data ?? []).toHaveLength(0);
+    const cancelled = await anon.from("leave_records").update({ cancelled_at: new Date().toISOString() }).eq("id", row.id).select("id");
+    expect(cancelled.data ?? []).toHaveLength(0);
+    expect(await read(row.id)).toEqual(row);
   });
 
   it("agrees at the store: own Staff counts against the calendar, the P manager in and out of scope, overlap", async () => {

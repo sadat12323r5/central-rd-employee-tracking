@@ -14,7 +14,7 @@ import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manage
 import { many, pagedClient } from "./support/paged-client";
 
 type Mode = "ok" | "error" | "throw" | "foreign" | "overlap" | "overlap-bare" | "calendar-changed" | "outside" | "denied" | "fk-employee" | "fk-other" | "check"
-  | "was-cancelled" | "race";
+  | "was-cancelled" | "race-cancelled" | "race-hidden";
 type Call = { table: string; method: string; args: unknown[] };
 
 /**
@@ -57,7 +57,9 @@ function fakeClient(rows: LeaveRow[], mode: Mode = "ok") {
           && lte.every(([col, val]) => (value(r, col) as string) <= val)
           && gte.every(([col, val]) => (value(r, col) as string) >= val));
         if (updated) {
-          if (mode === "race") return { data: null, error: null };
+          // Nothing matched: cancelled in between (the re-read sees it cancelled), or hidden by RLS (still active).
+          if (mode === "race-cancelled") { for (const r of matching) r.cancelled_at = "2026-10-17T09:00:00Z"; return { data: null, error: null }; }
+          if (mode === "race-hidden") return { data: null, error: null };
           for (const r of matching) Object.assign(r, updated.args[0]);
           const first = matching[0] ?? null;
           return { data: first && mode === "foreign" ? { ...first, employee_id: "BS-1999" } : first, error: null };
@@ -396,7 +398,7 @@ describe("leave-store update (Story 5.3)", () => {
     const { client, calls } = fakeClient(fresh());
     await expect(storeFor(client).update(staff, "x", { startDate: "2026-06-01", endDate: "2026-06-03" })).rejects.toBeInstanceOf(LeaveCancelledError);
     expect(updates(calls)).toEqual([]);
-    await expect(storeFor(fakeClient(fresh(), "race").client).update(staff, "b", { startDate: "2026-03-02", endDate: "2026-03-06" }))
+    await expect(storeFor(fakeClient(fresh(), "race-cancelled").client).update(staff, "b", { startDate: "2026-03-02", endDate: "2026-03-06" }))
       .rejects.toBeInstanceOf(LeaveCancelledError);
     await expect(storeFor(fakeClient(fresh(), "was-cancelled").client).update(staff, "b", { startDate: "2026-03-02", endDate: "2026-03-06" }))
       .rejects.toBeInstanceOf(LeaveCancelledError);
@@ -436,6 +438,17 @@ describe("leave-store update (Story 5.3)", () => {
   });
 });
 
+describe("leave-store write matching no row (Story 5.3)", () => {
+  it("re-reads the period: cancelled in between → cancelled; still active (hidden by RLS) → not found", async () => {
+    const input = { startDate: "2026-03-02", endDate: "2026-03-06" };
+    const cancelled = fakeClient(fresh(), "race-cancelled");
+    await expect(storeFor(cancelled.client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveCancelledError);
+    expect(cancelled.calls.at(-1)!.map(c => [c.method, ...c.args])).toEqual([["select", "cancelled_at"], ["eq", "id", "b"], ["maybeSingle"]]);
+    await expect(storeFor(fakeClient(fresh(), "race-hidden").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveNotFoundError);
+    await expect(storeFor(fakeClient(fresh(), "race-hidden").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveNotFoundError);
+  });
+});
+
 describe("leave-store cancel (Story 5.3)", () => {
   it("sets cancelled_at only, filtered by id, employee and active; the row is kept (never deleted)", async () => {
     const rows = fresh();
@@ -459,7 +472,7 @@ describe("leave-store cancel (Story 5.3)", () => {
     await expect(storeFor(client).cancel(manager, "u")).rejects.toBeInstanceOf(LeaveForbiddenError);
     expect((await storeFor(client).cancel(manager, "m")).cancelledAt).not.toBeNull();
     expect((await storeFor(client).cancel(admin, "u")).cancelledAt).not.toBeNull();
-    await expect(storeFor(fakeClient(fresh(), "race").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveCancelledError);
+    await expect(storeFor(fakeClient(fresh(), "race-cancelled").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveCancelledError);
     await expect(storeFor(fakeClient(fresh(), "was-cancelled").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveCancelledError);
     await expect(storeFor(fakeClient(fresh(), "denied").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveForbiddenError);
     await expect(storeFor(fakeClient(fresh(), "error").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveUnavailableError);
