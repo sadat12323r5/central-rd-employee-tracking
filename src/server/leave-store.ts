@@ -318,7 +318,12 @@ export function createLeaveStore({ userClient, scope = managerScope, calendar = 
     const saved = await runMaybe<LeaveRow>(t => t.update(values)
       .eq("id", current.id).eq("employee_id", current.employee_id).is("cancelled_at", null)
       .select(COLUMNS).maybeSingle<LeaveRow>(), refusal);
-    if (!saved) throw new LeaveCancelledError();
+    if (!saved) {
+      // Nothing matched: cancelled in between, or no longer visible / changeable for this session (RLS).
+      const now = await runMaybe<Pick<LeaveRow, "cancelled_at">>(t => t.select("cancelled_at").eq("id", current.id).maybeSingle<Pick<LeaveRow, "cancelled_at">>());
+      if (now && now.cancelled_at !== null && now.cancelled_at !== undefined) throw new LeaveCancelledError();
+      throw new LeaveNotFoundError();
+    }
     // Defence in depth: the stored row must still belong to the same employee.
     if (saved.employee_id !== current.employee_id || saved.id !== current.id) throw new LeaveUnavailableError({ cause: "changed another row" });
     return toLeaveRecord(saved);

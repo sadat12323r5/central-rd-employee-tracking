@@ -2,7 +2,7 @@
 title: 'Story 5.3: Edit or cancel a leave period'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '1f9687857c5e26321d36a852663c7b45dc396916'
 review_loop_iteration: 0
 followup_review_recommended: false
