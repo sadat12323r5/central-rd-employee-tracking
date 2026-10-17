@@ -10,7 +10,21 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
   - '{project-root}/docs/holiday-calendars/README.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      The service role can still delete dates from a stored calendar version.
+    evidence: |-
+      No delete guard on holiday_calendar_dates; kept so live tests can clean up. Only the seed and tests hold the service role.
+    location: >-
+      supabase/migrations/20261017000000_holiday_calendars.sql
+    severity: low
+  - summary: >-
+      The Holiday calendar panel lists versions but not the dates inside each one, and has no preview before a load becomes active.
+    evidence: |-
+      Not required by Story 5.1 ACs; useful when Islamic holidays move after moon sighting.
+    location: >-
+      src/components/holiday-calendar-panel.tsx
+    severity: low
 ---
 
 <intent-contract>
@@ -88,6 +102,36 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 2026-10-17 — Review pass
+- verdicts: 32 findings — high 0, medium 2, low 16, false 3, maybe-false 2 (plus 9 descriptive/design rows rejected as out of scope or settled by the spec)
+- findings:
+  - `[medium]` `[patch]` (blind) Admin could insert directly into holiday_calendar_versions, creating an empty active version — insert policies now also require the `app.holiday_calendar_loading` setting that only load_holiday_calendar turns on; live test added for admin direct inserts.
+  - `[low]` `[defer]` (blind) Service role can still delete dates from a stored version — only the seed/tests hold the service role; deferred (a delete guard would block test cleanup).
+  - `[low]` `[patch]` (blind) Live test's "corrected" version dropped a Friday holiday, briefly changing counts in the shared project — now drops 2026-05-30 (Saturday).
+  - `[maybe-false]` `[reject]` (blind) active() assertions flaky if two runs overlap — test files run serially; only concurrent CI runs could collide; would need evidence of overlapping runs.
+  - `[false]` `[reject]` (blind) Jurisdiction does not separate calendars — by design a version is the single org calendar (spec Design Notes); jurisdiction is a label.
+  - `[low]` `[defer]` (blind) Admin cannot see the dates inside a version — no AC requires it; deferred as UX follow-up.
+  - `[low]` `[defer]` (blind) No preview/confirm/rollback — reloading the earlier file restores it; deferred.
+  - `[low]` `[reject]` (blind) Panel does not show who loaded a version — it is recorded (spec requires recording, not display); adding a name lookup is new surface.
+  - `[low]` `[patch]` (blind+edge) Non-UTF-8 files decoded silently — fatal TextDecoder with a clear "save as CSV UTF-8" message.
+  - `[low]` `[patch]` (blind+edge) Parser accepted years the DB rejects (1900–2999) — per-line year bound added.
+  - `[low]` `[patch]` (blind+edge) 23502/22P02 reported as "unavailable" — mapped to the input error.
+  - `[low]` `[patch]` (blind) Invisible BOM literal — written as "\uFEFF".
+  - `[low]` `[patch]` (blind) Seed: uncaught HolidayCalendarInputError — caught, logged, exit 1.
+  - `[low]` `[reject]` (blind+edge) Seed check-then-insert race — the seed is run once by a human; an advisory lock is more code than it buys.
+  - `[low]` `[reject]` (blind) versions() unbounded / embedded count reliance — a handful of versions per year; count path is covered by the live test once the migration is applied.
+  - `[medium]` `[patch]` (edge+gap) >1000 holidays silently truncated by active()'s range — RPC raises check_violation over 1000 and the store's checked() enforces the same cap.
+  - `[low]` `[patch]` (edge) Store/action did not bound source length (DB 2000) — checked() rejects >2000 with its own message.
+  - `[low]` `[patch]` (edge) Quoted two-field header accepted — header must have exactly 3 fields.
+  - `[low]` `[patch]` (edge) Non-File form entry shows zod's default message — custom message on z.instanceof.
+  - `[maybe-false]` `[reject]` (edge) Concurrent loads may commit out of identity order — needs two admins loading in the same instant; would only be low.
+  - `[false]` `[reject]` (edge) Missing embedded count shows 0 — PostgREST always returns the aggregate for an embedded count; an absent key means a broken API, already surfaced by other reads.
+  - `[low]` `[patch]` (gap) Nothing checks the domain module loads under node --experimental-strip-types for the seed — tests/holiday-calendar-strip-types.test.ts added.
+  - `[false]` `[reject]` (intent) Manager not tested against RLS — RLS/RPC key on role = 'admin' only, so a manager JWT (role staff) is the Staff case, which is tested.
+  - `[low]` `[reject]` (intent) Supported years derived from dates instead of declared — settled by the spec Boundaries; an empty supported year is not a real calendar.
+  - `[low]` `[reject]` (intent) "Add a year" requires reloading all years — settled by the spec Design Notes (a version is a complete calendar).
+  - remaining 7 intent-audit rows (UI beyond ACs, timezone fixed, replace = new version, staff read access, CSV format rules, Mon–Fri not stored, version pointer untested until 5.2) — descriptive, consistent with the spec; no action.
 
 ## Design Notes
 

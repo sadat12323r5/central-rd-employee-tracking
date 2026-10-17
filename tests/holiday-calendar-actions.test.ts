@@ -109,6 +109,21 @@ describe("loadHolidayCalendarAction", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it("rejects a file that is not UTF-8, saving nothing", async () => {
+    const latin1 = new File([new Uint8Array([...new TextEncoder().encode("date,name,kind\n2026-12-16,Caf"), 0xe9, 0x2c, 0x67])], "a.csv");
+    const result = await loadHolidayCalendarAction(blank, form([latin1], "Bangladesh"));
+    expect(result.error).toBe("a.csv is not UTF-8 text. Save it as CSV UTF-8 and load it again. Nothing was saved.");
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("rejects a files entry that is not a file", async () => {
+    const data = form([], "Bangladesh");
+    data.append("files", "not-a-file.csv");
+    const result = await loadHolidayCalendarAction(blank, data);
+    expect(result.error).toBe("Choose calendar files ending in .csv. Nothing was saved.");
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it.each([["an empty", "   "], ["a too-long", "x".repeat(101)]])("rejects %s jurisdiction", async (_label, jurisdiction) => {
     const result = await loadHolidayCalendarAction(blank, form([csvFile("a.csv", PROVISIONAL)], jurisdiction));
     expect(result.error).toMatch(/jurisdiction/);

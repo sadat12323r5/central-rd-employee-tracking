@@ -30,7 +30,7 @@ describe("parseHolidayCsv", () => {
   });
 
   it("accepts quoted fields, escaped quotes, CRLF, a BOM and blank trailing lines", () => {
-    const text = `﻿${HEADER}\r\n"2026-03-26","Independence, and ""National"" Day",general\r\n2026-12-16,Victory Day,"special"\r\n\r\n\r\n`;
+    const text = `\uFEFF${HEADER}\r\n"2026-03-26","Independence, and ""National"" Day",general\r\n2026-12-16,Victory Day,"special"\r\n\r\n\r\n`;
     expect(parseHolidayCsv(text, "a.csv")).toEqual([
       { date: "2026-03-26", name: 'Independence, and "National" Day', kind: "general", line: 2 },
       { date: "2026-12-16", name: "Victory Day", kind: "special", line: 3 },
@@ -47,6 +47,8 @@ describe("parseHolidayCsv", () => {
     ["only blank lines", "\n\n", "a.csv is empty"],
     ["a header only", `${HEADER}\n`, "a.csv has no holidays"],
     ["a wrong header", "date,holiday,kind\n2026-12-16,Victory Day,general", "a.csv line 1: the header must be exactly date,name,kind"],
+    ["a two-field quoted header", 'date,"name,kind"\n2026-12-16,Victory Day,general', "a.csv line 1: the header must be exactly date,name,kind"],
+    ["a year typo", csv("2026-12-16,Victory Day,general", "3026-12-25,Christmas Day,general"), "a.csv line 3: 3026-12-25 is outside the years 1900–2999"],
     ["a header with extra columns", "date,name,kind,notes\n2026-12-16,Victory Day,general,x", "a.csv line 1"],
     ["an invalid date", csv("2026-12-16,Victory Day,general", "2026-02-30,Bad,general"), 'a.csv line 3: "2026-02-30" is not a valid date'],
     ["a non-ISO date", csv("16/12/2026,Victory Day,general"), 'a.csv line 2: "16/12/2026" is not a valid date'],

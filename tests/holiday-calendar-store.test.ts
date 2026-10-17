@@ -139,6 +139,18 @@ describe("holiday-calendar-store load", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("rejects a too-long source and more than 1000 holidays without a query", async () => {
+    const { client, calls } = fakeClient([], []);
+    await expect(storeFor(client).load(admin, { ...input, source: "x".repeat(2001) })).rejects.toThrow("source file names are too long");
+    const start = Date.UTC(2026, 0, 1);
+    const many = Array.from({ length: 1001 }, (_, i) => ({
+      date: new Date(start + i * 86_400_000).toISOString().slice(0, 10), name: `H${i}`, kind: "general" as const,
+    }));
+    await expect(storeFor(client).load(admin, { ...input, calendar: { supportedYearStart: 2026, supportedYearEnd: 2028, holidays: many } }))
+      .rejects.toThrow("1000 rows or fewer");
+    expect(calls).toHaveLength(0);
+  });
+
   it("rejects holidays outside the supported years without a query", async () => {
     const { client, calls } = fakeClient([], []);
     const bad = { ...calendar2026, supportedYearEnd: 2026, holidays: [...calendar2026.holidays, { date: "2027-01-01", name: "X", kind: "general" as const }] };
@@ -151,6 +163,10 @@ describe("holiday-calendar-store load", () => {
       .rejects.toBeInstanceOf(HolidayCalendarInputError);
     await expect(storeFor(fakeClient([], [], { rpcError: { code: "23505", message: "dup" } }).client).load(admin, input))
       .rejects.toBeInstanceOf(HolidayCalendarInputError);
+    for (const code of ["23502", "22P02"]) {
+      await expect(storeFor(fakeClient([], [], { rpcError: { code, message: "bad" } }).client).load(admin, input))
+        .rejects.toThrow("The calendar was refused by the database: check its dates, names and kinds.");
+    }
     await expect(storeFor(fakeClient([], [], { rpcError: { code: "PGRST202", message: "missing" } }).client).load(admin, input))
       .rejects.toBeInstanceOf(HolidayCalendarUnavailableError);
     await expect(storeFor(fakeClient([], [], { throws: true }).client).load(admin, input)).rejects.toBeInstanceOf(HolidayCalendarUnavailableError);

@@ -25,6 +25,9 @@ export const HOLIDAY_NAME_MAX = 200;
 export const HOLIDAY_CALENDAR_MAX_BYTES = 200 * 1024;
 export const HOLIDAY_CALENDAR_MAX_ROWS = 1000;
 export const ORG_TIMEZONE = "Asia/Dhaka";
+/** Years a holiday may fall in (the database checks the same range). */
+export const HOLIDAY_YEAR_MIN = 1900;
+export const HOLIDAY_YEAR_MAX = 2999;
 
 /** The calendar files are not acceptable; `message` says why (with the file and line where applicable). */
 export class HolidayCalendarInputError extends Error {
@@ -102,13 +105,13 @@ const isBlank = (record: CsvRecord) => record.fields.length === 1 && record.fiel
 
 /** Parses one calendar file into its holidays (in file order), with the line each came from. */
 export function parseHolidayCsv(text: string, fileName: string): (Holiday & { line: number })[] {
-  const body = text.startsWith("﻿") ? text.slice(1) : text;
+  const body = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const records = splitRecords(body, fileName);
   while (records.length > 0 && isBlank(records[records.length - 1])) records.pop();
   if (records.length === 0) throw new HolidayCalendarInputError(`${fileName} is empty. Add the header ${HOLIDAY_CSV_HEADER} and one row per holiday.`);
 
   const [header, ...rows] = records;
-  if (header.fields.join(",") !== HOLIDAY_CSV_HEADER) {
+  if (header.fields.length !== 3 || header.fields.join(",") !== HOLIDAY_CSV_HEADER) {
     throw new HolidayCalendarInputError(`${fileName} line 1: the header must be exactly ${HOLIDAY_CSV_HEADER}.`);
   }
   if (rows.length === 0) throw new HolidayCalendarInputError(`${fileName} has no holidays. Add one row per holiday under the header.`);
@@ -122,6 +125,10 @@ export function parseHolidayCsv(text: string, fileName: string): (Holiday & { li
     const name = fields[1].trim().replace(/\s+/g, " ");
     const kind = fields[2].trim();
     if (!isIsoDate(date)) throw new HolidayCalendarInputError(`${at}: "${date}" is not a valid date. Use YYYY-MM-DD.`);
+    const year = Number(date.slice(0, 4));
+    if (year < HOLIDAY_YEAR_MIN || year > HOLIDAY_YEAR_MAX) {
+      throw new HolidayCalendarInputError(`${at}: ${date} is outside the years ${HOLIDAY_YEAR_MIN}–${HOLIDAY_YEAR_MAX}. Check the year.`);
+    }
     if (name.length < 1 || name.length > HOLIDAY_NAME_MAX) {
       throw new HolidayCalendarInputError(`${at}: the holiday name must be 1 to ${HOLIDAY_NAME_MAX} characters.`);
     }

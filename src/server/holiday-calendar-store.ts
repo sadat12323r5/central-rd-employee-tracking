@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  HolidayCalendarInputError, ORG_TIMEZONE, toCalendarPolicy, type HolidayCalendar, type HolidayKind,
+  HOLIDAY_CALENDAR_MAX_ROWS, HolidayCalendarInputError, ORG_TIMEZONE, toCalendarPolicy, type HolidayCalendar, type HolidayKind,
 } from "@/domain/holiday-calendar";
 import type { CalendarPolicy } from "@/domain/leave";
 import type { SessionIdentity } from "./session";
@@ -33,6 +33,7 @@ export type CalendarVersion = {
 export type HolidayCalendarLoad = { jurisdiction: string; source: string; calendar: HolidayCalendar };
 
 export const JURISDICTION_MAX = 100;
+export const SOURCE_MAX = 2000;
 
 export interface HolidayCalendarStore {
   /** Stores the calendar as a new version (which becomes active) and returns it. Administrators only. */
@@ -90,7 +91,7 @@ type Result<T> = { data: T | null; error: DbError | null };
 function refusal(error: DbError): Error {
   if (error.code === "42501") return new HolidayCalendarForbiddenError();
   if (error.code === "23505") return new HolidayCalendarInputError("The calendar lists the same date twice.");
-  if (error.code === "23514" || error.code === "22007" || error.code === "22008") {
+  if (["23514", "23502", "22P02", "22007", "22008"].includes(error.code ?? "")) {
     return new HolidayCalendarInputError("The calendar was refused by the database: check its dates, names and kinds.");
   }
   return new HolidayCalendarUnavailableError({ cause: error });
@@ -130,8 +131,14 @@ export function createHolidayCalendarStore({ userClient }: HolidayCalendarStoreC
     }
     const source = input.source.trim();
     if (source.length < 1) throw new HolidayCalendarInputError("Name the calendar's source file.");
+    if (source.length > SOURCE_MAX) {
+      throw new HolidayCalendarInputError(`The source file names are too long: keep them to ${SOURCE_MAX} characters in total.`);
+    }
     const { supportedYearStart, supportedYearEnd, holidays } = input.calendar;
     if (holidays.length === 0) throw new HolidayCalendarInputError("The calendar has no holidays.");
+    if (holidays.length > HOLIDAY_CALENDAR_MAX_ROWS) {
+      throw new HolidayCalendarInputError(`The calendar has ${holidays.length} holidays: keep it to ${HOLIDAY_CALENDAR_MAX_ROWS} rows or fewer.`);
+    }
     if (holidays.some(h => Number(h.date.slice(0, 4)) < supportedYearStart || Number(h.date.slice(0, 4)) > supportedYearEnd)) {
       throw new HolidayCalendarInputError("Every holiday must fall within the calendar's supported years.");
     }

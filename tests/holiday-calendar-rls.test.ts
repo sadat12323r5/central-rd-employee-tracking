@@ -119,7 +119,9 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
     const client = await signedIn(adminEmail);
     const store = createHolidayCalendarStore({ userClient: async () => client });
     const first = await store.load(admin, { jurisdiction: `${JURISDICTION} B1`, source: "bangladesh-2026.csv", calendar });
-    const corrected = { ...calendar, holidays: calendar.holidays.filter(h => h.date !== "2026-12-25") };
+    // Drops a Saturday holiday, so working-day counts stay identical while this version is active.
+    expect(new Date("2026-05-30T00:00:00Z").getUTCDay()).toBe(6);
+    const corrected = { ...calendar, holidays: calendar.holidays.filter(h => h.date !== "2026-05-30") };
     const second = await store.load(admin, { jurisdiction: `${JURISDICTION} B2`, source: "corrected.csv", calendar: corrected });
     expect(second.version).toBeGreaterThan(first.version);
     const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true }).eq("version_id", first.id);
@@ -176,10 +178,9 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
       const gone = await client.from("holiday_calendar_versions").delete().eq("id", existing.id).select("id");
       expect(gone.data ?? []).toEqual([]);
     }
-    // Even an Administrator cannot add a date to a version stored in an earlier transaction.
-    const admin = await signedIn(adminEmail);
-    const added = await admin.from("holiday_calendar_dates").insert({ version_id: existing.id, holiday_date: "2026-01-05", name: "Late", kind: "general" });
-    expect(added.error?.code).toBe("23514");
+    // The service role (which bypasses RLS) still cannot add a date to a version stored in an earlier transaction.
+    const late = await service.from("holiday_calendar_dates").insert({ version_id: existing.id, holiday_date: "2026-01-05", name: "Late", kind: "general" });
+    expect(late.error?.code).toBe("23514");
     // The service role cannot update a version either (trigger).
     const serviceUpdate = await service.from("holiday_calendar_versions").update({ source: "changed.csv" }).eq("id", existing.id);
     expect(serviceUpdate.error?.code).toBe("23514");
@@ -187,6 +188,22 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
     expect(data?.source).not.toBe("changed.csv");
     const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true }).eq("version_id", existing.id);
     expect(count).toBeGreaterThan(0);
+  });
+
+  it("refuses an Administrator's direct insert into either table (only load_holiday_calendar may insert)", async () => {
+    const before = (await ownVersions()).length;
+    const client = await signedIn(adminEmail);
+    const version = await client.from("holiday_calendar_versions").insert({
+      jurisdiction: `${JURISDICTION} Admin direct`, supported_year_start: 2026, supported_year_end: 2026, source: "x.csv",
+    }, { defaultToNull: false });
+    expect(version.error?.code).toBe("42501");
+    const [existing] = await ownVersions();
+    const date = await client.from("holiday_calendar_dates").insert({ version_id: existing.id, holiday_date: "2026-01-05", name: "Late", kind: "general" });
+    expect(date.error?.code).toBe("42501");
+    expect((await ownVersions()).length).toBe(before);
+    const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true })
+      .eq("version_id", existing.id).eq("holiday_date", "2026-01-05");
+    expect(count).toBe(0);
   });
 
   it("rejects a holiday outside the supported years and a non-Asia/Dhaka timezone in the database, storing nothing", async () => {

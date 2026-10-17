@@ -21,8 +21,9 @@ const jurisdiction = z.string({ error: "Enter the jurisdiction." }).default("Ban
   .transform(value => value.trim().replace(/\s+/g, " "))
   .pipe(z.string().min(1, "Enter the jurisdiction.").max(JURISDICTION_MAX, `Keep the jurisdiction to ${JURISDICTION_MAX} characters or fewer.`));
 
-const fileEntry = z.instanceof(File)
-  .refine(file => /\.csv$/i.test(file.name), { error: "Choose calendar files ending in .csv." });
+const NOT_CSV = "Choose calendar files ending in .csv.";
+const fileEntry = z.instanceof(File, { error: NOT_CSV })
+  .refine(file => /\.csv$/i.test(file.name), { error: NOT_CSV });
 
 const loadForm = z.object({
   jurisdiction,
@@ -32,6 +33,15 @@ const loadForm = z.object({
       error: `The calendar files are too large: keep them to ${HOLIDAY_CALENDAR_MAX_BYTES / 1024} KB in total.`,
     }),
 });
+
+/** Strict UTF-8: a file in another encoding is refused rather than silently decoded with U+FFFD. */
+async function readUtf8(file: File): Promise<HolidayCalendarFile> {
+  try {
+    return { name: file.name, text: new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()) };
+  } catch {
+    throw new HolidayCalendarInputError(`${file.name} is not UTF-8 text. Save it as CSV UTF-8 and load it again.`);
+  }
+}
 
 const failed = (error: string): ActionState => ({ error: `${error} ${NOTHING_SAVED}`, message: "" });
 
@@ -46,7 +56,7 @@ export async function loadHolidayCalendarAction(_previous: ActionState, form: Fo
   if (!parsed.success) return failed(parsed.error.issues[0]?.message ?? "Check the calendar files.");
 
   try {
-    const texts: HolidayCalendarFile[] = await Promise.all(parsed.data.files.map(async f => ({ name: f.name, text: await f.text() })));
+    const texts: HolidayCalendarFile[] = await Promise.all(parsed.data.files.map(readUtf8));
     const calendar = buildCalendar(texts);
     const saved = await holidayCalendarStore.load(session, {
       jurisdiction: parsed.data.jurisdiction, source: texts.map(f => f.name).join(", "), calendar,

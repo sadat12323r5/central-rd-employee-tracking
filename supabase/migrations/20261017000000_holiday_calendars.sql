@@ -14,7 +14,12 @@
 --   the caller's own JWT (SECURITY INVOKER, so RLS applies). It refuses any caller that is neither an
 --   Administrator (JWT app_metadata.role = 'admin') nor the service role (used by db:seed only).
 -- * Every signed-in role may read the calendar (5.2 counts staff leave through the user's JWT); only an
---   Administrator may insert.
+--   Administrator may insert, and only from inside load_holiday_calendar: both insert policies also
+--   require the transaction-local setting app.holiday_calendar_loading = 'on', which only that function
+--   sets (clients cannot call set_config through PostgREST). So a direct insert into either table, which
+--   could create an empty version that becomes active, is refused.
+-- * A load holds at most 1000 holidays (the app's HOLIDAY_CALENDAR_MAX_ROWS and PostgREST's max rows per
+--   response), so the active calendar is always read whole.
 -- Seeding (the provisional docs/holiday-calendars/bangladesh-2026.csv) is done by
 -- scripts/seed-employees.ts, never by this migration.
 
@@ -109,7 +114,10 @@ create policy "holiday_calendar_versions_select" on public.holiday_calendar_vers
 
 create policy "holiday_calendar_versions_insert_admin" on public.holiday_calendar_versions
   for insert to authenticated
-  with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
+  with check (
+    (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+    and current_setting('app.holiday_calendar_loading', true) = 'on'
+  );
 
 create policy "holiday_calendar_dates_select" on public.holiday_calendar_dates
   for select to authenticated
@@ -117,14 +125,17 @@ create policy "holiday_calendar_dates_select" on public.holiday_calendar_dates
 
 create policy "holiday_calendar_dates_insert_admin" on public.holiday_calendar_dates
   for insert to authenticated
-  with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
+  with check (
+    (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+    and current_setting('app.holiday_calendar_loading', true) = 'on'
+  );
 
 -- No update or delete policy.
 
 -- Loads one complete calendar as a new version, atomically (PostgREST runs one rpc() call in one
 -- transaction). p_holidays is a JSON array of {"date": "YYYY-MM-DD", "name": text, "kind": text}.
 -- Errors: 42501 (caller is neither an Administrator nor the service role), 23514 check_violation
--- (no holidays, a date outside the supported years, or any table check), 23505 (a duplicate date).
+-- (no holidays, more than 1000, a date outside the supported years, or any table check), 23505 (a duplicate date).
 create function public.load_holiday_calendar(
   p_jurisdiction text,
   p_timezone text,
@@ -145,9 +156,15 @@ begin
      and coalesce((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin', false) is not true then
     raise exception 'Only an Administrator can load the holiday calendar.' using errcode = '42501';
   end if;
+  -- Opens the insert policies for this transaction only (is_local = true).
+  perform set_config('app.holiday_calendar_loading', 'on', true);
 
   if p_holidays is null or jsonb_typeof(p_holidays) <> 'array' or jsonb_array_length(p_holidays) = 0 then
     raise exception 'holiday_calendar_empty' using errcode = 'check_violation';
+  end if;
+
+  if jsonb_array_length(p_holidays) > 1000 then
+    raise exception 'holiday_calendar_too_many_rows' using errcode = 'check_violation';
   end if;
 
   if exists (

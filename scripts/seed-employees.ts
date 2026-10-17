@@ -36,7 +36,7 @@ import type {
   interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows,
   missingSkillSeedRows as MissingSkillSeedRows, skillSeedRows as SkillSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
-import type { buildCalendar as BuildCalendar } from "../src/domain/holiday-calendar";
+import type { buildCalendar as BuildCalendar, HolidayCalendarInputError as HolidayCalendarInputErrorType } from "../src/domain/holiday-calendar";
 import type {
   departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
 } from "../src/data/departments";
@@ -250,7 +250,9 @@ console.log(`Inserted ${enrolments.data?.length ?? 0} new LMS stub enrolments (e
 
 // Story 5.1: the provisional holiday calendar, only while no version exists (insert-only, idempotent).
 const calendarUrl = new URL("../src/domain/holiday-calendar.ts", import.meta.url).href;
-const { buildCalendar } = (await import(calendarUrl)) as { buildCalendar: typeof BuildCalendar };
+const { buildCalendar, HolidayCalendarInputError } = (await import(calendarUrl)) as {
+  buildCalendar: typeof BuildCalendar; HolidayCalendarInputError: typeof HolidayCalendarInputErrorType;
+};
 const existingCalendar = await supabase.from("holiday_calendar_versions").select("id").limit(1);
 if (existingCalendar.error) {
   console.error(`Reading holiday calendar versions failed: ${existingCalendar.error.message}`);
@@ -261,7 +263,14 @@ if ((existingCalendar.data ?? []).length > 0) {
 } else {
   const fileName = "bangladesh-2026.csv";
   const text = readFileSync(new URL(`../docs/holiday-calendars/${fileName}`, import.meta.url), "utf8");
-  const calendar = buildCalendar([{ name: fileName, text }]);
+  let calendar: ReturnType<typeof BuildCalendar>;
+  try {
+    calendar = buildCalendar([{ name: fileName, text }]);
+  } catch (error) {
+    if (!(error instanceof HolidayCalendarInputError)) throw error;
+    console.error(`Seeding the holiday calendar failed: ${error.message}`);
+    process.exit(1);
+  }
   const loaded = await supabase.rpc("load_holiday_calendar", {
     p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart,
     p_year_end: calendar.supportedYearEnd, p_source: fileName, p_holidays: calendar.holidays,
