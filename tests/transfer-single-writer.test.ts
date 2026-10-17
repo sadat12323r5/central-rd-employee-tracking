@@ -52,7 +52,13 @@ describe("transfer single writer", () => {
       "src/server/assignment-evaluations-store.ts": "assignment_evaluations",
       [BACKFILL_STORE]: "backfilled_projects",
     };
-    expect(sources.filter(s => literal.test(code(s.text))).map(s => s.file).sort()).toEqual(Object.keys(ownTables).sort());
+    // Integration of Story 4.8 with Story 7.1: employees-store.create() inserts a NEW employee with its
+    // department (employees_insert_* RLS), so employees-store also names department_id in a write literal.
+    // That is an insert of a new row, never a change: no update or upsert there names department_id.
+    expect(sources.filter(s => literal.test(code(s.text))).map(s => s.file).sort()).toEqual([...Object.keys(ownTables), STORE].sort());
+    const storeCode = code(sources.find(s => s.file === STORE)!.text);
+    expect(storeCode).not.toMatch(/\.(update|upsert)\(\s*\{[^}]*\bdepartment_id\s*:/);
+    expect(storeCode.match(/\.insert\(\s*\{[^}]*\bdepartment_id\s*:/g) ?? []).toHaveLength(1);
     for (const [file, table] of Object.entries(ownTables)) {
       const text = code(sources.find(s => s.file === file)!.text);
       expect(text).toContain(`const TABLE = "${table}";`);
