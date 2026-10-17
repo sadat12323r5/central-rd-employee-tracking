@@ -107,3 +107,9 @@ Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the acti
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-2-record-leave.md`
   summary: Leave can be recorded for an archived employee (same gap as employment history); the profile Attendance tab still shows fixture stats beside the real leave list until 5.4; the leave guard trigger's UPDATE branch has no live test yet (5.3 should add it).
   evidence: Recorded in the spec's deferred list with locations.
+
+## Story 5.3 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-3-edit-cancel-leave.md`
+  summary: Leave edits and cancels keep no audit trail (who changed it, previous dates); a manager outside the subtree sees "no longer exists" rather than the department message, because RLS hides the row. (The 5.2 item "guard trigger UPDATE branch has no live test" is now covered by tests/leave-rls.test.ts, pending the migrations.)
+  evidence: Recorded in the spec's deferred list and triage log.

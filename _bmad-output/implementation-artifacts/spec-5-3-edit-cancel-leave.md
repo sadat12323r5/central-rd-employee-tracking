@@ -10,7 +10,14 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-5-2-record-leave.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Leave edits and cancels keep no audit trail (who changed it, previous dates).
+    evidence: |-
+      An edit overwrites the period in place; leave_records has no updated_by/cancelled_by and no history table. No table in the app records updaters yet, so this needs one cross-table decision.
+    location: >-
+      supabase/migrations/20261019000000_leave_records_update.sql
+    severity: low
 ---
 
 <intent-contract>
@@ -75,6 +82,35 @@ deferred: []
 - Given someone who couldn't record leave for that employee, when they edit or cancel it (action, store or direct API update), then it is rejected at the server.
 
 ## Spec Change Log
+
+## Review Triage Log
+
+### 2026-10-17 — Review pass
+- verdicts: 22 findings — high 0, medium 2, low 16, false 4, maybe-false 0 (plus 4 descriptive intent rows)
+- findings:
+  - `[low]` `[reject]` (blind) Manager outside the subtree sees "This leave period no longer exists." live, not the department message — RLS hides the row, so the refusal still happens at the server (AC met); only the wording differs and making the forbidden message reachable means reading past RLS, which the spec forbids. The live test asserts not-found.
+  - `[low]` `[defer]` (blind) No audit trail (who edited/cancelled, previous dates) — not required by the story; no table in the app records updated_by yet (employment history neither). Needs a cross-table audit decision.
+  - `[false]` `[reject]` (blind) No cut-off for editing past leave — no rule exists in the PRD/epics (no approvals by design); not a defect.
+  - `[low]` `[patch]` (blind+gap) Cancel confirm unmounted on submit: pending label never shown, focus dropped — confirm form now stays open while pending and after a refusal.
+  - `[low]` `[reject]` (blind) Cancel refusal shown at panel level and persists — same pattern as employment history (precedent); row controls unmount on success.
+  - `[low]` `[reject]` (blind) One empty status region per editable row — same as the employment-history precedent; cosmetic.
+  - `[low]` `[patch]` (blind) Shared cancel pending disables every row's confirm — grouped with the confirm fix; only open confirm forms are affected, which is acceptable while one cancel is in flight.
+  - `[false]` `[reject]` (blind) Saving unchanged dates recounts silently — deliberate (Design Notes): the 5.2 trigger requires the active version on every edit.
+  - `[medium]` `[patch]` (blind+edge) Empty update result always reported as "cancelled" (e.g. RLS-hidden, or update policy not yet applied) — write() now re-reads cancelled_at: cancelled → cancelled, otherwise not found; tested.
+  - `[false]` `[reject]` (blind) writeRefusal without input yields a malformed UNSUPPORTED_YEAR message — refusal() falls back to "The holiday calendar does not cover these dates yet." when years are null.
+  - `[low]` `[patch]` (blind) Missing tests: cancelLeaveAction rethrow, anon update — added. Locked created_by/created_at on update rely on the 5.2 trigger's existing column lock (same branch as employee_id, which is tested).
+  - `[low]` `[patch]` (blind) Redundant missing-id assertion inside the id it.each — split into its own test.
+  - `[false]` `[reject]` (blind) Comments about the 5.2 trigger contradict — the 5.2 migration does own the UPDATE branch; the store header was updated for 5.3.
+  - `[low]` `[reject]` (blind) useEffect missing closeEdit dependency — no ESLint in the repo; the component was restructured in the patch anyway.
+  - `[low]` `[patch]` (edge) Stale edit error after refuse + "Don't save" + Edit — edit form is now its own component mounted per opening; tested.
+  - `[low]` `[patch]` (edge) Stale "Leave updated" status after reopen/close — cleared on reopening; tested.
+  - `[medium]` `[patch]` (edge) Update matching zero rows reported as cancelled — same root cause as the write() row above.
+  - `[low]` `[reject]` (edge) Manager forbidden branch unreachable live — duplicate of the first row.
+  - `[low]` `[reject]` (edge) Trigger refusals "cannot also change"/locked columns/count mismatch map to "unavailable" — the app never sends those combinations; reachable only by a crafted API call, where a generic refusal is fine.
+  - `[low]` `[patch]` (gap) Stale edit error reappears — duplicate of the edge row, same patch.
+  - `[low]` `[patch]` (gap) Confirm-button disable never shows — duplicate of the confirm row, same patch.
+  - `[low]` `[reject]` (intent) Forbidden vs not-found differ between fake and live store tests — duplicate of the first row; the live behaviour is the asserted one.
+  - intent rows (reading B = same authority as recording; D2 active-calendar recount by design; E1 cancelled frozen; F1+F2 enforced in action, store and RLS; UI roles beyond Staff covered at store/RLS, not e2e) — descriptive, no action.
 
 ## Design Notes
 
