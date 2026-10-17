@@ -16,7 +16,7 @@ test("a staff member adds an external interview and the Administrator sees it", 
   await expect(page.getByRole("heading", { name: "External interviews" })).toBeVisible();
 
   await page.getByRole("textbox", { name: "Company" }).fill(company);
-  await page.getByRole("textbox", { name: "Role" }).fill("Platform Engineer");
+  await page.getByRole("region", { name: "External interviews" }).getByRole("textbox", { name: "Role" }).fill("Platform Engineer");
   await page.getByLabel("Interview date").fill("2026-10-20");
   await page.getByRole("textbox", { name: "Stage", exact: true }).fill("Recruiter screen");
   await page.getByRole("button", { name: "Add interview" }).click();
@@ -64,7 +64,7 @@ test("a staff member updates and withdraws an interview; the Administrator sees 
   await page.goto("/");
   await signIn(page, staff.email, staff.password);
   await page.getByRole("textbox", { name: "Company" }).fill(company);
-  await page.getByRole("textbox", { name: "Role" }).fill("Data Engineer");
+  await page.getByRole("region", { name: "External interviews" }).getByRole("textbox", { name: "Role" }).fill("Data Engineer");
   await page.getByLabel("Interview date").fill("2026-10-22");
   await page.getByRole("textbox", { name: "Stage", exact: true }).fill("Recruiter screen");
   await page.getByRole("button", { name: "Add interview" }).click();

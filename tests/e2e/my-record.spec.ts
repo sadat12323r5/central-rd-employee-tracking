@@ -47,7 +47,7 @@ test("a manager opens \"My record\", adds an interview and sees it listed there"
     await expect(record.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 
     await record.getByRole("textbox", { name: "Company" }).fill(company);
-    await record.getByRole("textbox", { name: "Role" }).fill("Engineering Lead");
+    await record.getByRole("region", { name: "External interviews" }).getByRole("textbox", { name: "Role" }).fill("Engineering Lead");
     await record.getByLabel("Interview date").fill("2026-10-21");
     await record.getByRole("textbox", { name: "Stage", exact: true }).fill("Recruiter screen");
     await record.getByRole("button", { name: "Add interview" }).click();
