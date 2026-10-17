@@ -767,6 +767,10 @@ A real leave-record workflow that puts the already-built, already-tested `src/do
 
 **Precondition (not a story):** the holiday calendar's contents (jurisdiction, timezone, supported years, holiday dates) must be approved by the System Owner (PRD §4.7) before Story 5.1 loads real data.
 
+**System Owner decision (2026-10-17): provisional calendar.** Until Brain Station 23's own approved calendar is available, the working calendar is Bangladesh's 2026 government public holidays: `docs/holiday-calendars/bangladesh-2026.csv` (jurisdiction Bangladesh, timezone Asia/Dhaka, supported year 2026, Monday–Friday working week). This satisfies the precondition.
+- **Story 5.1** loads that file as the initial calendar version (the seed may load it).
+- **It must stay adjustable.** The Administrator can load a corrected or replacement file, or add another year, at any time. Each load becomes a new version, and past leave counts keep pointing at the version they used.
+
 ### Story 5.1: Administrator loads the approved holiday calendar
 
 As the L&D manager,
