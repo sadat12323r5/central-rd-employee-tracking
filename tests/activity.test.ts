@@ -247,6 +247,17 @@ describe("buildTimeline: assignments, evaluations and leave (Story 8.4)", () => 
     expect(buildTimeline(employee, sources, { from: "2026-10-13", to: "2026-10-13" }, now)).toHaveLength(1);
   });
 
+  it("includes an open assignment starting after today exactly when the period covers its start", () => {
+    const sources = { ...empty(), assignments: [assignment({ startDate: "2026-10-20" })] };
+    // today is 13 Oct: the period contains the start.
+    expect(buildTimeline(employee, sources, { from: "2026-10-01", to: "2026-10-31" }, now)).toEqual([
+      expect.objectContaining({ date: "2026-10-20", type: "assignment", status: "Open" }),
+    ]);
+    expect(buildTimeline(employee, sources, { from: "2026-10-20", to: "2026-10-20" }, now)).toHaveLength(1);
+    // The current period ends before the start.
+    expect(buildTimeline(employee, sources, { from: "2026-10-12", to: "2026-10-18" }, now)).toEqual([]);
+  });
+
   it("includes a backfilled past project in its completion year, marked by provenance; withdrawn kept as Withdrawn", () => {
     const year2025 = { from: "2025-01-01", to: "2025-12-31" };
     const [row] = buildTimeline(employee, { ...empty(), backfilledProjects: [pastProject()] }, year2025, now);

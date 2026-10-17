@@ -195,7 +195,8 @@ function assignmentRow(a: ActivityAssignment, today: string): DraftRow {
     date: a.startDate, time: "", type: "assignment", title: `${a.projectName} — ${a.client}`,
     details: `Role: ${a.role}; start: ${a.startDate}; end: ${a.completionDate ?? "open"}; provenance: ${a.provenance}`,
     status: a.status === "closed" ? "Closed" : "Open",
-    range: { from: a.startDate, to: a.completionDate ?? today },
+    // Open: to today, or just its start day when it starts in the future (never an inverted range).
+    range: { from: a.startDate, to: a.completionDate ?? (today > a.startDate ? today : a.startDate) },
   };
 }
 

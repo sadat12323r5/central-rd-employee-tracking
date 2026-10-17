@@ -2,7 +2,7 @@
 title: 'Story 8.4: Exports include assignments, evaluations and leave'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '1ca750d65cd0ffe52d3170a2639f63d3784b3a83'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -80,6 +80,37 @@ deferred: []
 ## Spec Change Log
 
 - 2026-10-17: replaces the 2026-10-16 blocked stub (blocker: Epic 5 leave behind the holiday calendar). Unblocked: the System Owner adopted the provisional calendar and Stories 5.1–5.3 are built (PRs #46–#48).
+
+## Review Triage Log
+
+### 2026-10-17 — Review pass
+- verdicts: 24 findings — high 0, medium 0, low 20, false 4, maybe-false 0 (plus descriptive intent rows)
+- findings:
+  - `[low]` `[patch]` (gap) BOM test named "never doubling" only feeds a BOM-less CSV — assertion of exactly one BOM added.
+  - `[low]` `[reject]` (blind) "All time" can end in the future (planned leave, future-start assignment) — the spec includes leave end and assignment dates in the span; planned leave is a real record to export. The custom period's no-future rule applies to user-entered periods only.
+  - `[low]` `[patch]` (blind) Future-start open assignment: inverted range, inconsistent inclusion while still stretching the span — the open range now ends at max(start, today); tested.
+  - `[low]` `[reject]` (blind) Evaluation dated by creation but credited to the latest author — status "Amended" marks it; the outcome text shown is the latest author's, so naming them is accurate.
+  - `[low]` `[reject]` (blind) Leave category recomputed instead of read — the 5.2 trigger guarantees the stored category matches the count, so both give the same label.
+  - `[low]` `[reject]` (blind) Client-feedback guard is always true for current exporters — intended (spec Design Notes): it keeps the rule if export access widens; the off path is tested at the domain.
+  - `[low]` `[reject]` (blind) Bulk reads everything visible (archived included) before the empty-scope refusal — every read is RLS and store scoped, paged; cost only, at current sizes negligible.
+  - `[low]` `[reject]` (blind) Closed assignment with no completion date reads as open — closing requires a completion date (Story 4.5 store and RLS); unreachable data.
+  - `[low]` `[reject]` (blind) BOM restored client-side hides a transport issue; other consumers get no BOM — the panel is the only consumer of these actions; e2e checks the header after stripping exactly 3 BOM bytes.
+  - `[low]` `[reject]` (blind) e2e fixed fixture collides between parallel runs — CI is serialised on the shared database (PR #49) and Playwright runs with one worker.
+  - `[low]` `[reject]` (blind) e2e cleanup ignores errors; dates fixed to 2026 — matches the leave/backfill spec patterns; the only calendar covers 2026 and the spec fails loudly if that changes.
+  - `[low]` `[reject]` (blind) Missing edge tests (includeArchived bulk, foreign evaluation, boundary, inverted stored ranges) — boundary inclusion is tested; the rest are unreachable or covered by existing archived handling.
+  - `[low]` `[reject]` (blind) Free text joined into details with "; " — same format as interview rows since 8.1; cells are guarded.
+  - `[low]` `[reject]` (blind) Linear find per evaluation, import order, long doc paragraph — cosmetic.
+  - `[low]` `[patch]` (edge) Future-start open assignment included wrongly — duplicate of the range row, same patch.
+  - `[low]` `[reject]` (edge) All-time future end — duplicate of the span row.
+  - `[false]` `[reject]` (edge) Leave details print NaN/0 working days — working_days > 0 is a DB check constraint and the trigger recounts it.
+  - `[low]` `[reject]` (edge) Several evaluations without a visible assignment share the title "Evaluation" — their dates and details differ; rare (assignment visibility matches evaluation visibility).
+  - `[false]` `[reject]` (edge) e2e leave over holidays could have 0 working days — the seeded period is fixed and contains working days; the insert would be refused loudly, not silently.
+  - `[false]` `[reject]` (edge) Duplicate "E2E Activity Export" departments break maybeSingle — department names are unique case-insensitively in the database.
+  - `[false]` `[reject]` (edge) Highest calendar version may not be the active one — by design the active version is the highest (Story 5.1).
+  - `[low]` `[reject]` (edge) e2e cleanup errors unchecked — duplicate of the cleanup row.
+  - `[low]` `[reject]` (edge claim) Span change violates "period validation unchanged" — duplicate of the span row; validation of user input is unchanged.
+  - `[low]` `[patch]` (edge claim) Future open assignment overlap — duplicate of the range row.
+  - intent rows (A1 backfilled as assignment rows without role/start; A3(a) open runs to today; B1 createdAt, B2 latest author, B3 reading (i); C1 length category; e2e as manager only; BOM fix beyond story text) — descriptive, no action.
 
 ## Design Notes
 
