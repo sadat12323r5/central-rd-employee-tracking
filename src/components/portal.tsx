@@ -7,6 +7,7 @@ import { toCsv } from "@/domain/csv";
 import { formatDisplayDate, formatDisplayDateTime } from "@/domain/dates";
 import { signOut } from "@/server/auth";
 import type { CurrentTraining } from "@/server/training-store";
+import type { CalendarVersion } from "@/server/holiday-calendar-store";
 import AccountAccessPanel from "./account-access-panel";
 import ActivityExportPanel from "./activity-export-panel";
 import AssignmentsPanel from "./assignments-panel";
@@ -18,6 +19,7 @@ import { EvaluationSummary, hasEvaluation, NO_EVALUATION, SKILL_SCALE, SkillList
 import EmploymentHistoryPanel from "./employment-history-panel";
 import { CurrentLoading, CurrentUnavailable, StaleNote } from "./current-training";
 import DepartmentsPanel from "./departments-panel";
+import HolidayCalendarPanel from "./holiday-calendar-panel";
 import TransferPanel from "./transfer-panel";
 import StaffAccountPanel from "./staff-account-panel";
 import { StaffSelfService, type StaffSelfServiceProps } from "./staff-attendance";
@@ -111,7 +113,7 @@ const departmentCount = (n: number) => `Across ${n} ${n === 1 ? "department" : "
 const MANAGER_HIDDEN_SECTIONS: readonly Section[] = ["Departments", "Interviews & placements"];
 const MANAGER_HIDDEN_TABS: readonly Tab[] = ["Interviews"];
 
-export default function Portal({ employees: all, departments = [], departmentNames, current, role = "admin", myRecord }: {
+export default function Portal({ employees: all, departments = [], departmentNames, current, role = "admin", myRecord, holidayCalendars }: {
   employees: Employee[];
   /**
    * Story 4.2: who is using the management portal. A department manager does not get Departments,
@@ -136,6 +138,11 @@ export default function Portal({ employees: all, departments = [], departmentNam
    * "My record" navigation entry or section.
    */
   myRecord?: StaffSelfServiceProps;
+  /**
+   * Story 5.1 (Administrator only): the stored holiday calendar versions, newest first, or null when they
+   * could not be read. Shown in Attendance & leave; never passed for a manager.
+   */
+  holidayCalendars?: CalendarVersion[] | null;
 }) {
   // Archived employees (Story 1.4) are left out of every view, count and stat by default; the
   // directory's "Show" filter lists them on their own.
@@ -214,7 +221,7 @@ export default function Portal({ employees: all, departments = [], departmentNam
     {section === "Interviews & placements" && !isManager && <section className="panel"><h2>External opportunities</h2><p className="muted">Applications and interview outcomes at other employers. Select an employee to review feedback.</p><div className="table-scroll"><table><thead><tr><th>Employee</th><th>Employer & position</th><th>Interview date</th><th>Outcome</th></tr></thead><tbody>{interviews.map(({ employee: e, interview: i }) => <tr key={i.id}><td><button className="person-button" onClick={() => open(e, "Interviews")}><Avatar employee={e} /><strong>{e.name}</strong></button></td><td>{i.company}<small>{i.role}</small></td><td>{date(i.date)}</td><td><Badge>{outcomeLabel(i.outcome)}</Badge></td></tr>)}</tbody></table></div></section>}
     {section === "Departments" && !isManager && <DepartmentsPanel departments={departments} employees={all} />}
     {section === "My record" && myRecord && <section className="my-record" aria-label="My record"><StaffSelfService {...myRecord} /></section>}
-    {section === "Attendance & leave" && <><div className="stat-grid three"><Stat label="Recorded days worked" value={totals.worked} note="Sum across employees" icon="Employees" /><Stat label="Leave days" value={totals.leave} note="Sum across employees" icon="Attendance & leave" /><Stat label="Missing records" value={totals.missing} note="Require manual review" icon="Overview" /></div><section className="panel"><h2>Attendance summary</h2><p className="muted">1–20 September 2026 · Monday–Friday schedule · synthetic attendance records</p><div className="table-scroll"><table><thead><tr><th>Employee</th><th>Scheduled</th><th>Worked</th><th>Leave</th><th>Missing</th></tr></thead><tbody>{employees.map(e => <tr key={e.id}><td><button className="person-button" onClick={() => open(e, "Attendance")}><Avatar employee={e} /><strong>{e.name}</strong></button></td><td>{e.attendance.scheduled}</td><td>{e.attendance.worked}</td><td>{e.attendance.leave}</td><td><span className="badge amber">{e.attendance.unrecorded}</span></td></tr>)}</tbody></table></div><p className="fine-print">Worked days come from attendance records, not Git commits or scheduled days minus leave.</p></section></>}
+    {section === "Attendance & leave" && <><div className="stat-grid three"><Stat label="Recorded days worked" value={totals.worked} note="Sum across employees" icon="Employees" /><Stat label="Leave days" value={totals.leave} note="Sum across employees" icon="Attendance & leave" /><Stat label="Missing records" value={totals.missing} note="Require manual review" icon="Overview" /></div><section className="panel"><h2>Attendance summary</h2><p className="muted">1–20 September 2026 · Monday–Friday schedule · synthetic attendance records</p><div className="table-scroll"><table><thead><tr><th>Employee</th><th>Scheduled</th><th>Worked</th><th>Leave</th><th>Missing</th></tr></thead><tbody>{employees.map(e => <tr key={e.id}><td><button className="person-button" onClick={() => open(e, "Attendance")}><Avatar employee={e} /><strong>{e.name}</strong></button></td><td>{e.attendance.scheduled}</td><td>{e.attendance.worked}</td><td>{e.attendance.leave}</td><td><span className="badge amber">{e.attendance.unrecorded}</span></td></tr>)}</tbody></table></div><p className="fine-print">Worked days come from attendance records, not Git commits or scheduled days minus leave.</p></section>{role === "admin" && holidayCalendars !== undefined && <HolidayCalendarPanel versions={holidayCalendars} />}</>}
   </>}
   <footer className="page-footer"><span>Brain Station 23 · People & Development</span><span>Demo workspace · fictional records · September 2026</span></footer>
   </main></div></div>;

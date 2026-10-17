@@ -42,6 +42,8 @@ vi.mock("@/server/assessment-actions", () => ({
 vi.mock("@/server/attendance-actions", () => ({ clockInAction: vi.fn(), clockOutAction: vi.fn(), saveLogAction: vi.fn() }));
 vi.mock("@/server/interviews-actions", () => ({ addInterviewAction: vi.fn(), updateInterviewAction: vi.fn(), withdrawInterviewAction: vi.fn() }));
 vi.mock("@/server/backfill-actions", () => ({ addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn() }));
+// Story 5.1: the Administrator's holiday calendar panel in Attendance & leave.
+vi.mock("@/server/holiday-calendar-actions", () => ({ loadHolidayCalendarAction: vi.fn(async () => ({ error: "", message: "" })) }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -1638,5 +1640,37 @@ describe("Portal Employment tab (Story 7.3)", () => {
     await act(async () => { view.rerender(<Portal employees={updated} current={none()} />); });
     expect(screen.queryByText(fahim.history[1].role)).not.toBeInTheDocument();
     expect(screen.getByText(fahim.history[0].period)).toBeInTheDocument();
+  });
+});
+
+describe("Portal holiday calendar (Story 5.1)", () => {
+  const calendar = [{
+    id: "v-1", version: 1, jurisdiction: "Bangladesh", timezone: "Asia/Dhaka", supportedYearStart: 2026, supportedYearEnd: 2026,
+    source: "bangladesh-2026.csv", loadedBy: "u", loadedAt: "2026-10-17T04:30:00Z", holidayCount: 31,
+  }];
+
+  it("shows the Administrator the holiday calendar panel in Attendance & leave", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} holidayCalendars={calendar} />);
+    expect(screen.queryByRole("heading", { name: "Holiday calendar" })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByRole("heading", { name: "Holiday calendar" })).toBeInTheDocument();
+    expect(screen.getByText("Version 1 (active)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load calendar" })).toBeInTheDocument();
+  });
+
+  it("says the calendar is unavailable when the Administrator's versions could not be read", async () => {
+    const user = userEvent.setup();
+    await show(<Portal employees={employees} current={none()} holidayCalendars={null} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/holiday calendar is unavailable/i);
+  });
+
+  it("never shows the panel to a manager", async () => {
+    const user = userEvent.setup();
+    await show(<Portal role="manager" employees={employees} current={none()} holidayCalendars={calendar} />);
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Attendance & leave" }));
+    expect(screen.queryByRole("heading", { name: "Holiday calendar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load calendar" })).not.toBeInTheDocument();
   });
 });
