@@ -26,6 +26,14 @@ vi.mock("@/server/assignment-evaluation-actions", () => ({
   createEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation saved." })),
   amendEvaluationAction: vi.fn(async () => ({ error: "", message: "Evaluation updated." })),
 }));
+vi.mock("@/server/employee-actions", () => ({
+  createEmployeeAction: vi.fn(async () => ({ error: "", message: "" })),
+  updateEmployeeDetailsAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
+vi.mock("@/server/assessment-actions", () => ({
+  rateSkillAction: vi.fn(async () => ({ error: "", message: "" })),
+  saveEvaluationAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
   exportAllActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -209,7 +217,9 @@ describe("Portal employee profile", () => {
     await show(<Portal employees={[...employees, bare]} current={none()} />);
     await user.click(screen.getByRole("button", { name: "View Bare Employee's profile" }));
     expect(screen.getByRole("heading", { name: "Bare Employee" })).toBeInTheDocument();
-    expect(screen.getByText(/Reviewed Not recorded/)).toBeInTheDocument();
+    // No evaluation yet: the snapshot says so, never a blank or "Not recorded" review date.
+    expect(screen.getByText("No evaluation recorded yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/Reviewed/)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Initial password")).toBeInTheDocument();
   });
 });
@@ -1206,7 +1216,9 @@ describe("Interview privacy for managers (Story 4.4)", () => {
 
     await user.click(tabs.getByRole("tab", { name: "Skills & evaluation" }));
     expect(panel().getByText(leaky.skills[0].name)).toBeInTheDocument();
-    expect(panel().getByText(leaky.review.strengths)).toBeInTheDocument();
+    // Epic 7 merge: Story 7.4 gives managers the evaluation form, prefilled with the same strengths, so the
+    // text appears twice (the summary and the form's textarea).
+    expect(panel().getAllByText(leaky.review.strengths).length).toBeGreaterThan(0);
     expectNoInterviewText();
 
     await user.click(tabs.getByRole("tab", { name: "Current work" }));
@@ -1261,4 +1273,178 @@ describe("Portal activity export for a department manager (Story 8.3)", () => {
     expect(screen.getByRole("heading", { name: "Download activity (all employees)" })).toBeInTheDocument();
     expect(screen.queryByText(/Interviews are not included/)).not.toBeInTheDocument();
   });
+});
+
+describe("Portal add-employee form (Story 7.1)", () => {
+  const LND = "de9a0000-0000-4000-8000-0000000000b1";
+  const QA = "de9a0000-0000-4000-8000-0000000000b2";
+  const departments = [
+    { id: LND, name: "L&D", parentId: null, managerUserId: null, managerEmployeeId: null },
+    { id: QA, name: "QA Lab", parentId: LND, managerUserId: null, managerEmployeeId: null },
+  ];
+  const openEmployees = async () => {
+    const user = userEvent.setup();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /^Employees/ }));
+  };
+  const departmentOptions = () =>
+    within(within(screen.getByRole("form", { name: "Add an employee" })).getByLabelText("Department")).getAllByRole("option").slice(1).map(o => o.textContent);
+
+  it("shows the form in the Employees view for the Administrator, offering every department it was given", async () => {
+    await show(<Portal employees={employees} departments={departments} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Add an employee" })).not.toBeInTheDocument();
+    await openEmployees();
+    expect(screen.getByRole("form", { name: "Add an employee" })).toBeInTheDocument();
+    expect(departmentOptions()).toEqual(["L&D", "QA Lab"]);
+  });
+
+  it("shows the form for a department manager, offering only their subtree's departments", async () => {
+    await show(<Portal role="manager" employees={employees.slice(0, 2)} departments={departments.slice(1)} current={none()} />);
+    await openEmployees();
+    expect(departmentOptions()).toEqual(["QA Lab"]);
+  });
+
+  it("is not on the Overview", async () => {
+    await show(<Portal employees={employees} departments={departments} current={none()} />);
+    expect(screen.queryByRole("form", { name: "Add an employee" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Portal edit-details form (Story 7.2)", () => {
+  const QA = "de9a0000-0000-4000-8000-0000000000c2";
+  const departments = [{ id: QA, name: "QA Lab", parentId: null, managerUserId: null, managerEmployeeId: null }];
+  const people = employees.slice(0, 2).map(e => ({ ...e, archived: false, departmentId: QA }));
+  const openProfile = async (name: string) => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: `View ${name}'s profile` }));
+    return user;
+  };
+  const detailsForm = () => within(screen.getByRole("form", { name: "Edit employee details" }));
+
+  it.each([["the Administrator", "admin"], ["a department manager", "manager"]] as const)(
+    "shows %s the form on the profile Overview, prefilled, with the department read-only", async (_label, role) => {
+      await show(<Portal role={role} employees={people} departments={departments} current={none()} />);
+      expect(screen.queryByRole("form", { name: "Edit employee details" })).not.toBeInTheDocument();
+      await openProfile(people[0].name);
+      expect(detailsForm().getByLabelText("Job title")).toHaveValue(people[0].title);
+      expect(detailsForm().getByLabelText("Team")).toHaveValue(people[0].team);
+      expect(detailsForm().getByLabelText("Reporting manager")).toHaveValue(people[0].manager);
+      expect(detailsForm().getByLabelText("Office")).toHaveValue(people[0].location);
+      expect(detailsForm().getByLabelText("Employment type")).toHaveValue(people[0].type);
+      expect(detailsForm().queryByLabelText(/department/i)).not.toBeInTheDocument();
+      expect(detailsForm().getByText("QA Lab")).toBeInTheDocument();
+      expect(detailsForm().getByText("Changes through a transfer.")).toBeInTheDocument();
+    });
+
+  it("is only on the Overview tab", async () => {
+    await show(<Portal employees={people} departments={departments} current={none()} />);
+    const user = await openProfile(people[0].name);
+    await user.click(screen.getByRole("tab", { name: "Employment" }));
+    expect(screen.queryByRole("form", { name: "Edit employee details" })).not.toBeInTheDocument();
+  });
+
+  it("refills for each selected employee", async () => {
+    await show(<Portal employees={people} departments={departments} current={none()} />);
+    const user = await openProfile(people[0].name);
+    await user.clear(detailsForm().getByLabelText("Job title"));
+    await user.type(detailsForm().getByLabelText("Job title"), "Draft");
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /^Employees/ }));
+    await openProfile(people[1].name);
+    expect(detailsForm().getByLabelText("Job title")).toHaveValue(people[1].title);
+  });
+
+  it("refills the form when refreshed props bring changed details", async () => {
+    const view = await show(<Portal employees={people} departments={departments} current={none()} />);
+    await openProfile(people[0].name);
+    const updated = people.map((e, i) => (i === 0 ? { ...e, title: "Principal Engineer", location: "Chattogram" } : e));
+    await act(async () => { view.rerender(<Portal employees={updated} departments={departments} current={none()} />); });
+    expect(detailsForm().getByLabelText("Job title")).toHaveValue("Principal Engineer");
+    expect(detailsForm().getByLabelText("Office")).toHaveValue("Chattogram");
+  });
+
+  // Staff never get this portal (page.tsx renders StaffAttendance for them); the Staff own-record view is
+  // asserted to have no edit form in staff-attendance.test.tsx.
+
+  it("shows refreshed details in the profile header after the props change", async () => {
+    const view = await show(<Portal employees={people} departments={departments} current={none()} />);
+    await openProfile(people[0].name);
+    const updated = people.map((e, i) => (i === 0 ? { ...e, title: "Principal Engineer" } : e));
+    await act(async () => { view.rerender(<Portal employees={updated} departments={departments} current={none()} />); });
+    expect(screen.getByRole("heading", { level: 1, name: people[0].name }).parentElement).toHaveTextContent("Principal Engineer");
+  });
+});
+
+describe("Portal skills and evaluation (Story 7.4)", () => {
+  const people = employees.slice(0, 2).map(e => ({ ...e, archived: false }));
+  const emptyReview = { date: "", reviewer: "", readiness: "", strengths: "", next: "" };
+  const openTab = async (name: string) => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: `View ${name}'s profile` }));
+    await user.click(screen.getByRole("tab", { name: "Skills & evaluation" }));
+    return user;
+  };
+
+  it("shows the skills with a text level and the evaluation with its reviewer and D MMM YYYY date", async () => {
+    await show(<Portal employees={people} current={none()} />);
+    await openTab(people[0].name);
+    const panel = within(screen.getByRole("tabpanel"));
+    for (const skill of people[0].skills) {
+      expect(panel.getByText(skill.name)).toBeInTheDocument();
+      expect(panel.getByText(skill.evidence, { selector: "small" })).toBeInTheDocument();
+    }
+    expect(panel.getAllByRole("img", { name: /out of 5$/ })).toHaveLength(people[0].skills.length);
+    expect(panel.getByText(`14 Sep 2026 · ${people[0].review.reviewer}`)).toBeInTheDocument();
+    expect(panel.getByText(people[0].review.strengths, { selector: "p" })).toBeInTheDocument();
+    expect(panel.getByText(people[0].review.readiness, { selector: ".callout" })).toBeInTheDocument();
+    expect(panel.getByText("1 foundational · 2 developing · 3 independent · 4 advanced · 5 expert")).toBeInTheDocument();
+  });
+
+  it.each([["the Administrator", "admin"], ["a department manager", "manager"]] as const)(
+    "gives %s the rating and evaluation forms, the evaluation prefilled and the skill names suggested", async (_label, role) => {
+      await show(<Portal role={role} employees={people} current={none()} />);
+      await openTab(people[0].name);
+      const rate = within(screen.getByRole("form", { name: "Rate a skill" }));
+      expect(rate.getByLabelText("Skill")).toHaveValue("");
+      const list = document.getElementById(rate.getByLabelText("Skill").getAttribute("list")!)!;
+      expect([...list.querySelectorAll("option")].map(o => o.getAttribute("value"))).toEqual(people[0].skills.map(s => s.name));
+      const edit = within(screen.getByRole("form", { name: "Edit evaluation" }));
+      expect(edit.getByLabelText("Strengths")).toHaveValue(people[0].review.strengths);
+      expect(edit.getByLabelText("Development priorities")).toHaveValue(people[0].review.next);
+      expect(edit.getByLabelText("Readiness")).toHaveValue(people[0].review.readiness);
+    });
+
+  it("shows the empty states, on the tab and the Overview snapshot, when nothing is recorded yet", async () => {
+    const bare = people.map((e, i) => (i === 0 ? { ...e, skills: [], review: emptyReview } : e));
+    await show(<Portal employees={bare} current={none()} />);
+    const user = await openTab(bare[0].name);
+    const panel = within(screen.getByRole("tabpanel"));
+    expect(panel.getByText("No skills assessed yet.")).toBeInTheDocument();
+    expect(panel.getByText("No evaluation recorded yet.")).toBeInTheDocument();
+    expect(panel.queryByText(/Not recorded/)).not.toBeInTheDocument();
+    // The evaluation form starts empty.
+    expect(within(screen.getByRole("form", { name: "Edit evaluation" })).getByLabelText("Strengths")).toHaveValue("");
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.getByText("No evaluation recorded yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/^Reviewed .* · /)).not.toBeInTheDocument();
+  });
+
+  it("refills the evaluation form when refreshed props bring a saved evaluation", async () => {
+    const view = await show(<Portal employees={people} current={none()} />);
+    await openTab(people[0].name);
+    const saved = { date: "2026-10-14", reviewer: "Ayesha Karim · Administrator", readiness: "Ready now", strengths: "New strengths", next: "New priorities" };
+    const updated = people.map((e, i) => (i === 0 ? { ...e, review: saved, skills: [{ name: "Go", level: 5, evidence: "Shipped" }, ...e.skills] } : e));
+    await act(async () => { view.rerender(<Portal employees={updated} current={none()} />); });
+    expect(within(screen.getByRole("form", { name: "Edit evaluation" })).getByLabelText("Strengths")).toHaveValue("New strengths");
+    const panel = within(screen.getByRole("tabpanel"));
+    expect(panel.getByText("14 Oct 2026 · Ayesha Karim · Administrator")).toBeInTheDocument();
+    expect(panel.getByText("Go")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations on the tab with the forms", async () => {
+    const { container } = await show(<Portal employees={people} current={none()} />);
+    await openTab(people[0].name);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // Staff never get this portal (page.tsx renders StaffAttendance for them); the Staff read-only view is
+  // asserted to have no forms in staff-attendance.test.tsx.
 });

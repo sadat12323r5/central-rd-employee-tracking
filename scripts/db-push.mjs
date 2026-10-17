@@ -23,7 +23,9 @@ const mask = text => secrets.reduce((out, secret) => out.split(secret).join("***
 const require = createRequire(import.meta.url);
 const cli = join(dirname(require.resolve("supabase/package.json")), "dist", "supabase.js");
 // No shell: the URL is passed as a single argv entry, so it is never interpreted or echoed by a shell.
-const child = spawn(process.execPath, [cli, "db", "push", "--db-url", dbUrl, "--yes"], { stdio: ["inherit", "pipe", "pipe"] });
+// Extra flags pass straight through, e.g. `npm run db:push -- --include-all` for a migration whose
+// timestamp is older than one already applied (stories built in parallel on stacked branches).
+const child = spawn(process.execPath, [cli, "db", "push", "--db-url", dbUrl, "--yes", ...process.argv.slice(2)], { stdio: ["inherit", "pipe", "pipe"] });
 child.stdout.on("data", chunk => process.stdout.write(mask(chunk.toString())));
 child.stderr.on("data", chunk => process.stderr.write(mask(chunk.toString())));
 child.on("close", code => process.exit(code ?? 1));

@@ -1,6 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { employees as fixture, type Employee } from "@/data/employees";
 import {
+  derivedFields, invalidEmployeeDetailsFields, invalidNewEmployeeFields, normalizeEmployeeDetails, normalizeNewEmployee,
+  type EmployeeDetailsInput, type NewEmployeeField, type NewEmployeeInput,
+} from "@/domain/employee-input";
+import {
+  assessmentsStore, AssessmentsUnavailableError, createAssessmentsStore, type Assessments, type AssessmentsStore,
+} from "./assessments-store";
+import {
   assignmentEvaluationsStore, EvaluationsUnavailableError, type AssignmentEvaluation, type AssignmentEvaluationsStore,
 } from "./assignment-evaluations-store";
 import { assignmentsStore, AssignmentsUnavailableError, type Assignment, type AssignmentsStore } from "./assignments-store";
@@ -16,10 +23,11 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 
 // The only way the app reads employees (AD-2). Basic details come from the Supabase `employees`
 // table, external interviews from the `external_interviews` table (through interviews-store,
-// Story 2.1), training through training-store (Story 3.1) and assignments through assignments-store
-// (Story 4.5); the other nested profile data (skills, history, attendance summary, review) still comes
-// from the fixture, merged by Employee ID, so callers see the same shape. The fixture's interviews,
-// training and former "current work" are never read here.
+// Story 2.1), training through training-store (Story 3.1), assignments through assignments-store
+// (Story 4.5) and skills and the evaluation (`review`) through assessments-store (Story 7.4); the other
+// nested profile data (history, attendance summary) still comes from the fixture, merged by Employee ID,
+// so callers see the same shape. The fixture's interviews, training, former "current work", skills and
+// review are never read here.
 //
 // Every read (Administrator and Staff, Story 1.3) goes through a per-request client carrying the
 // signed-in user's Supabase JWT, so the employees RLS policies are the enforced rule: an admin
@@ -34,6 +42,20 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // Story 4.5: every role's profiles carry their assignments (scoped the same way by assignments-store).
 // Story 4.6: and the evaluations of those assignments (scoped by assignment-evaluations-store).
 // Story 4.7: and the employee's self-reported past projects (scoped by backfilled-project-store).
+//
+// Story 7.1: `create` adds a new employee through the same per-request client (never the service role).
+// The Administrator may add to any department, a manager only to a department in their subtree (checked
+// here against manager-scope, and again by the employees_insert_* RLS policies); Staff never. The
+// department is required. Status, initials, avatar colour and summary are derived, never taken from the
+// input, and the row never carries an account link or an archived flag: accounts come only from
+// accounts-store (Story 1.3).
+//
+// Story 7.2: `updateDetails` edits an existing employee's title, team, reporting manager, office and
+// employment type through the per-request client's rpc to public.update_employee_details (a SECURITY
+// DEFINER function that names only those five columns; there is no update policy on employees). The
+// Administrator may edit anyone, a manager only employees in their subtree (checked here against
+// manager-scope before the rpc, and again by the function); Staff never, not even their own record.
+// The department never changes here: only through a transfer.
 export interface EmployeesStore {
   /** Every employee for an admin; the department subtree's employees for a manager; only the caller's own record for staff. */
   listFor(session: SessionIdentity): Promise<Employee[]>;
@@ -44,6 +66,57 @@ export interface EmployeesStore {
    * False when the row is missing, unlinked or archived. Throws EmployeesUnavailableError on a read error.
    */
   isActive(session: StaffIdentity): Promise<boolean>;
+  /**
+   * Story 7.1: adds a new employee. Throws EmployeeForbiddenError (Staff, or a department outside a
+   * manager's subtree), EmployeeValidationError (bad input, unknown department), EmployeeExistsError
+   * (duplicate Employee ID or email) or EmployeesUnavailableError. Never creates a sign-in account.
+   */
+  create(session: SessionIdentity, input: NewEmployeeInput): Promise<{ employeeId: string; name: string }>;
+  /**
+   * Story 7.2: saves an employee's title, team, reporting manager, office and employment type (nothing
+   * else). Throws EmployeeForbiddenError (Staff, or an employee outside a manager's subtree),
+   * EmployeeValidationError (bad input), EmployeeNotFoundError (no such employee) or EmployeesUnavailableError.
+   */
+  updateDetails(session: SessionIdentity, employeeId: string, input: EmployeeDetailsInput): Promise<{ employeeId: string; name: string }>;
+}
+
+/** The caller may not add or edit this employee: a Staff session, or outside a manager's subtree. */
+export class EmployeeForbiddenError extends Error {
+  constructor() {
+    super("Only an Administrator, or a manager for their own department subtree, can add or edit employees.");
+    this.name = "EmployeeForbiddenError";
+  }
+}
+
+/**
+ * The input failed validation. `fields` names the offending inputs; values are never included.
+ * `"details"` means the database function refused the basic details without naming a field (Story 7.2).
+ */
+export class EmployeeValidationError extends Error {
+  readonly fields: (NewEmployeeField | "details")[];
+  constructor(fields: (NewEmployeeField | "details")[]) {
+    super(`Invalid employee details: ${fields.join(", ")}.`);
+    this.name = "EmployeeValidationError";
+    this.fields = fields;
+  }
+}
+
+/** An employee with this Employee ID or primary email already exists. */
+export class EmployeeExistsError extends Error {
+  readonly field: "employeeId" | "email";
+  constructor(field: "employeeId" | "email") {
+    super(field === "employeeId" ? "An employee with this Employee ID already exists." : "An employee with this email already exists.");
+    this.name = "EmployeeExistsError";
+    this.field = field;
+  }
+}
+
+/** Story 7.2: there is no employee with this Employee ID. */
+export class EmployeeNotFoundError extends Error {
+  constructor() {
+    super("No employee has this Employee ID.");
+    this.name = "EmployeeNotFoundError";
+  }
 }
 
 /** The employee database is unreachable or returned an error. Never treat this as "no employees". */
@@ -78,24 +151,39 @@ const MANAGER_COLUMNS = `${COLUMNS},department_id,archived_at`;
 /** Which extra fields a read maps: Administrator (account, archived, department), manager (archived, department) or none. */
 export type EmployeeView = "admin" | "manager" | "basic";
 
-type NestedProfile = Pick<Employee, "skills" | "history" | "attendance" | "review">;
+type NestedProfile = Pick<Employee, "history" | "attendance">;
 
 const emptyProfile = (): NestedProfile => ({
-  skills: [], history: [],
+  history: [],
   attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
-  review: { date: "", reviewer: "", readiness: "", strengths: "", next: "" },
 });
 
+/** The fixture's remaining nested data (never skills or the review: those come from assessments-store, Story 7.4). */
 function nestedFor(id: string): NestedProfile {
   const source = fixture.find(e => e.id === id);
   if (!source) return emptyProfile();
-  const { skills, history, attendance, review } = structuredClone(source);
-  return { skills, history, attendance, review };
+  const { history, attendance } = structuredClone(source);
+  return { history, attendance };
 }
+
+/** No evaluation recorded yet: every field empty (the UI says so rather than showing a blank date). */
+export const emptyReview = (): Employee["review"] => ({ date: "", reviewer: "", readiness: "", strengths: "", next: "" });
+
+/** The skills of one employee, in the store's order (strongest first), without the store's `employeeId`. */
+const skillsOf = (all: Assessments, employeeId: string): Employee["skills"] =>
+  all.skills.filter(s => s.employeeId === employeeId).map(({ name, level, evidence }) => ({ name, level, evidence }));
+
+/** The evaluation of one employee as the profile's `review`; none yet → all empty. */
+const reviewOf = (all: Assessments, employeeId: string): Employee["review"] => {
+  const evaluation = all.evaluations.find(e => e.employeeId === employeeId);
+  return evaluation
+    ? { date: evaluation.reviewedOn, reviewer: evaluation.reviewer, readiness: evaluation.readiness, strengths: evaluation.strengths, next: evaluation.developmentPriorities }
+    : emptyReview();
+};
 
 /**
  * Maps a row to an Employee with the given interviews (from interviews-store), training (from
- * training-store) and assignments (from assignments-store, Story 4.5). The `admin` view (`true` is the same) adds `hasAccount` from `auth_user_id`,
+ * training-store), assignments (from assignments-store, Story 4.5), assignment evaluations (Story 4.6), backfilled projects (Story 4.7), and skills and review (from assessments-store, Story 7.4). The `admin` view (`true` is the same) adds `hasAccount` from `auth_user_id`,
  * `archived` from `archived_at` and `departmentId` from `department_id`; the `manager` view (Story 4.3)
  * adds `archived` and `departmentId` only.
  */
@@ -103,6 +191,7 @@ export function toEmployee(
   row: EmployeeRow, view: EmployeeView | boolean = "basic", interviews: Employee["interviews"] = [], training: Employee["training"] = [],
   assignments: Employee["assignments"] = [], evaluations: Employee["evaluations"] = [],
   backfilledProjects: Employee["backfilledProjects"] = [],
+  skills: Employee["skills"] = [], review: Employee["review"] = emptyReview(),
 ): Employee {
   const mode = view === true ? "admin" : view === false ? "basic" : view;
   return {
@@ -112,6 +201,8 @@ export function toEmployee(
     ...(mode === "admin" ? { hasAccount: Boolean(row.auth_user_id) } : {}),
     ...(mode !== "basic" ? { archived: Boolean(row.archived_at), departmentId: row.department_id ?? null } : {}),
     ...nestedFor(row.employee_id),
+    skills,
+    review,
     training,
     interviews,
     assignments,
@@ -141,6 +232,30 @@ const backfilledOf = (all: BackfilledProject[], employeeId: string): Employee["b
   all.filter(b => b.employeeId === employeeId);
 
 type Result<T> = { data: T | null; error: unknown };
+type DbError = { code?: string; message?: string; details?: string };
+
+/** Maps an insert refusal to the store's typed errors; anything unrecognised is "unavailable". */
+function insertRefusal(error: DbError): Error {
+  const text = `${error.message ?? ""} ${error.details ?? ""}`;
+  if (error.code === "23505") {
+    if (/employees_pkey|\(employee_id\)/.test(text)) return new EmployeeExistsError("employeeId");
+    if (/employees_email_key|\(email\)/.test(text)) return new EmployeeExistsError("email");
+  }
+  // 23503: no such department; 22P02: not even a valid department id.
+  if (error.code === "23503" || error.code === "22P02") return new EmployeeValidationError(["departmentId"]);
+  if (error.code === "42501") return new EmployeeForbiddenError();
+  return new EmployeesUnavailableError({ cause: error });
+}
+
+/** Story 7.2: maps an update_employee_details refusal to the store's typed errors; anything else is "unavailable". */
+function detailsRefusal(error: DbError): Error {
+  switch (error.message) {
+    case "not_authorized": return new EmployeeForbiddenError();
+    case "invalid_input": return new EmployeeValidationError(["details"]);
+    case "employee_not_found": return new EmployeeNotFoundError();
+    default: return new EmployeesUnavailableError({ cause: error });
+  }
+}
 
 export type EmployeesStoreClients = {
   /** Per-request client carrying the signed-in user's JWT (RLS enforced). Used for every read. */
@@ -155,12 +270,15 @@ export type EmployeesStoreClients = {
   evaluations: Pick<AssignmentEvaluationsStore, "listFor">;
   /** Story 4.7: where profile backfilled projects come from (RLS-scoped through the same per-request JWT). */
   backfilled: Pick<BackfilledProjectStore, "listFor">;
+  /** Story 7.4: where profile skills and the evaluation come from (default: an assessments-store on the same `userClient` and `scope`). */
+  assessments?: Pick<AssessmentsStore, "listFor">;
   /** Story 4.3: a manager's department subtree, worked out fresh on each call (default: the real manager-scope). */
   scope?: ManagerScope;
 };
 
 export function createEmployeesStore({
   userClient, interviews, training, assignments, evaluations, backfilled, scope = managerScope,
+  assessments = createAssessmentsStore({ userClient, scope }),
 }: EmployeesStoreClients): EmployeesStore {
   async function run<T>(query: (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>): Promise<T | null> {
     let result: Result<T>;
@@ -223,6 +341,16 @@ export function createEmployeesStore({
     }
   }
 
+  /** A failed skills or evaluation read makes the whole record unavailable: never a profile with missing assessments. */
+  async function assessmentsFor(session: SessionIdentity, employeeId?: string): Promise<Assessments> {
+    try {
+      return await assessments.listFor(session, employeeId);
+    } catch (cause) {
+      if (cause instanceof AssessmentsUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   const columnsFor = (session: SessionIdentity) => (session.role === "admin" ? ADMIN_COLUMNS : COLUMNS);
 
   /** The employee ids in a manager's subtree. A scope that cannot be read makes the records unavailable: never a partial list. */
@@ -239,7 +367,7 @@ export function createEmployeesStore({
   async function listForManager(session: ManagerIdentity): Promise<Employee[]> {
     const ids = await managedEmployeeIds(session);
     if (ids.size === 0) return [];
-    const [rows, allTraining, allAssignments, allEvaluations, allBackfilled] = await Promise.all([
+    const [rows, allTraining, allAssignments, allEvaluations, allBackfilled, allAssessments] = await Promise.all([
       // Paged (Story 8.2) like the Administrator list: employee_id is the primary key, so the order is total.
       readAllPages(async (from, to) => {
         const page = await run<EmployeeRow[]>(t => t.select(MANAGER_COLUMNS).in("employee_id", [...ids])
@@ -251,12 +379,14 @@ export function createEmployeesStore({
       assignmentsFor(session),
       evaluationsFor(session),
       backfilledFor(session),
+      assessmentsFor(session),
     ]);
     // Defence in depth: never a row outside the scope, whatever the query returned.
     return rows.filter(row => ids.has(row.employee_id))
       .map(row => toEmployee(
         row, "manager", [], trainingOf(allTraining, row.employee_id), assignmentsOf(allAssignments, row.employee_id),
         evaluationsOf(allEvaluations, row.employee_id), backfilledOf(allBackfilled, row.employee_id),
+        skillsOf(allAssessments, row.employee_id), reviewOf(allAssessments, row.employee_id),
       ));
   }
 
@@ -265,20 +395,80 @@ export function createEmployeesStore({
     if (!(await managedEmployeeIds(session)).has(id)) return null;
     const row = await run<EmployeeRow>(t => t.select(MANAGER_COLUMNS).eq("employee_id", id).maybeSingle<EmployeeRow>());
     if (!row) return null;
-    const [ownTraining, ownAssignments, ownEvaluations, ownBackfilled] = await Promise.all([
+    const [ownTraining, ownAssignments, ownEvaluations, ownBackfilled, own] = await Promise.all([
       trainingFor(session, id), assignmentsFor(session, id), evaluationsFor(session, id), backfilledFor(session, id),
+      assessmentsFor(session, id),
     ]);
     return toEmployee(
       row, "manager", [], trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id), evaluationsOf(ownEvaluations, id),
-      backfilledOf(ownBackfilled, id),
+      backfilledOf(ownBackfilled, id), skillsOf(own, id), reviewOf(own, id),
     );
   }
 
+  /** Story 7.1: the departments a manager may add employees to. Scope failure: unavailable, never "allowed". */
+  async function managedDepartmentIds(session: ManagerIdentity): Promise<Set<string>> {
+    try {
+      return (await scope.forManager(session)).departmentIds;
+    } catch (cause) {
+      if (cause instanceof ManagerScopeUnavailableError) throw new EmployeesUnavailableError({ cause });
+      throw cause;
+    }
+  }
+
   return {
+    async create(session, input) {
+      // Staff never add employees: refused before any query.
+      if (session.role !== "admin" && session.role !== "manager") throw new EmployeeForbiddenError();
+      const employee = normalizeNewEmployee(input);
+      const invalid = invalidNewEmployeeFields(employee);
+      if (invalid.length > 0) throw new EmployeeValidationError(invalid);
+      if (session.role === "manager" && !(await managedDepartmentIds(session)).has(employee.departmentId)) {
+        throw new EmployeeForbiddenError();
+      }
+      const derived = derivedFields(employee);
+      let result: { error: DbError | null };
+      try {
+        // No .select(): nothing is read back, so only the insert policies apply.
+        result = await (await userClient()).from("employees").insert({
+          employee_id: employee.employeeId, name: employee.name, title: employee.title, team: employee.team,
+          employment_type: employee.employmentType, email: employee.email, joined_on: employee.joinedOn,
+          manager: employee.manager, office: employee.office, department_id: employee.departmentId,
+          status: derived.status, initials: derived.initials, avatar_color: derived.avatarColor, summary: derived.summary,
+        });
+      } catch (cause) {
+        throw new EmployeesUnavailableError({ cause });
+      }
+      if (result.error) throw insertRefusal(result.error);
+      return { employeeId: employee.employeeId, name: employee.name };
+    },
+    async updateDetails(session, employeeId, input) {
+      // Staff never edit basic details, not even their own: refused before any query.
+      if (session.role !== "admin" && session.role !== "manager") throw new EmployeeForbiddenError();
+      // Outside a manager's subtree: refused without calling the function.
+      if (session.role === "manager" && !(await managedEmployeeIds(session)).has(employeeId)) {
+        throw new EmployeeForbiddenError();
+      }
+      const details = normalizeEmployeeDetails(input);
+      const invalid = invalidEmployeeDetailsFields(details);
+      if (invalid.length > 0) throw new EmployeeValidationError(invalid);
+      let result: { data: unknown; error: DbError | null };
+      try {
+        // Only the five basic-details fields are sent; the function updates nothing else.
+        result = await (await userClient()).rpc("update_employee_details", {
+          p_employee_id: employeeId, p_title: details.title, p_team: details.team, p_manager: details.manager,
+          p_office: details.office, p_employment_type: details.employmentType,
+        });
+      } catch (cause) {
+        throw new EmployeesUnavailableError({ cause });
+      }
+      if (result.error) throw detailsRefusal(result.error);
+      if (typeof result.data !== "string") throw new EmployeesUnavailableError({ cause: "no employee name returned" });
+      return { employeeId, name: result.data };
+    },
     async listFor(session) {
       if (session.role === "manager") return listForManager(session);
-      // One interviews, one training and one assignments read for the whole list: everyone's for an admin, the caller's own for staff.
-      const [rows, all, allTraining, allAssignments, allEvaluations, allBackfilled] = await Promise.all([
+      // One interviews, training, assignments, evaluations, backfilled-projects and assessments read for the whole list: everyone's for an admin, the caller's own for staff.
+      const [rows, all, allTraining, allAssignments, allEvaluations, allBackfilled, allAssessments] = await Promise.all([
         // Paged (Story 8.2): one request is capped at PostgREST's max_rows. employee_id is the primary
         // key, so ordering by it alone is total.
         readAllPages(async (from, to) => {
@@ -295,11 +485,13 @@ export function createEmployeesStore({
         assignmentsFor(session),
         evaluationsFor(session),
         backfilledFor(session),
+        assessmentsFor(session),
       ]);
       return rows.map(row => toEmployee(
         row, session.role === "admin", interviewsOf(all, row.employee_id), trainingOf(allTraining, row.employee_id),
         assignmentsOf(allAssignments, row.employee_id), evaluationsOf(allEvaluations, row.employee_id),
         backfilledOf(allBackfilled, row.employee_id),
+        skillsOf(allAssessments, row.employee_id), reviewOf(allAssessments, row.employee_id),
       ));
     },
     async getFor(session, id) {
@@ -307,13 +499,14 @@ export function createEmployeesStore({
       if (session.role !== "admin" && id !== session.employeeId) return null;
       const row = await run<EmployeeRow>(t => t.select(columnsFor(session)).eq("employee_id", id).maybeSingle<EmployeeRow>());
       if (!row) return null;
-      const [own, ownTraining, ownAssignments, ownEvaluations, ownBackfilled] = await Promise.all([
+      const [own, ownTraining, ownAssignments, ownEvaluations, ownBackfilled, ownAssessments] = await Promise.all([
         interviewsFor(session, id), trainingFor(session, id), assignmentsFor(session, id), evaluationsFor(session, id),
-        backfilledFor(session, id),
+        backfilledFor(session, id), assessmentsFor(session, id),
       ]);
       return toEmployee(
         row, session.role === "admin", interviewsOf(own, id), trainingOf(ownTraining, id), assignmentsOf(ownAssignments, id),
         evaluationsOf(ownEvaluations, id), backfilledOf(ownBackfilled, id),
+        skillsOf(ownAssessments, id), reviewOf(ownAssessments, id),
       );
     },
     async isActive(session) {
@@ -325,5 +518,5 @@ export function createEmployeesStore({
 
 export const employeesStore: EmployeesStore = createEmployeesStore({
   userClient: getUserClient, interviews: interviewsStore, training: trainingStore, assignments: assignmentsStore,
-  evaluations: assignmentEvaluationsStore, backfilled: backfilledProjectStore,
+  evaluations: assignmentEvaluationsStore, backfilled: backfilledProjectStore, assessments: assessmentsStore,
 });
