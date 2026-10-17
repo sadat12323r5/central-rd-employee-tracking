@@ -20,9 +20,9 @@
 // skipped, so a manager's later rating survives) and its evaluations into `employee_evaluations`
 // (insert-only, one per employee), both with updated_by null. Story 7.3: the fixture's employment history
 // is inserted into `employment_history` (ids from employmentHistorySeedId), insert-only, so edits and
-// removals made in the app survive a re-seed. Other nested profile data (attendance) stays in the fixture
-// (read by employees-store); the fixture's interviews, training, current work, skills, evaluations and
-// history are never read at runtime.
+// removals made in the app survive a re-seed. The fixture has no attendance summary (Story 5.4 computes it
+// from real records); the fixture's interviews, training, current work, skills, evaluations and history are
+// never read at runtime.
 // Story 5.1: last, if no holiday calendar version exists yet, the provisional calendar
 // docs/holiday-calendars/bangladesh-2026.csv is loaded as the first version (jurisdiction Bangladesh,
 // Asia/Dhaka) through the load_holiday_calendar RPC, so the version and its dates are written together.

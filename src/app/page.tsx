@@ -2,7 +2,9 @@ import Login from "@/components/login";
 import Portal from "@/components/portal";
 import StaffAttendance, { type StaffSelfServiceProps } from "@/components/staff-attendance";
 import { getSession } from "@/server/auth";
+import { todayInDhaka } from "@/domain/dates";
 import { attendanceStore, AttendanceUnavailableError } from "@/server/attendance-store";
+import { attendanceSummariesFor } from "@/server/attendance-summary";
 import { backfilledProjectStore, type DepartmentOption } from "@/server/backfilled-project-store";
 import { departmentsStore, DepartmentsUnavailableError } from "@/server/departments-store";
 import { employeesStore, EmployeesUnavailableError } from "@/server/employees-store";
@@ -41,8 +43,10 @@ export default async function Home() {
         employeesStore.listFor(session), departmentsStore.listFor(session), options, myRecordFor(session, options),
       ]);
       const employees = withoutInterviews(scoped);
+      // Story 5.4: attendance summaries for the current month, from real records (subtree only).
+      const attendance = await attendanceSummariesFor(session, employees, todayInDhaka());
       return <Portal role="manager" employees={employees} departments={departments} departmentNames={departmentNames}
-        current={currentTraining(session, employees.map(e => e.id))} myRecord={myRecord} />;
+        current={currentTraining(session, employees.map(e => e.id))} myRecord={myRecord} attendance={attendance} />;
     }
     // Department names (Story 4.1) are read separately and joined to employees by id in the portal.
     // Story 4.10: an Administrator linked to an employee row also gets "My record".
@@ -50,8 +54,11 @@ export default async function Home() {
     const [employees, departments, myRecord, holidayCalendars] = await Promise.all([
       employeesStore.listFor(session), departmentsStore.listFor(session), myRecordFor(session), holidayCalendarVersionsFor(session),
     ]);
+    // Story 5.4: attendance summaries for the current month, from real records; an attendance read failure
+    // throws AttendanceUnavailableError (the alert below).
+    const attendance = await attendanceSummariesFor(session, employees, todayInDhaka());
     return <Portal employees={employees} departments={departments} current={currentTraining(session, employees.map(e => e.id))}
-      myRecord={myRecord} holidayCalendars={holidayCalendars} />;
+      myRecord={myRecord} holidayCalendars={holidayCalendars} attendance={attendance} />;
   } catch (error) {
     // Never fall back to an empty or partial list: say plainly that records could not be loaded.
     if (error instanceof EmployeesUnavailableError) {

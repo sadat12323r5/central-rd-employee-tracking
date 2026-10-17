@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { monthToDate, periodLabel } from "../../src/domain/attendance-summary";
+import { todayInDhaka } from "../../src/domain/dates";
 import { e2eAdmin, signInAsAdmin } from "./admin";
 
 test("admin login, directory filters, profiles, export and logout", async ({ page }) => {
@@ -39,6 +41,11 @@ test("admin login, directory filters, profiles, export and logout", async ({ pag
     await page.getByRole("navigation").getByRole("button", { name: section, exact: true }).click();
     await expect(page.getByRole("heading", { name: section, exact: true })).toBeVisible();
   }
+  // Story 5.4: the summary covers the current month to date (or says why the calendar cannot count it).
+  const summary = page.locator("section.panel", { has: page.getByRole("heading", { name: "Attendance summary", exact: true }) });
+  const label = periodLabel(monthToDate(todayInDhaka()));
+  await expect(summary).toContainText(new RegExp(`${label} · Monday–Friday|holiday calendar`));
+  await expect(summary).not.toContainText("September 2026");
   await page.locator(".sidebar").getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
   await page.reload();

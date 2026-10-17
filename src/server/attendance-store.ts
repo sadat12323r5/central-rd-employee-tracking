@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { TimesheetValidationError, type DailyLog, type TimesheetEntry, type WorkMode } from "@/domain/timesheet";
 import { managerScope, ManagerScopeUnavailableError, type ManagerScope } from "./manager-scope";
-import type { SessionIdentity } from "./session";
+import type { ManagerIdentity, SessionIdentity } from "./session";
 import { readAllPages } from "./paging";
 import { getUserClient } from "./supabase";
 
@@ -17,9 +17,18 @@ import { getUserClient } from "./supabase";
 // own, a department manager only employees in their department subtree (manager-scope, computed fresh;
 // RLS: attendance_select_managed). An id outside the session's scope is `[]`, without a query.
 // `listForEmployee` / `listAll` (used by attendance-actions) are unchanged.
+//
+// Story 5.4 adds `listInPeriod`, the session-scoped, date-windowed read behind the attendance summaries:
+// an Administrator reads every employee, a manager only their subtree (manager-scope), Staff only their own.
 export interface AttendanceStore {
   /** The employee's entries, newest first, when the session may see them; otherwise `[]` without a query. */
   listFor(session: SessionIdentity, employeeId: string): Promise<TimesheetEntry[]>;
+  /**
+   * Story 5.4: the entries dated `from`..`to` (inclusive ISO dates) of every employee the session may read
+   * (Administrator: all; manager: their subtree; Staff: their own), oldest first. `employeeIds` narrows the
+   * read to those employees; an empty scope is `[]` without a query.
+   */
+  listInPeriod(session: SessionIdentity, period: { from: string; to: string }, employeeIds?: readonly string[]): Promise<TimesheetEntry[]>;
   listForEmployee(employeeId: string): Promise<TimesheetEntry[]>;
   listAll(): Promise<TimesheetEntry[]>;
   save(entry: TimesheetEntry): Promise<void>;
@@ -108,16 +117,41 @@ export function createAttendanceStore({ userClient, scope = managerScope }: Atte
     return rows.map(toEntry);
   }
 
-  /** Whether the session may read the employee's attendance. A scope that cannot be read is unavailable. */
-  async function mayRead(session: SessionIdentity, employeeId: string): Promise<boolean> {
-    if (session.role === "admin") return true;
-    if (session.role === "staff") return employeeId === session.employeeId;
+  /** Entries dated within the period, oldest first, optionally only for `employeeIds` (paged). */
+  async function listWindow(period: { from: string; to: string }, employeeIds?: readonly string[]): Promise<TimesheetEntry[]> {
+    const rows = await readAllPages(async (from, to) => {
+      const page = await run<AttendanceRow[]>(t => {
+        const query = t.select(COLUMNS).gte("work_date", period.from).lte("work_date", period.to);
+        const scoped = employeeIds === undefined ? query
+          : employeeIds.length === 1 ? query.eq("employee_id", employeeIds[0]) : query.in("employee_id", [...employeeIds]);
+        return scoped
+          .order("work_date", { ascending: true })
+          .order("employee_id", { ascending: true })
+          .order("id", { ascending: true })
+          .range(from, to)
+          .returns<AttendanceRow[]>();
+      });
+      if (!page) throw new AttendanceUnavailableError({ cause: "no data returned" });
+      return page;
+    });
+    return rows.map(toEntry);
+  }
+
+  /** The employee ids a manager may read. A scope that cannot be read is unavailable. */
+  async function managerIds(session: ManagerIdentity): Promise<Set<string>> {
     try {
-      return (await scope.forManager(session)).employeeIds.has(employeeId);
+      return (await scope.forManager(session)).employeeIds;
     } catch (cause) {
       if (cause instanceof ManagerScopeUnavailableError) throw new AttendanceUnavailableError({ cause });
       throw cause;
     }
+  }
+
+  /** Whether the session may read the employee's attendance. A scope that cannot be read is unavailable. */
+  async function mayRead(session: SessionIdentity, employeeId: string): Promise<boolean> {
+    if (session.role === "admin") return true;
+    if (session.role === "staff") return employeeId === session.employeeId;
+    return (await managerIds(session)).has(employeeId);
   }
 
   return {
@@ -125,6 +159,23 @@ export function createAttendanceStore({ userClient, scope = managerScope }: Atte
       if (!(await mayRead(session, employeeId))) return [];
       // Defence in depth: only the asked-for employee's rows.
       return (await list(employeeId)).filter(e => e.employeeId === employeeId);
+    },
+    async listInPeriod(session, period, employeeIds) {
+      const wanted = employeeIds === undefined ? undefined : new Set(employeeIds);
+      let ids: string[] | undefined;
+      if (session.role === "admin") {
+        ids = wanted === undefined ? undefined : [...wanted];
+      } else if (session.role === "staff") {
+        ids = wanted === undefined || wanted.has(session.employeeId) ? [session.employeeId] : [];
+      } else {
+        const inScope = await managerIds(session);
+        ids = [...inScope].filter(id => wanted === undefined || wanted.has(id));
+      }
+      if (ids !== undefined && ids.length === 0) return [];
+      const entries = await listWindow(period, ids);
+      // Defence in depth: only in-scope employees and in-period dates.
+      const allowed = ids === undefined ? undefined : new Set(ids);
+      return entries.filter(e => (allowed === undefined || allowed.has(e.employeeId)) && e.date >= period.from && e.date <= period.to);
     },
     listForEmployee: employeeId => list(employeeId),
     listAll: () => list(),

@@ -109,7 +109,6 @@ export type Employee = {
    * `withdrawn` (Story 2.2) marks an entry its author withdrew: it leaves active views but stays in history.
    */
   interviews: { id: string; company: string; role: string; date: string; stage: string; outcome: string; feedback: string; withdrawn: boolean }[];
-  attendance: { scheduled: number; worked: number; leave: number; unrecorded: number; records: { date: string; type: string; days: number; status: string }[] };
   /**
    * The manager evaluation (Story 7.4, read through assessments-store from the `employee_evaluations` table):
    * `date` is the review date, `next` the development priorities. All empty when none is recorded yet. In
@@ -306,7 +305,6 @@ export const employees: Employee[] = people.map((p, index) => {
     backfilledProjects: [],
     leave: [],
     interviews: index === 2 || index === 5 ? [] : [{ id: interviewSeedId(id, 0), company: ["Northstar Labs", "Orbit Analytics", "", "Cedar Software", "Canvas Digital", "", "Summit Cloud", "Harbour Systems"][index] + " (fictional)", role: title, date: index === 0 ? "2026-09-23" : "2026-09-16", stage: index === 0 ? "Technical interview" : "Technical round completed", outcome: index === 0 ? "Scheduled" : index === 3 ? "Not selected" : "Awaiting feedback", feedback: index === 3 ? "Needs more practice explaining test strategy. Mentor follow-up planned." : "Preparation focus: project examples, technical reasoning and communication. No offer recorded.", withdrawn: false }],
-    attendance: { scheduled: 14, worked: index === 2 ? 11 : 12, leave: index === 2 ? 2 : 1, unrecorded: 1, records: [{ date: "2026-09-10", type: "Leave", days: index === 2 ? 2 : 1, status: "Recorded" }, { date: "2026-09-17", type: "Attendance", days: 1, status: "Missing record" }] },
     review: { date: "2026-09-14", reviewer: "Ayesha Karim · L&D Manager", readiness: junior ? "Developing · mentor support" : "Ready for role-matched interviews", strengths: junior ? "Consistent learning progress, asks thoughtful questions and responds well to feedback." : "Clear technical reasoning, collaborative delivery and well-documented project contributions.", next: junior ? "Complete the capstone and practise a short technical presentation." : `Strengthen advanced ${skillTwo} skills and prepare two project case studies.` },
   };
 });
