@@ -2,10 +2,10 @@
 title: 'Story 5.1: Administrator loads the approved holiday calendar'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '0a1482ab2d0dd708858e266a749e7211079ddc24'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
   - '{project-root}/docs/holiday-calendars/README.md'
@@ -144,3 +144,25 @@ A version is a complete calendar (all its years), so "add a year" = load the exi
 - `npm test` -- expected: all pass; live-DB holiday-calendar tests may fail only with schema-missing errors (42P01, PGRST205, PGRST202) until the migration is applied
 - `npm run build` -- expected: success
 - `npm run test:e2e` -- expected: pass except the holiday-calendar spec, which may fail only on schema-missing errors until the migration is applied
+
+## Auto Run Result
+
+Status: done (needs migration `supabase/migrations/20261017000000_holiday_calendars.sql`, ADDITIVE, and `npm run db:seed` to load the provisional calendar)
+
+**Summary:** Versioned, immutable holiday calendars in Supabase; a pure CSV parser/builder; `holidayCalendarStore` (`load` admin-only via the atomic `load_holiday_calendar` RPC, `active()` → `CalendarPolicy` for any signed-in role, `versions()` admin-only); `loadHolidayCalendarAction`; a "Holiday calendar" panel in the Administrator's Attendance & leave section; idempotent seed of `docs/holiday-calendars/bangladesh-2026.csv`.
+
+**Files:**
+- `supabase/migrations/20261017000000_holiday_calendars.sql` -- tables, guards, RLS (insert only through the RPC), RPC.
+- `src/domain/holiday-calendar.ts` -- CSV parse, multi-file build, policy conversion.
+- `src/server/holiday-calendar-store.ts` / `holiday-calendar-actions.ts` -- store and server action.
+- `src/components/holiday-calendar-panel.tsx`, `src/components/portal.tsx`, `src/app/page.tsx` -- UI and wiring (Administrator only).
+- `scripts/seed-employees.ts` -- provisional calendar seed.
+- Tests: `tests/holiday-calendar{,-store,-actions,-rls,-strip-types}.test.ts`, `tests/components/holiday-calendar-panel.test.tsx`, `tests/e2e/holiday-calendar.spec.ts`, wiring cases in `tests/components/portal.test.tsx` and `tests/page.test.tsx`.
+
+**Review:** 13 patches applied (2 medium, 11 low), 3 deferred (low), the rest rejected with reasons in the triage log.
+
+**Follow-up review recommended:** true -- two medium findings were patched (direct-insert bypass, >1000-row truncation) and none of the SQL has run against a database yet; the RLS test file is the check once the migration is applied.
+
+**Verification:** `npm run typecheck` clean; `npx vitest run` 1994 passed, 7 failed -- all in `tests/holiday-calendar-rls.test.ts`, schema-missing (PGRST205 table / PGRST202 function); `npm run build` succeeds; e2e 36 passed, 3 failed: `holiday-calendar.spec.ts` (PGRST202 on the RPC), and `portal.spec.ts` + `provision-staff.spec.ts` because the Next dev error indicator raised by the logged PGRST205 versions read covers the Sign out button. With the versions read stubbed to succeed, those two pass (3 passed); both pass on origin/main.
+
+**Residual risks:** SQL untested against Postgres (`current_user = 'service_role'` check, transaction-scoped `app.holiday_calendar_loading` setting, same-transaction dates guard, embedded count). Live tests briefly make a throwaway version active in the shared project.
