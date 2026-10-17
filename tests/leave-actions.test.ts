@@ -4,9 +4,11 @@ import { categoryForWorkingDays, countWorkingDays } from "@/domain/leave";
 import type { LeaveInput } from "@/server/leave-store";
 import type { SessionIdentity } from "@/server/session";
 
-const { getSession, record, revalidatePath } = vi.hoisted(() => ({
+const { getSession, record, update, cancel, revalidatePath } = vi.hoisted(() => ({
   getSession: vi.fn<() => Promise<SessionIdentity | null>>(),
   record: vi.fn<(session: SessionIdentity, employeeId: string, input: LeaveInput) => Promise<LeaveRecord>>(),
+  update: vi.fn<(session: SessionIdentity, id: string, input: LeaveInput) => Promise<LeaveRecord>>(),
+  cancel: vi.fn<(session: SessionIdentity, id: string) => Promise<LeaveRecord>>(),
   revalidatePath: vi.fn(),
 }));
 
@@ -15,12 +17,13 @@ vi.mock("../src/server/auth", () => ({ getSession }));
 // The Supabase store is covered by leave-store.test.ts and, against the shared project, leave-rls.test.ts.
 vi.mock("../src/server/leave-store", async importOriginal => ({
   ...(await importOriginal<typeof import("../src/server/leave-store")>()),
-  leaveStore: { record, listFor: vi.fn() },
+  leaveStore: { record, update, cancel, listFor: vi.fn() },
 }));
 
-const { recordLeaveAction } = await import("../src/server/leave-actions");
+const { cancelLeaveAction, recordLeaveAction, updateLeaveAction } = await import("../src/server/leave-actions");
 const {
-  LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError, LeaveValidationFailedError,
+  LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveCancelledError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveNotFoundError, LeaveOverlapError,
+  LeaveUnavailableError, LeaveValidationFailedError,
 } = await import("../src/server/leave-store");
 
 const blank = { error: "", message: "" };
@@ -48,6 +51,8 @@ const stored = (employeeId: string, input: LeaveInput): LeaveRecord => {
 beforeEach(() => {
   getSession.mockResolvedValue(NADIA);
   record.mockImplementation(async (_session, employeeId, input) => stored(employeeId, input));
+  update.mockImplementation(async (_session, id, input) => ({ ...stored("BS-1001", input), id }));
+  cancel.mockImplementation(async (_session, id) => ({ ...stored("BS-1001", MARCH), id, cancelledAt: "2026-10-17T09:00:00Z" }));
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
@@ -162,5 +167,112 @@ describe("recordLeaveAction", () => {
     const bug = new TypeError("bug");
     record.mockRejectedValue(bug);
     await expect(recordLeaveAction(blank, form(MARCH))).rejects.toBe(bug);
+  });
+});
+
+const ID = "3f1c2b7a-9d4e-4c1a-8b2f-6e5d4c3b2a10";
+
+describe("updateLeaveAction (Story 5.3)", () => {
+  it("updates Staff own leave, recounted, and reports the working days and category", async () => {
+    expect(await updateLeaveAction(blank, form({ id: ID, startDate: "2026-03-02", endDate: "2026-03-10" })))
+      .toEqual({ error: "", message: "Leave updated: 7 working days (4–14 working days)." });
+    expect(update).toHaveBeenCalledWith(NADIA, ID, { startDate: "2026-03-02", endDate: "2026-03-10" });
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("passes only the id and dates: the employee comes from the stored period (admin, manager)", async () => {
+    for (const session of [ADMIN, MANAGER]) {
+      getSession.mockResolvedValue(session);
+      expect((await updateLeaveAction(blank, form({ id: ` ${ID} `, employeeId: "BS-1003", ...MARCH }))).error).toBe("");
+      expect(update).toHaveBeenLastCalledWith(session, ID, MARCH);
+    }
+  });
+
+  it.each([[""], ["not-a-uuid"], ["123"]])("refuses an id that is not a uuid (%o) without a store call", async id => {
+    expect(await updateLeaveAction(blank, form({ id, ...MARCH }))).toEqual({ error: "Choose a valid leave period.", message: "" });
+    expect(await updateLeaveAction(blank, form(MARCH))).toEqual({ error: "Choose a valid leave period.", message: "" });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Staff form naming someone else without a store call", async () => {
+    expect(await updateLeaveAction(blank, form({ id: ID, employeeId: "BS-1002", ...MARCH }))).toEqual({ error: "You can only change your own leave.", message: "" });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an impossible date", { startDate: "2026-02-30", endDate: "2026-03-02" }, "Enter real dates for the start and end of the leave."],
+    ["a reversed range", { startDate: "2026-03-05", endDate: "2026-03-02" }, "The end date must be on or after the start date."],
+  ])("rejects %s without a store call", async (_name, dates, message) => {
+    expect(await updateLeaveAction(blank, form({ id: ID, ...dates }))).toEqual({ error: message, message: "" });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("refuses without a session", async () => {
+    getSession.mockResolvedValue(null);
+    expect((await updateLeaveAction(blank, form({ id: ID, ...MARCH }))).error).toMatch(/sign in/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["another employee's period", NADIA, new LeaveNotFoundError(), "This leave period no longer exists."],
+    ["a manager out of scope", MANAGER, new LeaveForbiddenError(), "You can only change leave for employees in your department."],
+    ["Staff forbidden", NADIA, new LeaveForbiddenError(), "You can only change your own leave."],
+    ["a cancelled period", NADIA, new LeaveCancelledError(), "This leave was cancelled and can no longer be changed."],
+    ["overlap with another period", NADIA, new LeaveOverlapError({ startDate: "2026-03-09", endDate: "2026-03-10" }),
+      "This overlaps leave already recorded from 9 Mar 2026 to 10 Mar 2026."],
+    ["a year outside the calendar", NADIA, new LeaveValidationFailedError("UNSUPPORTED_YEAR", { year: 2027, supportedYearStart: 2026, supportedYearEnd: 2026 }),
+      "The holiday calendar covers 2026 only, so leave in 2027 can't be counted yet."],
+    ["zero working days", NADIA, new LeaveValidationFailedError("ZERO_WORKING_DAYS"), "This period has no working days (only weekends and holidays)."],
+    ["no calendar", NADIA, new LeaveCalendarMissingError(), "No holiday calendar is loaded yet. Ask the Administrator to load it."],
+    ["a calendar loaded while saving", NADIA, new LeaveCalendarChangedError(), "The holiday calendar changed while saving. Try again."],
+    ["the database being down", NADIA, new LeaveUnavailableError(), "Leave is temporarily unavailable. Nothing was saved."],
+  ])("maps %s to its message and saves nothing", async (_name, session, error, message) => {
+    getSession.mockResolvedValue(session);
+    update.mockRejectedValue(error);
+    expect(await updateLeaveAction(blank, form({ id: ID, ...MARCH }))).toEqual({ error: message, message: "" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("rethrows an unexpected error", async () => {
+    const bug = new TypeError("bug");
+    update.mockRejectedValue(bug);
+    await expect(updateLeaveAction(blank, form({ id: ID, ...MARCH }))).rejects.toBe(bug);
+  });
+});
+
+describe("cancelLeaveAction (Story 5.3)", () => {
+  it("cancels Staff own leave and says it stays in the history", async () => {
+    expect(await cancelLeaveAction(blank, form({ id: ID, employeeId: "BS-1001" })))
+      .toEqual({ error: "", message: "Leave cancelled. It stays in the leave history and no longer counts." });
+    expect(cancel).toHaveBeenCalledWith(NADIA, ID);
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("cancels for an Administrator or manager with only the id", async () => {
+    for (const session of [ADMIN, MANAGER]) {
+      getSession.mockResolvedValue(session);
+      expect((await cancelLeaveAction(blank, form({ id: ID, employeeId: "BS-1003" }))).error).toBe("");
+      expect(cancel).toHaveBeenLastCalledWith(session, ID);
+    }
+  });
+
+  it("refuses a bad id, a Staff form naming someone else and a missing session, without a store call", async () => {
+    expect(await cancelLeaveAction(blank, form({ id: "nope" }))).toEqual({ error: "Choose a valid leave period.", message: "" });
+    expect(await cancelLeaveAction(blank, form({ id: ID, employeeId: "BS-1002" }))).toEqual({ error: "You can only change your own leave.", message: "" });
+    getSession.mockResolvedValue(null);
+    expect((await cancelLeaveAction(blank, form({ id: ID }))).error).toMatch(/sign in/i);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an already cancelled period", NADIA, new LeaveCancelledError(), "This leave was cancelled and can no longer be changed."],
+    ["another employee's period", NADIA, new LeaveNotFoundError(), "This leave period no longer exists."],
+    ["a manager out of scope", MANAGER, new LeaveForbiddenError(), "You can only change leave for employees in your department."],
+    ["the database being down", NADIA, new LeaveUnavailableError(), "Leave is temporarily unavailable. Nothing was saved."],
+  ])("maps %s to its message and saves nothing", async (_name, session, error, message) => {
+    getSession.mockResolvedValue(session);
+    cancel.mockRejectedValue(error);
+    expect(await cancelLeaveAction(blank, form({ id: ID }))).toEqual({ error: message, message: "" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

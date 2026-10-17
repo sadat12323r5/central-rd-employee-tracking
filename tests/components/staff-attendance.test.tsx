@@ -20,8 +20,10 @@ const { addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploym
   addEmploymentHistoryAction: vi.fn(), updateEmploymentHistoryAction: vi.fn(), removeEmploymentHistoryAction: vi.fn(),
 }));
 vi.mock("@/server/employment-history-actions", () => ({ addEmploymentHistoryAction, updateEmploymentHistoryAction, removeEmploymentHistoryAction }));
-const { recordLeaveAction } = vi.hoisted(() => ({ recordLeaveAction: vi.fn() }));
-vi.mock("@/server/leave-actions", () => ({ recordLeaveAction }));
+const { recordLeaveAction, updateLeaveAction, cancelLeaveAction } = vi.hoisted(() => ({
+  recordLeaveAction: vi.fn(), updateLeaveAction: vi.fn(), cancelLeaveAction: vi.fn(),
+}));
+vi.mock("@/server/leave-actions", () => ({ recordLeaveAction, updateLeaveAction, cancelLeaveAction }));
 
 import StaffAttendance, { StaffSelfService } from "@/components/staff-attendance";
 import { employees } from "@/data/employees";
@@ -691,7 +693,7 @@ describe("StaffAttendance leave (Story 5.2)", () => {
     expect(headings.indexOf("Leave")).toBe(headings.indexOf("Recent days") + 1);
     const section = within(screen.getByRole("region", { name: "Leave" }));
     const row = section.getByRole("table", { name: "Your leave" }).querySelectorAll("tbody tr")[0];
-    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["2 Mar 2026", "5 Mar 2026", "4", "4–14 working days", "Recorded"]);
+    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["2 Mar 2026", "5 Mar 2026", "4", "4–14 working days", "Recorded", "EditCancel leave"]);
     expect(section.getByRole("form", { name: "Record leave" })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
