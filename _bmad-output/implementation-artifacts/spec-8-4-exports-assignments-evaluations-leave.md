@@ -2,7 +2,7 @@
 title: 'Story 8.4: Exports include assignments, evaluations and leave'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-review'
+status: 'done'
 baseline_revision: '1ca750d65cd0ffe52d3170a2639f63d3784b3a83'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -123,3 +123,36 @@ Spanning records are dated by their start (not clamped) so a row always shows th
 - `npm test` -- expected: all pass except the 7 Story 5.3 live cases needing the unapplied leave update policy
 - `npm run build` -- expected: success
 - `npm run test:e2e` (`PLAYWRIGHT_CHANNEL=chromium`) -- expected: pass except `leave.spec` at its edit step (needs the 5.3 policy)
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Activity exports (single, bulk, manager-scoped) now include `assignment` rows (tracked assignments overlapping the period, plus backfilled past projects marked by provenance), `evaluation` rows (evaluator, outcome, and client feedback for Administrator/manager exporters), and `leave` rows (length category as the type, dates, working-day count, Recorded/Cancelled). Every new source is read through its own session-scoped store, and the export stays all-or-nothing.
+
+**Files changed:**
+- `src/domain/activity.ts` -- new types and sources, row builders, range-aware inclusion, span with `today`.
+- `src/server/activity-export.ts`, `src/server/activity-actions.ts` -- the four stores read in single and bulk exports; Unavailable errors mapped; client-feedback rule.
+- `src/components/activity-export-panel.tsx` -- restores a missing UTF-8 BOM on save (larger exports lost it in transit; found by e2e).
+- `docs/ARCHITECTURE.md` -- export section.
+- Tests: `tests/activity.test.ts`, `tests/activity-export.test.ts`, `tests/components/activity-export-panel.test.tsx`, `tests/e2e/activity-export.spec.ts` (manager export with seeded assignment, evaluation and leave on fixed subject BS-9193).
+
+**Review:** 24 findings (0 high, 0 medium, 20 low, 4 false).
+- Patched: the future-start open-assignment range, and the BOM test.
+- Deferred: none beyond the notes in deferred-work.md.
+- Rejected: everything else, with reasons in the triage log.
+
+**Follow-up review recommended:** false (patched: high 0, medium 0, low 2 entries).
+
+**Verification:**
+- `npm run typecheck` and `npm run build`: pass.
+- `npm test`: 2166 passed, 7 failed. All 7 are Story 5.3 live cases needing the unapplied `20261019000000_leave_records_update.sql`.
+- e2e:
+  - The full suite (before the review patch, which touched only domain code covered by unit tests) had 39 passed and 1 failed.
+  - After the patch, `activity-export.spec.ts` (3 tests) passes.
+  - `leave.spec.ts` fails only at its edit step ("Leave updated…" not shown), because it needs the same policy.
+
+**Residual risks:**
+- Bulk exports read all visible records of the four sources before filtering.
+- The e2e fixed subject accumulates rows across runs.
+- Client feedback is shown to every current exporter, by design.
