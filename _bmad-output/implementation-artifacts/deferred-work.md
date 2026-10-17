@@ -78,6 +78,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-7-4-skills-and-evaluation.md`
   summary: Skills cannot be renamed or removed, and evaluations keep no history (last write wins, no conflict check). A mistyped skill name stays on the profile.
   evidence: Story 7.4 asks only to rate skills and update the summary; removal/history were not requested.
+- source_spec: `_bmad-output/planning-artifacts/epics.md` (Stories 5.2, 5.3, 5.4, 8.4; unattended run 2026-10-17)
+  summary: Stories 5.2, 5.3, 5.4 and 8.4 are blocked until the System Owner approves the holiday calendar (jurisdiction, timezone, supported years, holiday dates) and Story 5.1 loads it.
+  evidence: 5.2 counts working days "against the calendar (weekends and holidays excluded)" and rejects "a year outside the calendar"; without 5.1's stored `CalendarPolicy` every save would fail or the run would have to invent holiday dates and supported years (a stakeholder decision, PRD §4.7). 5.3 builds on 5.2's leave records, 5.4 needs scheduled days from the calendar, and 8.4 depends on 5.2-5.3 for its leave rows. Unblock: close the Epic 5 action item, then build 5.1 first.
 
 ## Blocked: Stories 5.2, 5.3, 5.4 (recorded 2026-10-14 by the unattended story loop)
 

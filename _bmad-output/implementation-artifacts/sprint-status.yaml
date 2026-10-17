@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-01-2026 12:00
-last_updated: 14-10-2026 18:55
+last_updated: 17-10-2026 00:00
 project: AI-DLC-Employee-management
 project_key: NOKEY
 tracking_system: file-system
@@ -72,9 +72,9 @@ development_status:
 
   epic-5: backlog
   5-1-administrator-loads-the-approved-holiday-calendar: backlog # blocked: needs the System Owner-approved holiday calendar (action item open)
-  5-2-record-a-leave-period: backlog
-  5-3-edit-or-cancel-a-leave-period: backlog
-  5-4-attendance-views-use-real-data: backlog
+  5-2-record-a-leave-period: backlog # blocked: needs Story 5.1 holiday calendar (System Owner approval, action item open)
+  5-3-edit-or-cancel-a-leave-period: backlog # blocked: depends on Story 5.2, which needs the approved holiday calendar
+  5-4-attendance-views-use-real-data: backlog # blocked: scheduled days need the approved holiday calendar (Story 5.1)
   epic-5-retrospective: optional
 
   epic-6: done
@@ -92,7 +92,7 @@ development_status:
 
   epic-8: in-progress
   8-3-department-managers-export-within-their-department: review
-  8-4-exports-include-assignments-evaluations-and-leave: backlog # blocked: its leave rows need Stories 5.2-5.3 (leave records), which wait on the 5.1 System Owner-approved holiday calendar
+  8-4-exports-include-assignments-evaluations-and-leave: backlog # blocked: depends on Stories 5.2-5.3 (leave), blocked on the holiday calendar
   epic-8-retrospective: optional
 
 action_items:
