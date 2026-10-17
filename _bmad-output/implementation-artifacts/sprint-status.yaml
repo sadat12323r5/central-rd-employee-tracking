@@ -73,7 +73,7 @@ development_status:
   epic-5: in-progress
   5-1-administrator-loads-the-approved-holiday-calendar: review
   5-2-record-a-leave-period: in-progress
-  5-3-edit-or-cancel-a-leave-period: in-progress
+  5-3-edit-or-cancel-a-leave-period: review
   5-4-attendance-views-use-real-data: backlog
   epic-5-retrospective: optional
 

@@ -2,7 +2,7 @@
 title: 'Story 5.3: Edit or cancel a leave period'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-review'
+status: 'done'
 baseline_revision: '1f9687857c5e26321d36a852663c7b45dc396916'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -123,3 +123,28 @@ Editing always recounts with the active calendar (the trigger requires it), so a
 - `npm test` -- expected: all pass except live-DB tests that need the 5.1/5.2/5.3 migrations, failing only with schema-missing errors
 - `npm run build` -- expected: success
 - `npm run test:e2e` -- expected: pass except specs needing the new schema, failing only on schema-missing errors
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Leave periods can be edited (recounted against the active calendar, category reassigned, overlap ignoring the period itself) or cancelled (cancelled_at set, row kept, excluded from later overlap checks, never deleted) by exactly who may record them. The subject employee comes from the stored row. An ADDITIVE migration adds the leave_records update RLS policy; the 5.2 guard trigger already owns the update rules.
+
+**Files changed:**
+- `supabase/migrations/20261019000000_leave_records_update.sql` -- ADDITIVE: update RLS policy (same predicate as select/insert).
+- `src/server/leave-store.ts` -- `update`, `cancel`, `LeaveNotFoundError`, `LeaveCancelledError`; shared count/overlap helpers; write refusal mapping for updates.
+- `src/server/leave-actions.ts` -- `updateLeaveAction`, `cancelLeaveAction` (zod, matrix messages).
+- `src/components/leave-panel.tsx`, `src/app/styles.css` -- per-row Edit (inline form, per-open state) and Cancel leave (confirm, stays open while pending) on active rows.
+- Tests: `tests/leave-store.test.ts`, `tests/leave-actions.test.ts`, `tests/components/leave-panel.test.tsx`, `tests/components/portal.test.tsx`, `tests/components/staff-attendance.test.tsx`, `tests/leave-rls.test.ts` (live update/cancel cases incl. the 5.2 trigger's UPDATE branch), `tests/e2e/leave.spec.ts` (Staff edits then cancels).
+
+**Review:** 22 findings. Patched: 1 medium (empty update reported as cancelled), 9 low rows (stale edit state, cancel confirm pending/focus, missing tests, test tidy). Deferred: audit trail for edits/cancels (low). Rejected: manager-out-of-scope wording (RLS hides the row; still refused), no past-leave cut-off (no rule), panel-level/per-row status regions (precedent), unchanged-dates recount (by design), malformed UNSUPPORTED_YEAR (fallback exists), contradictory comments (false), exhaustive-deps (no ESLint), trigger refusal mapping (unreachable from the app).
+
+**Follow-up review recommended:** false (patched: high 0, medium 1, low 9).
+
+**Verification:**
+- `npm run typecheck` -- pass.
+- `npm run build` -- pass.
+- `npm test` -- 2114 passed, 9 failed, 19 skipped. All 9 failures are live-DB tests failing with PGRST205 (`holiday_calendar_versions` / `leave_records` missing: the 5.1 and 5.2 migrations are not applied to the shared project).
+- `npm run test:e2e` (PLAYWRIGHT_CHANNEL=chromium) -- every spec that loads the portal fails because employees-store reads leave_records (5.2) → PGRST205; `leave.spec.ts` fails at setup with "Could not read the active calendar (PGRST205)". No other failure cause seen.
+
+**Residual risks:** the update policy and all live/e2e edit and cancel cases are unverified until the 5.1, 5.2 and 5.3 migrations are applied; e2e reuses BS-8390 and kept (cancelled) rows accumulate across runs (pre-existing 5.2 pattern).
