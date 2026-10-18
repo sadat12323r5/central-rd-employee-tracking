@@ -6,7 +6,8 @@ import { signIn } from "./staff";
 import { serviceClient } from "./supabase-admin";
 
 // Story 5.2: a Staff member records their own leave in the staff portal and sees it in their leave list
-// with its working days and category.
+// with its working days and category. Story 5.3: they then edit its dates (recounted) and cancel it; it stays
+// in the list as "Cancelled".
 // Leave rows can never be deleted (and they pin their employee: employees.employee_id is ON DELETE
 // RESTRICT), so this spec cannot use the BS-98nn employees global-setup.ts creates and global-teardown.ts
 // deletes. Like the backfill spec, it reuses a fixed throwaway employee (BS-8390, in the Story 5.2 block
@@ -17,7 +18,7 @@ import { serviceClient } from "./supabase-admin";
 // Calendar: the spec counts against whatever LIVE calendar is active in the shared project (the provisional
 // Bangladesh calendar, docs/holiday-calendars/bangladesh-2026.csv, loaded by db:seed) and never loads one;
 // it fails with a clear message when none is active or it does not cover 2026.
-// Needs the holiday_calendars, leave_records and holiday_calendar_purpose migrations applied.
+// Needs the holiday_calendars, leave_records, holiday_calendar_purpose and (for the edit / cancel steps) leave_records_update migrations applied.
 const run = randomBytes(4).toString("hex");
 const SUBJECT = { id: "BS-8390", name: "E2E Leave Subject" };
 
@@ -38,7 +39,7 @@ async function requireActiveCalendar(service: SupabaseClient) {
   }
 }
 
-test("a Staff member records their own leave and sees it with its working days and category", async ({ page }) => {
+test("a Staff member records their own leave, sees it with its working days and category, then edits and cancels it", async ({ page }) => {
   const service = serviceClient();
   const email = `${STAFF_EMAIL_PREFIX}${process.env.E2E_STAFF_RUN ?? run}-leave@example.test`;
   const password = `E2e-${randomBytes(18).toString("base64url")}`;
@@ -61,15 +62,21 @@ test("a Staff member records their own leave and sees it with its working days a
     await page.goto("/");
     await signIn(page, email, password);
     const section = page.getByRole("region", { name: "Leave" });
-    await expect(section.getByText("You have not recorded any leave yet.")).toBeVisible();
+    // Earlier runs' periods stay listed as Cancelled (leave is never deleted), so only "no active leave" is checked:
+    // active periods are the only rows with an Edit control.
+    await expect(section.getByRole("heading", { name: "Record leave" })).toBeVisible();
+    await expect(section.getByRole("button", { name: /^Edit leave/ })).toHaveCount(0);
 
     // 25–27 Mar 2026: 26 Mar is Independence Day, so 2 working days.
     const form = section.getByRole("form", { name: "Record leave" });
     await form.getByLabel("First day of leave").fill("2026-03-25");
     await form.getByLabel("Last day of leave").fill("2026-03-27");
     await form.getByRole("button", { name: "Record leave" }).click();
-    await expect(section.getByRole("status")).toHaveText("Leave recorded: 2 working days (1–3 working days).");
-    const row = section.getByRole("table", { name: "Your leave" }).getByRole("row").filter({ hasText: "25 Mar 2026" });
+    // Several live regions share the section (record, edit, cancel), so the message is found by its text.
+    await expect(section.getByText("Leave recorded: 2 working days (1–3 working days).")).toBeVisible();
+    // The active row (the one with controls): cancelled rows with the same dates may remain from earlier runs.
+    const row = section.getByRole("table", { name: "Your leave" }).getByRole("row")
+      .filter({ has: page.getByRole("button", { name: "Edit leave: 25 Mar 2026 to 27 Mar 2026" }) });
     await expect(row).toContainText("27 Mar 2026");
     await expect(row).toContainText("1–3 working days");
 
@@ -80,12 +87,38 @@ test("a Staff member records their own leave and sees it with its working days a
     await expect(section.getByRole("alert")).toHaveText("This overlaps leave already recorded from 25 Mar 2026 to 27 Mar 2026.");
 
     // Persisted with the count, category and calendar version.
-    const { data, error } = await service.from("leave_records").select("start_date,end_date,working_days,category,calendar_version_id,cancelled_at")
+    const { data, error } = await service.from("leave_records").select("id,start_date,end_date,working_days,category,calendar_version_id,cancelled_at")
       .eq("employee_id", SUBJECT.id).is("cancelled_at", null);
     expect(error).toBeNull();
     expect(data).toHaveLength(1);
     expect(data![0]).toMatchObject({ start_date: "2026-03-25", end_date: "2026-03-27", working_days: 2, category: "ONE_TO_THREE" });
     expect(data![0].calendar_version_id).toBeTruthy();
+
+    // Story 5.3: edit the dates (recounted: 25–31 Mar has 26 Mar and the weekend off, so 4 working days, 4–14).
+    await row.getByRole("button", { name: "Edit leave: 25 Mar 2026 to 27 Mar 2026" }).click();
+    // The row's controls are replaced by the form while editing, so the form is found in the section.
+    const edit = section.getByRole("form", { name: "Edit leave: 25 Mar 2026 to 27 Mar 2026" });
+    await expect(edit.getByLabel("First day of leave")).toHaveValue("2026-03-25");
+    await edit.getByLabel("Last day of leave").fill("2026-03-31");
+    await edit.getByRole("button", { name: "Save dates" }).click();
+    await expect(section.getByText("Leave updated: 4 working days (4–14 working days).")).toBeVisible();
+    const edited = section.getByRole("table", { name: "Your leave" }).getByRole("row")
+      .filter({ has: page.getByRole("button", { name: "Cancel leave: 25 Mar 2026 to 31 Mar 2026" }) });
+    await expect(edited).toContainText("4–14 working days");
+
+    // Cancel it (confirm first): it stays in the list as Cancelled, without controls (checked in the database
+    // below); no active period remains.
+    await edited.getByRole("button", { name: "Cancel leave: 25 Mar 2026 to 31 Mar 2026" }).click();
+    await section.getByRole("form", { name: "Cancel leave: 25 Mar 2026 to 31 Mar 2026" }).getByRole("button", { name: "Confirm cancel" }).click();
+    await expect(section.getByText("Leave cancelled. It stays in the leave history and no longer counts.")).toBeVisible();
+    await expect(section.getByRole("button", { name: /^(Edit|Cancel) leave/ })).toHaveCount(0);
+    await expect(section.getByRole("table", { name: "Your leave" }).getByRole("row").filter({ hasText: "31 Mar 2026" }).first()).toContainText("Cancelled");
+
+    const after = await service.from("leave_records").select("start_date,end_date,working_days,category,cancelled_at").eq("id", data![0].id);
+    expect(after.error).toBeNull();
+    expect(after.data).toHaveLength(1);
+    expect(after.data![0]).toMatchObject({ start_date: "2026-03-25", end_date: "2026-03-31", working_days: 4, category: "FOUR_TO_FOURTEEN" });
+    expect(after.data![0].cancelled_at).not.toBeNull();
   } finally {
     await cancelLeave(service).catch(() => {});
     await service.from("employees").update({ archived_at: new Date().toISOString(), auth_user_id: null }).eq("employee_id", SUBJECT.id);

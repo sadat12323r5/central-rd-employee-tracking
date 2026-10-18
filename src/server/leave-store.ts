@@ -21,7 +21,12 @@ import { getUserClient } from "./supabase";
 // its category comes from `categoryForWorkingDays`, and both are stored with the calendar version used. A period
 // that intersects (inclusive) another non-cancelled period of the same employee is refused here first; the
 // guard trigger (per-employee advisory lock) is the backstop and raises 23514 `leave_overlap`, mapped to the
-// same error. There is no edit, cancel or delete path in 5.2. This module never uses the service role.
+// same error. This module never uses the service role.
+//
+// Story 5.3: a period can be edited (new dates, recounted against the active calendar, overlap ignoring the
+// period itself) or cancelled (cancelled_at set; the row stays and no longer counts). The subject employee
+// comes from the stored row, never the caller; who may change it is exactly who may record it. A cancelled
+// period can no longer be changed (here, and by the guard trigger). Nothing is ever deleted.
 
 export type LeaveInput = { startDate: string; endDate: string };
 
@@ -38,6 +43,18 @@ export interface LeaveStore {
    * narrows the list to one employee (staff asking for anyone else, or a manager outside the subtree: `[]`).
    */
   listFor(session: SessionIdentity, employeeId?: string): Promise<LeaveRecord[]>;
+  /**
+   * Changes the dates of an active period (recounted against the active calendar; the overlap check ignores
+   * the period itself). The employee comes from the stored row. Throws LeaveNotFoundError (unknown, not
+   * visible, or another employee's for staff), LeaveForbiddenError (a manager outside the subtree),
+   * LeaveCancelledError, and the errors `record` throws for the new dates.
+   */
+  update(session: SessionIdentity, id: string, input: LeaveInput): Promise<LeaveRecord>;
+  /**
+   * Cancels an active period (sets `cancelled_at`; the row is kept and never deleted). Throws
+   * LeaveNotFoundError, LeaveForbiddenError, LeaveCancelledError or LeaveUnavailableError.
+   */
+  cancel(session: SessionIdentity, id: string): Promise<LeaveRecord>;
 }
 
 /** The session may not record this employee's leave (another employee for staff, outside a manager's subtree). */
@@ -45,6 +62,22 @@ export class LeaveForbiddenError extends Error {
   constructor() {
     super("Only the employee, an Administrator, or a manager for their own department subtree can record leave.");
     this.name = "LeaveForbiddenError";
+  }
+}
+
+/** No leave period with this id is visible to the session (unknown, not visible, or another employee's for staff). */
+export class LeaveNotFoundError extends Error {
+  constructor() {
+    super("This leave period no longer exists.");
+    this.name = "LeaveNotFoundError";
+  }
+}
+
+/** The period was cancelled and can no longer be changed (or cancelled again). */
+export class LeaveCancelledError extends Error {
+  constructor() {
+    super("This leave was cancelled and can no longer be changed.");
+    this.name = "LeaveCancelledError";
   }
 }
 
@@ -157,7 +190,8 @@ export type LeaveStoreClients = {
 export function createLeaveStore({ userClient, scope = managerScope, calendar = holidayCalendarStore }: LeaveStoreClients): LeaveStore {
   type Query<T> = (table: ReturnType<SupabaseClient["from"]>) => PromiseLike<Result<T>>;
 
-  async function run<T>(query: Query<T>, refusal: (error: unknown) => Error = cause => new LeaveUnavailableError({ cause })): Promise<T> {
+  /** Runs a query whose "no row" is a legitimate answer (maybeSingle): null means not found. */
+  async function runMaybe<T>(query: Query<T>, refusal: (error: unknown) => Error = cause => new LeaveUnavailableError({ cause })): Promise<T | null> {
     let result: Result<T>;
     try {
       result = await query((await userClient()).from(TABLE));
@@ -165,8 +199,13 @@ export function createLeaveStore({ userClient, scope = managerScope, calendar = 
       throw new LeaveUnavailableError({ cause });
     }
     if (result.error) throw refusal(result.error);
-    if (result.data === null || result.data === undefined) throw new LeaveUnavailableError({ cause: "no data returned" });
-    return result.data;
+    return result.data ?? null;
+  }
+
+  async function run<T>(query: Query<T>, refusal?: (error: unknown) => Error): Promise<T> {
+    const data = await runMaybe(query, refusal);
+    if (data === null) throw new LeaveUnavailableError({ cause: "no data returned" });
+    return data;
   }
 
   /** The employee ids in a manager's subtree. A scope that cannot be read is "unavailable", never "allowed" or "nothing". */
@@ -204,53 +243,118 @@ export function createLeaveStore({ userClient, scope = managerScope, calendar = 
     }
   }
 
-  /** Maps a refused insert to the store's typed errors; anything unrecognised is "unavailable". */
-  function insertRefusal(input: LeaveInput, years: { supportedYearStart: number; supportedYearEnd: number }) {
+  /**
+   * Maps a refused insert or update to the store's typed errors; anything unrecognised is "unavailable".
+   * `input` / `years` are the period being saved (absent for a cancel).
+   */
+  function writeRefusal(input?: LeaveInput, years?: { supportedYearStart: number; supportedYearEnd: number }) {
     return (error: unknown): Error => {
       const { code, message = "", details = "" } = (error as DbError | null) ?? {};
       if (code === "42501") return new LeaveForbiddenError();
+      if (code === "23514" && message.includes("was cancelled")) return new LeaveCancelledError();
       if (code === "23514" && message.includes("leave_overlap")) {
         const match = OVERLAP_DETAIL.exec(details.trim());
         return new LeaveOverlapError(match ? { startDate: match[1], endDate: match[2] } : null);
       }
       if (code === "23514" && message.includes("leave_calendar_changed")) return new LeaveCalendarChangedError();
       if (code === "23514" && message.includes("leave_outside_calendar")) {
-        return new LeaveValidationFailedError("UNSUPPORTED_YEAR", { year: outsideYear(input, years), ...years });
+        return new LeaveValidationFailedError("UNSUPPORTED_YEAR", input && years ? { year: outsideYear(input, years), ...years } : {});
       }
       if (code === "23503" && `${message} ${details}`.includes("employee_id")) return new LeaveEmployeeNotFoundError();
       return new LeaveUnavailableError({ cause: error });
     };
   }
 
+  /**
+   * Counts `input` against the active calendar: the working days, their category, the version id and the
+   * calendar's years. Throws LeaveCalendarMissingError, LeaveValidationFailedError or LeaveUnavailableError.
+   */
+  async function counted(session: SessionIdentity, input: LeaveInput) {
+    const { version, policy } = await activeCalendar(session);
+    const years = { supportedYearStart: policy.supportedYearStart, supportedYearEnd: policy.supportedYearEnd };
+    let workingDays: number;
+    try {
+      workingDays = countWorkingDays(input.startDate, input.endDate, policy);
+    } catch (cause) {
+      if (!(cause instanceof LeaveValidationError)) throw cause;
+      throw new LeaveValidationFailedError(cause.code, cause.code === "UNSUPPORTED_YEAR" ? { year: outsideYear(input, years), ...years } : {});
+    }
+    return { workingDays, category: categoryForWorkingDays(workingDays).category, versionId: version.id, years };
+  }
+
+  /**
+   * Store-level overlap check (inclusive, non-cancelled only, `except` = the period being edited); the
+   * guard trigger repeats it under a lock.
+   */
+  async function refuseOverlap(employeeId: string, input: LeaveInput, except?: string) {
+    const overlapping = await run<Pick<LeaveRow, "start_date" | "end_date">[]>(t => {
+      const base = t.select("start_date,end_date").eq("employee_id", employeeId).is("cancelled_at", null);
+      return (except === undefined ? base : base.neq("id", except))
+        .lte("start_date", input.endDate).gte("end_date", input.startDate)
+        .order("start_date").limit(1).returns<Pick<LeaveRow, "start_date" | "end_date">[]>();
+    });
+    if (overlapping.length > 0) throw new LeaveOverlapError({ startDate: overlapping[0].start_date, endDate: overlapping[0].end_date });
+  }
+
+  /**
+   * The active period `id` the session may change. The subject employee comes from the stored row: Staff
+   * see another employee's period as not found; a manager outside the subtree is forbidden.
+   */
+  async function changeable(session: SessionIdentity, id: string): Promise<LeaveRow> {
+    if (!session) throw new LeaveForbiddenError();
+    const current = await runMaybe<LeaveRow>(t => t.select(COLUMNS).eq("id", id).maybeSingle<LeaveRow>());
+    if (!current) throw new LeaveNotFoundError();
+    if (session.role === "staff" && current.employee_id !== session.employeeId) throw new LeaveNotFoundError();
+    await authorize(session, current.employee_id);
+    if (current.cancelled_at !== null && current.cancelled_at !== undefined) throw new LeaveCancelledError();
+    return current;
+  }
+
+  /**
+   * Writes `values` to the active period `current`, filtered by id, employee and `cancelled_at is null`, so a
+   * period cancelled in between changes nothing (reported as cancelled; a row no longer visible as not found).
+   */
+  async function write(current: LeaveRow, values: Partial<LeaveRow>, refusal: (error: unknown) => Error): Promise<LeaveRecord> {
+    const saved = await runMaybe<LeaveRow>(t => t.update(values)
+      .eq("id", current.id).eq("employee_id", current.employee_id).is("cancelled_at", null)
+      .select(COLUMNS).maybeSingle<LeaveRow>(), refusal);
+    if (!saved) {
+      // Nothing matched: cancelled in between, or no longer visible / changeable for this session (RLS).
+      const now = await runMaybe<Pick<LeaveRow, "cancelled_at">>(t => t.select("cancelled_at").eq("id", current.id).maybeSingle<Pick<LeaveRow, "cancelled_at">>());
+      if (now && now.cancelled_at !== null && now.cancelled_at !== undefined) throw new LeaveCancelledError();
+      throw new LeaveNotFoundError();
+    }
+    // Defence in depth: the stored row must still belong to the same employee.
+    if (saved.employee_id !== current.employee_id || saved.id !== current.id) throw new LeaveUnavailableError({ cause: "changed another row" });
+    return toLeaveRecord(saved);
+  }
+
   return {
     async record(session, employeeId, input) {
       await authorize(session, employeeId);
-      const { version, policy } = await activeCalendar(session);
-      const years = { supportedYearStart: policy.supportedYearStart, supportedYearEnd: policy.supportedYearEnd };
-
-      let workingDays: number;
-      try {
-        workingDays = countWorkingDays(input.startDate, input.endDate, policy);
-      } catch (cause) {
-        if (!(cause instanceof LeaveValidationError)) throw cause;
-        throw new LeaveValidationFailedError(cause.code, cause.code === "UNSUPPORTED_YEAR" ? { year: outsideYear(input, years), ...years } : {});
-      }
-      const { category } = categoryForWorkingDays(workingDays);
-
-      // Store-level overlap check (inclusive, non-cancelled only); the guard trigger repeats it under a lock.
-      const overlapping = await run<Pick<LeaveRow, "start_date" | "end_date">[]>(t => t.select("start_date,end_date")
-        .eq("employee_id", employeeId).is("cancelled_at", null)
-        .lte("start_date", input.endDate).gte("end_date", input.startDate)
-        .order("start_date").limit(1).returns<Pick<LeaveRow, "start_date" | "end_date">[]>());
-      if (overlapping.length > 0) throw new LeaveOverlapError({ startDate: overlapping[0].start_date, endDate: overlapping[0].end_date });
+      const { workingDays, category, versionId, years } = await counted(session, input);
+      await refuseOverlap(employeeId, input);
 
       const saved = await run<LeaveRow>(t => t.insert({
         employee_id: employeeId, start_date: input.startDate, end_date: input.endDate, working_days: workingDays,
-        category, calendar_version_id: version.id,
-      }).select(COLUMNS).single<LeaveRow>(), insertRefusal(input, years));
+        category, calendar_version_id: versionId,
+      }).select(COLUMNS).single<LeaveRow>(), writeRefusal(input, years));
       // Defence in depth: the stored row must belong to the employee asked for.
       if (saved.employee_id !== employeeId) throw new LeaveUnavailableError({ cause: "saved for another employee" });
       return toLeaveRecord(saved);
+    },
+    async update(session, id, input) {
+      const current = await changeable(session, id);
+      const { workingDays, category, versionId, years } = await counted(session, input);
+      await refuseOverlap(current.employee_id, input, current.id);
+      return write(current, {
+        start_date: input.startDate, end_date: input.endDate, working_days: workingDays, category, calendar_version_id: versionId,
+      }, writeRefusal(input, years));
+    },
+    async cancel(session, id) {
+      const current = await changeable(session, id);
+      // The guard trigger stamps the time (now()); the value sent only marks the period cancelled.
+      return write(current, { cancelled_at: new Date().toISOString() }, writeRefusal());
     },
     async listFor(session, employeeId) {
       let filter: { eq: string } | { in: string[] } | null = null;

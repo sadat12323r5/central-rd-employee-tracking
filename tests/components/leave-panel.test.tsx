@@ -5,8 +5,12 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import type { LeaveRecord } from "@/data/employees";
 
-const { recordMock } = vi.hoisted(() => ({ recordMock: vi.fn() }));
-vi.mock("@/server/leave-actions", () => ({ recordLeaveAction: (...args: unknown[]) => recordMock(...args) }));
+const { recordMock, updateMock, cancelMock } = vi.hoisted(() => ({ recordMock: vi.fn(), updateMock: vi.fn(), cancelMock: vi.fn() }));
+vi.mock("@/server/leave-actions", () => ({
+  recordLeaveAction: (...args: unknown[]) => recordMock(...args),
+  updateLeaveAction: (...args: unknown[]) => updateMock(...args),
+  cancelLeaveAction: (...args: unknown[]) => cancelMock(...args),
+}));
 
 import LeavePanel from "@/components/leave-panel";
 
@@ -22,7 +26,7 @@ const recordForm = () => within(screen.getByRole("form", { name: "Record leave" 
 const setDate = (label: string, value: string) => fireEvent.change(recordForm().getByLabelText(label), { target: { value } });
 
 describe("LeavePanel (Story 5.2)", () => {
-  beforeEach(() => recordMock.mockReset());
+  beforeEach(() => { recordMock.mockReset(); updateMock.mockReset(); cancelMock.mockReset(); });
 
   it("lists periods in the given order with D MMM YYYY dates, working days, category label and colour, and Cancelled", async () => {
     const { container } = render(<LeavePanel employeeId="BS-1001" records={records} canEdit={false} />);
@@ -62,7 +66,7 @@ describe("LeavePanel (Story 5.2)", () => {
     setDate("First day of leave", "2026-03-02");
     setDate("Last day of leave", "2026-03-05");
     await user.click(recordForm().getByRole("button", { name: "Record leave" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Leave recorded: 4 working days (4–14 working days).");
+    expect(await screen.findByText("Leave recorded: 4 working days (4–14 working days).")).toHaveAttribute("role", "status");
     expect(Object.fromEntries(recordMock.mock.calls[0][1] as FormData)).toEqual({ employeeId: "BS-1001", startDate: "2026-03-02", endDate: "2026-03-05" });
     expect(recordForm().getByLabelText("First day of leave")).toHaveValue("");
   });
@@ -77,5 +81,113 @@ describe("LeavePanel (Story 5.2)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("This overlaps leave already recorded from 2 Mar 2026 to 5 Mar 2026.");
     expect(recordForm().getByLabelText("First day of leave")).toHaveValue("2026-03-05");
     expect(recordForm().getByLabelText("Last day of leave")).toHaveValue("2026-03-10");
+  });
+});
+
+describe("LeavePanel edit and cancel (Story 5.3)", () => {
+  beforeEach(() => { recordMock.mockReset(); updateMock.mockReset(); cancelMock.mockReset(); });
+
+  it("offers Edit and Cancel leave only on active periods, and only when it can edit", async () => {
+    const { container, unmount } = render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    const rows = within(screen.getByRole("table", { name: "Recorded leave" })).getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByRole("button", { name: "Edit leave: 1 Jun 2026 to 19 Jun 2026" })).toBeInTheDocument();
+    expect(within(rows[0]).getByRole("button", { name: "Cancel leave: 1 Jun 2026 to 19 Jun 2026" })).toBeInTheDocument();
+    expect(within(rows[1]).queryByRole("button")).not.toBeInTheDocument(); // cancelled
+    expect(within(rows[2]).getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" })).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+    unmount();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit={false} />);
+    expect(screen.queryByRole("button", { name: /Edit leave|Cancel leave/ })).not.toBeInTheDocument();
+  });
+
+  it("edits inline with the dates prefilled, submits the id and dates, and closes on success", async () => {
+    updateMock.mockResolvedValue({ error: "", message: "Leave updated: 7 working days (4–14 working days)." });
+    const user = userEvent.setup();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    await user.click(screen.getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" }));
+    const edit = within(screen.getByRole("form", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" }));
+    expect(edit.getByLabelText("First day of leave")).toHaveValue("2026-03-02");
+    expect(edit.getByLabelText("Last day of leave")).toHaveValue("2026-03-05");
+    fireEvent.change(edit.getByLabelText("Last day of leave"), { target: { value: "2026-03-10" } });
+    await user.click(edit.getByRole("button", { name: "Save dates" }));
+    expect(await screen.findByText("Leave updated: 7 working days (4–14 working days).")).toHaveAttribute("role", "status");
+    expect(Object.fromEntries(updateMock.mock.calls[0][1] as FormData)).toEqual({ id: "a", employeeId: "BS-1001", startDate: "2026-03-02", endDate: "2026-03-10" });
+    expect(screen.queryByRole("form", { name: /^Edit leave/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" })).toHaveFocus();
+  });
+
+  it("keeps the edit form open with the error after a refusal", async () => {
+    updateMock.mockResolvedValue({ error: "This overlaps leave already recorded from 1 Jun 2026 to 19 Jun 2026.", message: "" });
+    const user = userEvent.setup();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    await user.click(screen.getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" }));
+    const edit = within(screen.getByRole("form", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" }));
+    fireEvent.change(edit.getByLabelText("Last day of leave"), { target: { value: "2026-06-02" } });
+    await user.click(edit.getByRole("button", { name: "Save dates" }));
+    expect(await edit.findByRole("alert")).toHaveTextContent("This overlaps leave already recorded from 1 Jun 2026 to 19 Jun 2026.");
+    expect(edit.getByLabelText("Last day of leave")).toHaveValue("2026-06-02");
+  });
+
+  it("reopens the edit form fresh: no old alert after a refusal, and no old success message after open and close", async () => {
+    updateMock.mockResolvedValueOnce({ error: "This overlaps leave already recorded from 1 Jun 2026 to 19 Jun 2026.", message: "" });
+    const user = userEvent.setup();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    const editButton = () => screen.getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" });
+    await user.click(editButton());
+    await user.click(screen.getByRole("button", { name: "Save dates" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Don't save" }));
+    await user.click(editButton());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    updateMock.mockResolvedValueOnce({ error: "", message: "Leave updated: 4 working days (4–14 working days)." });
+    await user.click(screen.getByRole("button", { name: "Save dates" }));
+    expect(await screen.findByText("Leave updated: 4 working days (4–14 working days).")).toBeInTheDocument(); // kept after close
+    await user.click(editButton());
+    await user.click(screen.getByRole("button", { name: "Don't save" }));
+    expect(screen.queryByText("Leave updated: 4 working days (4–14 working days).")).not.toBeInTheDocument();
+  });
+
+  it("closes the edit form without saving", async () => {
+    const user = userEvent.setup();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    await user.click(screen.getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" }));
+    await user.click(screen.getByRole("button", { name: "Don't save" }));
+    expect(screen.queryByRole("form", { name: /^Edit leave/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit leave: 2 Mar 2026 to 5 Mar 2026" })).toHaveFocus();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("asks for confirmation before cancelling, stays open showing Cancelling… while pending, then shows the message", async () => {
+    let finish: (value: unknown) => void = () => {};
+    cancelMock.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const user = userEvent.setup();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    await user.click(screen.getByRole("button", { name: "Cancel leave: 2 Mar 2026 to 5 Mar 2026" }));
+    expect(cancelMock).not.toHaveBeenCalled();
+    const confirm = within(screen.getByRole("form", { name: "Cancel leave: 2 Mar 2026 to 5 Mar 2026" }));
+    expect(confirm.getByRole("button", { name: "Confirm cancel" })).toHaveFocus();
+    await user.click(confirm.getByRole("button", { name: "Confirm cancel" }));
+    expect(await confirm.findByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    finish({ error: "", message: "Leave cancelled. It stays in the leave history and no longer counts." });
+    expect(await screen.findByText("Leave cancelled. It stays in the leave history and no longer counts.")).toHaveAttribute("role", "status");
+    expect(Object.fromEntries(cancelMock.mock.calls[0][1] as FormData)).toEqual({ id: "a", employeeId: "BS-1001" });
+  });
+
+  it("keeps the leave when the confirmation is dismissed, and shows a cancel refusal as an alert", async () => {
+    cancelMock.mockResolvedValue({ error: "This leave was cancelled and can no longer be changed.", message: "" });
+    const user = userEvent.setup();
+    render(<LeavePanel employeeId="BS-1001" records={records} canEdit />);
+    await user.click(screen.getByRole("button", { name: "Cancel leave: 2 Mar 2026 to 5 Mar 2026" }));
+    await user.click(screen.getByRole("button", { name: "Keep leave" }));
+    expect(cancelMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cancel leave: 2 Mar 2026 to 5 Mar 2026" }));
+    await user.click(screen.getByRole("button", { name: "Confirm cancel" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("This leave was cancelled and can no longer be changed.");
+    // The confirmation stays open after a refusal: retry, or keep the leave.
+    const confirm = within(screen.getByRole("form", { name: "Cancel leave: 2 Mar 2026 to 5 Mar 2026" }));
+    expect(confirm.getByRole("button", { name: "Confirm cancel" })).toBeEnabled();
+    await user.click(confirm.getByRole("button", { name: "Keep leave" }));
+    expect(screen.queryByRole("form", { name: /^Cancel leave/ })).not.toBeInTheDocument();
   });
 });

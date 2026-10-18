@@ -7,18 +7,20 @@ import {
   HolidayCalendarForbiddenError, HolidayCalendarUnavailableError, type CalendarVersion, type HolidayCalendarStore,
 } from "@/server/holiday-calendar-store";
 import {
-  createLeaveStore, LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError,
-  LeaveValidationFailedError, toLeaveRecord, type LeaveRow,
+  createLeaveStore, LeaveCalendarChangedError, LeaveCalendarMissingError, LeaveCancelledError, LeaveEmployeeNotFoundError, LeaveForbiddenError, LeaveNotFoundError,
+  LeaveOverlapError, LeaveUnavailableError, LeaveValidationFailedError, toLeaveRecord, type LeaveRow,
 } from "@/server/leave-store";
 import { ManagerScopeUnavailableError, type ManagerScope } from "@/server/manager-scope";
 import { many, pagedClient } from "./support/paged-client";
 
-type Mode = "ok" | "error" | "throw" | "foreign" | "overlap" | "overlap-bare" | "calendar-changed" | "outside" | "denied" | "fk-employee" | "fk-other" | "check";
+type Mode = "ok" | "error" | "throw" | "foreign" | "overlap" | "overlap-bare" | "calendar-changed" | "outside" | "denied" | "fk-employee" | "fk-other" | "check"
+  | "was-cancelled" | "race-cancelled" | "race-hidden";
 type Call = { table: string; method: string; args: unknown[] };
 
 /**
- * Minimal stand-in for the supabase-js query builder: records every call and applies eq / in / is / lte / gte
- * filters to rows. An insert appends the row (with an id and created_at) and returns it.
+ * Minimal stand-in for the supabase-js query builder: records every call and applies eq / neq / in / is / lte /
+ * gte filters to rows. An insert appends the row (with an id and created_at) and returns it; an update changes
+ * the matching rows and returns the first (maybeSingle). The error modes apply to inserts and updates alike.
  */
 function fakeClient(rows: LeaveRow[], mode: Mode = "ok") {
   const calls: Call[][] = [];
@@ -31,7 +33,9 @@ function fakeClient(rows: LeaveRow[], mode: Mode = "ok") {
       const result = () => {
         if (mode === "error") return { data: null, error: { code: "PGRST205", message: "relation does not exist" } };
         const inserted = query.find(c => c.method === "insert");
-        if (inserted) {
+        const updated = query.find(c => c.method === "update");
+        if (inserted || updated) {
+          if (mode === "was-cancelled") return { data: null, error: { code: "23514", message: "leave record a was cancelled and can no longer be changed" } };
           if (mode === "overlap") return { data: null, error: { code: "23514", message: "leave_overlap", details: "2026-03-01,2026-03-04" } };
           if (mode === "overlap-bare") return { data: null, error: { code: "23514", message: "leave_overlap" } };
           if (mode === "calendar-changed") return { data: null, error: { code: "23514", message: "leave_calendar_changed" } };
@@ -40,24 +44,37 @@ function fakeClient(rows: LeaveRow[], mode: Mode = "ok") {
           if (mode === "denied") return { data: null, error: { code: "42501", message: "new row violates row-level security policy" } };
           if (mode === "fk-employee") return { data: null, error: { code: "23503", message: "violates foreign key constraint", details: "Key (employee_id)=(BS-1999) is not present in table \"employees\"." } };
           if (mode === "fk-other") return { data: null, error: { code: "23503", message: "violates foreign key constraint", details: "Key (calendar_version_id)=(x) is not present." } };
-          const row = { id: "new-id", created_at: "2026-10-17T08:00:00Z", cancelled_at: null, ...(inserted.args[0] as object) } as LeaveRow;
-          rows.push(row);
-          return { data: mode === "foreign" ? { ...row, employee_id: "BS-1999" } : row, error: null };
         }
         const filters = query.filter(c => c.method === "eq" || c.method === "is").map(c => c.args as [string, unknown]);
+        const excluded = query.filter(c => c.method === "neq").map(c => c.args as [string, unknown]);
         const within = query.find(c => c.method === "in")?.args as [string, string[]] | undefined;
         const lte = query.filter(c => c.method === "lte").map(c => c.args as [string, string]);
         const gte = query.filter(c => c.method === "gte").map(c => c.args as [string, string]);
         const value = (r: LeaveRow, col: string) => (r as Record<string, unknown>)[col];
         const matching = rows.filter(r => filters.every(([col, val]) => value(r, col) === val)
+          && excluded.every(([col, val]) => value(r, col) !== val)
           && (!within || within[1].includes(value(r, within[0]) as string))
           && lte.every(([col, val]) => (value(r, col) as string) <= val)
           && gte.every(([col, val]) => (value(r, col) as string) >= val));
+        if (updated) {
+          // Nothing matched: cancelled in between (the re-read sees it cancelled), or hidden by RLS (still active).
+          if (mode === "race-cancelled") { for (const r of matching) r.cancelled_at = "2026-10-17T09:00:00Z"; return { data: null, error: null }; }
+          if (mode === "race-hidden") return { data: null, error: null };
+          for (const r of matching) Object.assign(r, updated.args[0]);
+          const first = matching[0] ?? null;
+          return { data: first && mode === "foreign" ? { ...first, employee_id: "BS-1999" } : first, error: null };
+        }
+        if (inserted) {
+          const row = { id: "new-id", created_at: "2026-10-17T08:00:00Z", cancelled_at: null, ...(inserted.args[0] as object) } as LeaveRow;
+          rows.push(row);
+          return { data: mode === "foreign" ? { ...row, employee_id: "BS-1999" } : row, error: null };
+        }
+        if (query.some(c => c.method === "maybeSingle")) return { data: matching[0] ?? null, error: null };
         const limit = query.find(c => c.method === "limit")?.args[0] as number | undefined;
         return { data: limit === undefined ? matching : matching.slice(0, limit), error: null };
       };
       const builder: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "in", "is", "lte", "gte", "order", "limit", "range", "insert", "update", "delete", "maybeSingle", "single"]) {
+      for (const method of ["select", "eq", "neq", "in", "is", "lte", "gte", "order", "limit", "range", "insert", "update", "delete", "maybeSingle", "single"]) {
         builder[method] = (...args: unknown[]) => { record(method, args); return builder; };
       }
       builder.returns = () => builder;
@@ -324,5 +341,147 @@ describe("leave-store reads", () => {
     const { client, ranges } = pagedClient([many(1000, rowAt), many(2, rowAt, 1000)]);
     expect(await storeFor(client).listFor(admin)).toHaveLength(1002);
     expect(ranges).toEqual([[0, 999], [1000, 1999]]);
+  });
+});
+
+describe("leave-store update (Story 5.3)", () => {
+  const updates = (calls: Call[][]) => calls.filter(q => q.some(c => c.method === "update"));
+
+  it("recounts an edit against the active calendar, filtered by id, employee and active, with the subject from the row", async () => {
+    const { client, calls } = fakeClient(fresh());
+    const saved = await storeFor(client).update(staff, "b", { startDate: "2026-03-02", endDate: "2026-03-10" });
+    expect(saved).toMatchObject({
+      id: "b", employeeId: "BS-1001", startDate: "2026-03-02", endDate: "2026-03-10", workingDays: 7, category: "FOUR_TO_FOURTEEN", calendarVersionId: "cal-v3",
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls[0].map(c => [c.method, ...c.args])).toEqual([["select", COLUMNS], ["eq", "id", "b"], ["maybeSingle"]]);
+    expect(calls[1].map(c => [c.method, ...c.args])).toEqual([
+      ["select", "start_date,end_date"], ["eq", "employee_id", "BS-1001"], ["is", "cancelled_at", null], ["neq", "id", "b"],
+      ["lte", "start_date", "2026-03-10"], ["gte", "end_date", "2026-03-02"], ["order", "start_date"], ["limit", 1],
+    ]);
+    expect(calls[2].map(c => [c.method, ...c.args])).toEqual([
+      ["update", { start_date: "2026-03-02", end_date: "2026-03-10", working_days: 7, category: "FOUR_TO_FOURTEEN", calendar_version_id: "cal-v3" }],
+      ["eq", "id", "b"], ["eq", "employee_id", "BS-1001"], ["is", "cancelled_at", null], ["select", COLUMNS], ["maybeSingle"],
+    ]);
+  });
+
+  it("ignores the period itself in the overlap check (an edit overlapping its own old dates is saved)", async () => {
+    const saved = await storeFor(fakeClient(fresh()).client).update(staff, "b", { startDate: "2026-03-03", endDate: "2026-03-06" });
+    expect(saved).toMatchObject({ startDate: "2026-03-03", endDate: "2026-03-06", workingDays: 4 });
+  });
+
+  it("refuses an edit overlapping another active period, naming it, without writing; cancelled periods are ignored", async () => {
+    const rows = [...fresh(), row("BS-1001", "c", "2026-03-09", "2026-03-10", { working_days: 2 })];
+    const { client, calls } = fakeClient(rows);
+    const error = await storeFor(client).update(staff, "b", { startDate: "2026-03-05", endDate: "2026-03-09" }).catch(e => e);
+    expect(error).toBeInstanceOf(LeaveOverlapError);
+    expect(error.existing).toEqual({ startDate: "2026-03-09", endDate: "2026-03-10" });
+    expect(updates(calls)).toEqual([]);
+    // "x" (1–2 Jun) is cancelled, so moving "b" onto it is fine.
+    expect((await storeFor(client).update(staff, "b", { startDate: "2026-06-01", endDate: "2026-06-02" })).startDate).toBe("2026-06-01");
+  });
+
+  it.each([
+    ["an invalid date", { startDate: "2026-02-30", endDate: "2026-03-02" }, "INVALID_DATE"],
+    ["a reversed range", { startDate: "2026-03-05", endDate: "2026-03-02" }, "REVERSED_RANGE"],
+    ["a weekend-only period", { startDate: "2026-03-07", endDate: "2026-03-08" }, "ZERO_WORKING_DAYS"],
+    ["a year outside the calendar", { startDate: "2027-03-01", endDate: "2027-03-02" }, "UNSUPPORTED_YEAR"],
+  ])("rejects %s without writing", async (_name, input, code) => {
+    const { client, calls } = fakeClient(fresh());
+    const error = await storeFor(client).update(staff, "b", input).catch(e => e);
+    expect(error).toBeInstanceOf(LeaveValidationFailedError);
+    expect(error.code).toBe(code);
+    expect(updates(calls)).toEqual([]);
+  });
+
+  it("refuses a cancelled period (store check), and a period cancelled in between (nothing matched) as cancelled", async () => {
+    const { client, calls } = fakeClient(fresh());
+    await expect(storeFor(client).update(staff, "x", { startDate: "2026-06-01", endDate: "2026-06-03" })).rejects.toBeInstanceOf(LeaveCancelledError);
+    expect(updates(calls)).toEqual([]);
+    await expect(storeFor(fakeClient(fresh(), "race-cancelled").client).update(staff, "b", { startDate: "2026-03-02", endDate: "2026-03-06" }))
+      .rejects.toBeInstanceOf(LeaveCancelledError);
+    await expect(storeFor(fakeClient(fresh(), "was-cancelled").client).update(staff, "b", { startDate: "2026-03-02", endDate: "2026-03-06" }))
+      .rejects.toBeInstanceOf(LeaveCancelledError);
+  });
+
+  it("treats another employee's period as not found for Staff, and an unknown id as not found", async () => {
+    const { client, calls } = fakeClient(fresh());
+    await expect(storeFor(client).update(staff, "m", { startDate: "2026-04-06", endDate: "2026-04-08" })).rejects.toBeInstanceOf(LeaveNotFoundError);
+    await expect(storeFor(client).update(admin, "nope", { startDate: "2026-04-06", endDate: "2026-04-08" })).rejects.toBeInstanceOf(LeaveNotFoundError);
+    expect(updates(calls)).toEqual([]);
+  });
+
+  it("lets a manager edit in the subtree and their own; refuses outside it; an admin edits anyone", async () => {
+    const rows = [...fresh(), row("BS-1009", "own", "2026-07-06", "2026-07-06")];
+    const { client, calls } = fakeClient(rows);
+    expect((await storeFor(client).update(manager, "m", { startDate: "2026-04-06", endDate: "2026-04-08" })).workingDays).toBe(3);
+    expect((await storeFor(client, fakeScope([]).scope).update(manager, "own", { startDate: "2026-07-06", endDate: "2026-07-07" })).employeeId).toBe("BS-1009");
+    const before = updates(calls).length;
+    await expect(storeFor(client).update(manager, "u", { startDate: "2026-05-04", endDate: "2026-05-05" })).rejects.toBeInstanceOf(LeaveForbiddenError);
+    expect(updates(calls)).toHaveLength(before);
+    expect((await storeFor(client).update(admin, "u", { startDate: "2026-05-04", endDate: "2026-05-05" })).workingDays).toBe(2);
+  });
+
+  it("maps the database refusals and failures", async () => {
+    const input = { startDate: "2026-03-02", endDate: "2026-03-06" };
+    const overlap = await storeFor(fakeClient(fresh(), "overlap").client).update(staff, "b", input).catch(e => e);
+    expect(overlap).toBeInstanceOf(LeaveOverlapError);
+    expect(overlap.existing).toEqual({ startDate: "2026-03-01", endDate: "2026-03-04" });
+    await expect(storeFor(fakeClient(fresh(), "calendar-changed").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveCalendarChangedError);
+    await expect(storeFor(fakeClient(fresh(), "denied").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveForbiddenError);
+    await expect(storeFor(fakeClient(fresh(), "check").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveUnavailableError);
+    await expect(storeFor(fakeClient(fresh(), "foreign").client).update(admin, "b", input)).rejects.toBeInstanceOf(LeaveUnavailableError);
+    await expect(storeFor(fakeClient(fresh(), "error").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveUnavailableError);
+    await expect(storeFor(fakeClient(fresh(), "throw").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveUnavailableError);
+    await expect(storeFor(fakeClient(fresh()).client, undefined, fakeCalendar("none").calendar).update(staff, "b", input))
+      .rejects.toBeInstanceOf(LeaveCalendarMissingError);
+  });
+});
+
+describe("leave-store write matching no row (Story 5.3)", () => {
+  it("re-reads the period: cancelled in between → cancelled; still active (hidden by RLS) → not found", async () => {
+    const input = { startDate: "2026-03-02", endDate: "2026-03-06" };
+    const cancelled = fakeClient(fresh(), "race-cancelled");
+    await expect(storeFor(cancelled.client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveCancelledError);
+    expect(cancelled.calls.at(-1)!.map(c => [c.method, ...c.args])).toEqual([["select", "cancelled_at"], ["eq", "id", "b"], ["maybeSingle"]]);
+    await expect(storeFor(fakeClient(fresh(), "race-hidden").client).update(staff, "b", input)).rejects.toBeInstanceOf(LeaveNotFoundError);
+    await expect(storeFor(fakeClient(fresh(), "race-hidden").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveNotFoundError);
+  });
+});
+
+describe("leave-store cancel (Story 5.3)", () => {
+  it("sets cancelled_at only, filtered by id, employee and active; the row is kept (never deleted)", async () => {
+    const rows = fresh();
+    const { client, calls } = fakeClient(rows);
+    const saved = await storeFor(client).cancel(staff, "b");
+    expect(saved.id).toBe("b");
+    expect(saved.cancelledAt).not.toBeNull();
+    expect(calls).toHaveLength(2);
+    const write = calls[1].map(c => c.method);
+    expect(write).toEqual(["update", "eq", "eq", "is", "select", "maybeSingle"]);
+    expect(Object.keys(calls[1][0].args[0] as object)).toEqual(["cancelled_at"]);
+    expect(calls.flat().some(c => c.method === "delete")).toBe(false);
+    expect(rows.find(r => r.id === "b")?.cancelled_at).not.toBeNull();
+    expect(rows).toHaveLength(5);
+  });
+
+  it("refuses a cancelled period, another employee's (Staff: not found), a manager outside the subtree, and maps failures", async () => {
+    const { client } = fakeClient(fresh());
+    await expect(storeFor(client).cancel(staff, "x")).rejects.toBeInstanceOf(LeaveCancelledError);
+    await expect(storeFor(client).cancel(staff, "m")).rejects.toBeInstanceOf(LeaveNotFoundError);
+    await expect(storeFor(client).cancel(manager, "u")).rejects.toBeInstanceOf(LeaveForbiddenError);
+    expect((await storeFor(client).cancel(manager, "m")).cancelledAt).not.toBeNull();
+    expect((await storeFor(client).cancel(admin, "u")).cancelledAt).not.toBeNull();
+    await expect(storeFor(fakeClient(fresh(), "race-cancelled").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveCancelledError);
+    await expect(storeFor(fakeClient(fresh(), "was-cancelled").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveCancelledError);
+    await expect(storeFor(fakeClient(fresh(), "denied").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveForbiddenError);
+    await expect(storeFor(fakeClient(fresh(), "error").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveUnavailableError);
+    await expect(storeFor(fakeClient(fresh(), "throw").client).cancel(staff, "b")).rejects.toBeInstanceOf(LeaveUnavailableError);
+  });
+
+  it("needs no calendar to cancel", async () => {
+    const cal = fakeCalendar("none");
+    expect((await storeFor(fakeClient(fresh()).client, undefined, cal.calendar).cancel(staff, "b")).cancelledAt).not.toBeNull();
+    expect(cal.calls).toEqual([]);
   });
 });

@@ -4,11 +4,16 @@
 // never the seeded demo data.
 // Rules under test (Story 5.2): leave_records rows are readable and insertable by the Administrator
 // (anyone), the employee themselves (own record) and a department manager (employees in their subtree);
-// nobody else, and never anon. There is no update or delete policy. The guard trigger owns created_by and
+// nobody else, and never anon. There is no delete policy. The guard trigger owns created_by and
 // created_at, refuses dates outside the calendar version's years (23514 leave_outside_calendar) and, under a
 // per-employee advisory lock, a period intersecting another non-cancelled period of the same employee
 // (23514 leave_overlap). Nothing is ever deleted: a BEFORE DELETE trigger refuses every delete, the service
 // role's included. leave-store agrees (counting against holidayCalendarStore.active()).
+// Story 5.3 (update policy, same predicate): the same people may edit or cancel a period. The 5.2 guard
+// trigger's UPDATE branch decides what may change: an edit is recounted against the active calendar and
+// checked for overlap ignoring the row itself; cancelling sets cancelled_at (stamped now()) and nothing
+// else; a cancelled row is frozen; id, employee_id, created_by and created_at are locked.
+// The 5.3 cases fail (no rows updated, or 42501) until the leave_records_update migration is applied.
 //
 // Calendar: the tests count against whatever LIVE calendar is active in the shared project (the provisional
 // Bangladesh calendar, docs/holiday-calendars/bangladesh-2026.csv, loaded by db:seed) and never load a live
@@ -30,7 +35,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildCalendar } from "@/domain/holiday-calendar";
 import { categoryForWorkingDays, countWorkingDays, type CalendarPolicy } from "@/domain/leave";
 import { createHolidayCalendarStore } from "@/server/holiday-calendar-store";
-import { createLeaveStore, LeaveForbiddenError, LeaveOverlapError } from "@/server/leave-store";
+import { createLeaveStore, LeaveCancelledError, LeaveForbiddenError, LeaveNotFoundError, LeaveOverlapError } from "@/server/leave-store";
 import { createManagerScope } from "@/server/manager-scope";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -301,15 +306,132 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     }
   });
 
-  it("has no update or delete for users; the service role cannot delete either", async () => {
+  it("has no delete for users; the service role cannot delete either", async () => {
     const row = await seed(childEmployee, "2026-02-23");
     for (const address of [adminEmail, ownEmail, managerEmail]) {
       const client = await signedIn(address);
-      expect((await client.from("leave_records").update({ end_date: "2026-02-24" }).eq("id", row.id).select("id")).data ?? []).toHaveLength(0);
       expect((await client.from("leave_records").delete().eq("id", row.id).select("id")).data ?? []).toHaveLength(0);
     }
     expect((await service.from("leave_records").delete().eq("id", row.id)).error?.code).toBe("23514");
     expect(await read(row.id)).toEqual(row);
+  });
+
+  /** The recounted fields of an edit to `start`..`end` under the active calendar. */
+  const edit = (start_date: string, end_date: string) => ({ start_date, end_date, ...counted(start_date, end_date), calendar_version_id: calendarVersionId });
+
+  it("Story 5.3: lets the employee edit their own period, recounted; an edit overlapping its own old dates is fine", async () => {
+    const own = await signedIn(ownEmail);
+    const row = await seed(childEmployee, "2026-07-06", "2026-07-07");
+    const edited = await own.from("leave_records").update(edit("2026-07-06", "2026-07-10")).eq("id", row.id).select(COLUMNS).single();
+    expect(edited.error).toBeNull();
+    expect(edited.data as Row).toMatchObject({ start_date: "2026-07-06", end_date: "2026-07-10", working_days: 5, category: "FOUR_TO_FOURTEEN", created_by: null });
+    const self = await own.from("leave_records").update(edit("2026-07-07", "2026-07-09")).eq("id", row.id).select(COLUMNS).single();
+    expect(self.error).toBeNull();
+    expect((self.data as Row).working_days).toBe(3);
+  });
+
+  it("Story 5.3: recounts every edit: a wrong working-day count is refused", async () => {
+    const own = await signedIn(ownEmail);
+    const row = await seed(childEmployee, "2026-07-14");
+    const wrong = await own.from("leave_records").update({ ...edit("2026-07-14", "2026-07-16"), working_days: 1 }).eq("id", row.id);
+    expect(wrong.error?.code).toBe("23514");
+    expect(wrong.error?.message).toContain("leave_working_days_mismatch");
+    expect(await read(row.id)).toEqual(row);
+  });
+
+  it("Story 5.3: lets the employee cancel their own period; the database stamps the time; a cancelled row is frozen and kept", async () => {
+    const own = await signedIn(ownEmail);
+    const row = await seed(childEmployee, "2026-07-13");
+    const cancelled = await own.from("leave_records").update({ cancelled_at: "2000-01-01T00:00:00Z" }).eq("id", row.id).select(COLUMNS).single();
+    expect(cancelled.error).toBeNull();
+    const after = cancelled.data as Row;
+    expect(Date.parse(after.cancelled_at!)).toBeGreaterThan(startedAt - 60_000);
+    expect({ ...after, cancelled_at: null }).toEqual(row);
+
+    for (const address of [ownEmail, adminEmail]) {
+      const client = await signedIn(address);
+      const changed = await client.from("leave_records").update(edit("2026-07-13", "2026-07-14")).eq("id", row.id);
+      expect(changed.error?.code).toBe("23514");
+      expect(changed.error?.message).toContain("was cancelled");
+      const again = await client.from("leave_records").update({ cancelled_at: new Date().toISOString() }).eq("id", row.id);
+      expect(again.error?.message).toContain("was cancelled");
+    }
+    expect(await read(row.id)).toEqual(after);
+    // A cancelled period no longer blocks the same dates.
+    expect((await own.from("leave_records").insert(period(childEmployee, "2026-07-13"))).error).toBeNull();
+  });
+
+  it("Story 5.3: refuses cancelling and changing in the same update, and changing the employee", async () => {
+    const own = await signedIn(ownEmail);
+    const admin = await signedIn(adminEmail);
+    const row = await seed(childEmployee, "2026-07-15");
+    const both = await own.from("leave_records").update({ ...edit("2026-07-15", "2026-07-16"), cancelled_at: new Date().toISOString() }).eq("id", row.id);
+    expect(both.error?.code).toBe("23514");
+    expect(both.error?.message).toContain("cannot also change");
+    const moved = await admin.from("leave_records").update({ employee_id: unrelatedEmployee }).eq("id", row.id);
+    expect(moved.error?.code).toBe("23514");
+    expect(await read(row.id)).toEqual(row);
+  });
+
+  it("Story 5.3: hides another employee's period from a Staff member's update and cancel", async () => {
+    const other = await signedIn(otherEmail);
+    const row = await seed(childEmployee, "2026-07-20");
+    expect((await other.from("leave_records").update(edit("2026-07-20", "2026-07-21")).eq("id", row.id).select("id")).data ?? []).toHaveLength(0);
+    expect((await other.from("leave_records").update({ cancelled_at: new Date().toISOString() }).eq("id", row.id).select("id")).data ?? []).toHaveLength(0);
+    expect(await read(row.id)).toEqual(row);
+  });
+
+  it("Story 5.3: lets the P manager change the C employee's period but not the U employee's; the Administrator anyone's", async () => {
+    const manager = await signedIn(managerEmail);
+    const admin = await signedIn(adminEmail);
+    const inC = await seed(childEmployee, "2026-07-27");
+    const inU = await seed(unrelatedEmployee, "2026-07-27");
+    const editedC = await manager.from("leave_records").update(edit("2026-07-27", "2026-07-28")).eq("id", inC.id).select(COLUMNS).single();
+    expect(editedC.error).toBeNull();
+    expect((editedC.data as Row).working_days).toBe(2);
+    expect((await manager.from("leave_records").update(edit("2026-07-27", "2026-07-28")).eq("id", inU.id).select("id")).data ?? []).toHaveLength(0);
+    expect((await manager.from("leave_records").update({ cancelled_at: new Date().toISOString() }).eq("id", inU.id).select("id")).data ?? []).toHaveLength(0);
+    expect(await read(inU.id)).toEqual(inU);
+
+    const editedU = await admin.from("leave_records").update(edit("2026-07-27", "2026-07-29")).eq("id", inU.id).select(COLUMNS).single();
+    expect(editedU.error).toBeNull();
+    expect((editedU.data as Row).working_days).toBe(3);
+    expect((await admin.from("leave_records").update({ cancelled_at: new Date().toISOString() }).eq("id", inC.id).select(COLUMNS).single()).error).toBeNull();
+  });
+
+  it("Story 5.3: refuses an edit overlapping another active period at the database (the edited row itself is ignored)", async () => {
+    const admin = await signedIn(adminEmail);
+    const first = await seed(childEmployee, "2026-09-07", "2026-09-08");
+    await seed(childEmployee, "2026-09-14", "2026-09-15");
+    const overlap = await admin.from("leave_records").update(edit("2026-09-08", "2026-09-14")).eq("id", first.id);
+    expect(overlap.error?.code).toBe("23514");
+    expect(overlap.error?.message).toContain("leave_overlap");
+    expect(overlap.error?.details).toBe("2026-09-14,2026-09-15");
+    expect((await admin.from("leave_records").update(edit("2026-09-08", "2026-09-11")).eq("id", first.id)).error).toBeNull();
+  });
+
+  it("Story 5.3: agrees at the store: own edit and cancel, another Staff member, the P manager in and out of scope", async () => {
+    const own = { role: "staff", employeeId: childEmployee } as const;
+    const other = { role: "staff", employeeId: unrelatedEmployee } as const;
+    const manager = { role: "manager", employeeId: managerId, userId: managerUserId } as const;
+    const ownStore = await storeFor(ownEmail);
+    const saved = await ownStore.record(own, childEmployee, { startDate: "2026-08-10", endDate: "2026-08-11" });
+    const edited = await ownStore.update(own, saved.id, { startDate: "2026-08-10", endDate: "2026-08-14" });
+    expect(edited).toMatchObject({ id: saved.id, workingDays: 5, category: "FOUR_TO_FOURTEEN", calendarVersionId: calendarVersionId, cancelledAt: null });
+
+    await expect((await storeFor(otherEmail)).update(other, saved.id, { startDate: "2026-08-10", endDate: "2026-08-12" })).rejects.toBeInstanceOf(LeaveNotFoundError);
+    const inU = await seed(unrelatedEmployee, "2026-08-17");
+    const managerStore = await storeFor(managerEmail);
+    // RLS hides a period outside the subtree from the manager's read, so the store finds nothing to change.
+    await expect(managerStore.cancel(manager, inU.id)).rejects.toBeInstanceOf(LeaveNotFoundError);
+    expect(await read(inU.id)).toEqual(inU);
+    expect((await managerStore.update(manager, saved.id, { startDate: "2026-08-10", endDate: "2026-08-12" })).workingDays).toBe(3);
+
+    const cancelled = await ownStore.cancel(own, saved.id);
+    expect(cancelled.cancelledAt).not.toBeNull();
+    await expect(ownStore.cancel(own, saved.id)).rejects.toBeInstanceOf(LeaveCancelledError);
+    await expect(ownStore.update(own, saved.id, { startDate: "2026-08-10", endDate: "2026-08-11" })).rejects.toBeInstanceOf(LeaveCancelledError);
+    expect((await ownStore.listFor(own)).find(r => r.id === saved.id)?.cancelledAt).toBe(cancelled.cancelledAt);
   });
 
   it("denies anon", async () => {
@@ -317,6 +439,12 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     const anon = createClient(url!, anonKey!, noSession);
     expect((await anon.from("leave_records").select("id").eq("id", row.id)).data ?? []).toHaveLength(0);
     expect((await anon.from("leave_records").insert(period(childEmployee, "2026-03-10"))).error).not.toBeNull();
+    // Story 5.3: the update policy is for authenticated users only; anon edits and cancels change nothing.
+    const edited = await anon.from("leave_records").update({ end_date: "2026-03-10", working_days: 2 }).eq("id", row.id).select("id");
+    expect(edited.data ?? []).toHaveLength(0);
+    const cancelled = await anon.from("leave_records").update({ cancelled_at: new Date().toISOString() }).eq("id", row.id).select("id");
+    expect(cancelled.data ?? []).toHaveLength(0);
+    expect(await read(row.id)).toEqual(row);
   });
 
   it("agrees at the store: own Staff counts against the calendar, the P manager in and out of scope, overlap", async () => {

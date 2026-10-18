@@ -44,7 +44,11 @@ vi.mock("@/server/interviews-actions", () => ({ addInterviewAction: vi.fn(), upd
 vi.mock("@/server/backfill-actions", () => ({ addBackfillAction: vi.fn(), editBackfillAction: vi.fn(), withdrawBackfillAction: vi.fn() }));
 // Story 5.1: the Administrator's holiday calendar panel in Attendance & leave.
 // Story 5.2: the leave panel on the profile Attendance tab and in "My record".
-vi.mock("@/server/leave-actions", () => ({ recordLeaveAction: vi.fn(async () => ({ error: "", message: "" })) }));
+vi.mock("@/server/leave-actions", () => ({
+  recordLeaveAction: vi.fn(async () => ({ error: "", message: "" })),
+  updateLeaveAction: vi.fn(async () => ({ error: "", message: "" })),
+  cancelLeaveAction: vi.fn(async () => ({ error: "", message: "" })),
+}));
 vi.mock("@/server/holiday-calendar-actions", () => ({ loadHolidayCalendarAction: vi.fn(async () => ({ error: "", message: "" })) }));
 vi.mock("@/server/activity-actions", () => ({
   exportActivityAction: vi.fn(async () => ({ error: "", message: "" })),
@@ -1696,7 +1700,7 @@ describe("Portal leave (Story 5.2)", () => {
     expect(panel.getByRole("heading", { name: "Leave & attendance exceptions" })).toBeInTheDocument();
     const leave = within(panel.getByRole("article", { name: "Recorded leave" }));
     const row = leave.getByRole("table", { name: "Recorded leave" }).querySelectorAll("tbody tr")[0];
-    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["25 Mar 2026", "27 Mar 2026", "2", "1–3 working days", "Recorded"]);
+    expect([...row.querySelectorAll("td")].map(td => td.textContent)).toEqual(["25 Mar 2026", "27 Mar 2026", "2", "1–3 working days", "Recorded", "EditCancel leave"]);
     const form = leave.getByRole("form", { name: "Record leave" });
     expect((form.querySelector("input[name=employeeId]") as HTMLInputElement).value).toBe(fahim.id);
     expect(await axe(screen.getByRole("tabpanel"))).toHaveNoViolations();
