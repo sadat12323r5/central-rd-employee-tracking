@@ -109,6 +109,8 @@ deferred:
 
 ## Spec Change Log
 
+- 2026-10-17 -- **Calendar purpose (bug fix).** `leave_records_guard` is redefined by `20261018010000_holiday_calendar_purpose.sql`: a period must be counted with the highest **live** calendar version (23514 `leave_calendar_changed` otherwise), so a test calendar loaded by another test can no longer make a leave save fail, and a period can never be counted with a test calendar. All other guard rules are unchanged. `tests/leave-rls.test.ts` and `tests/e2e/leave.spec.ts` now count against whatever live calendar is active (Bangladesh) and never load a live one; the stale-calendar case uses a throwaway `test` version.
+
 ## Review Triage Log
 
 ### 2026-10-17 — Review pass

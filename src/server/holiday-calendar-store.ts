@@ -9,8 +9,9 @@ import { getUserClient } from "./supabase";
 // Story 5.1: the only way the app reads and writes the holiday calendar. Calendars live in the Supabase
 // tables `holiday_calendar_versions` and `holiday_calendar_dates`.
 //
-// Every load is a new, immutable version (the highest version number is the active calendar); nothing
-// here updates or deletes one. `load` is Administrator only and writes the version and its dates in one
+// Every load is a new, immutable version with a purpose: 'live' (what the Administrator loads) or 'test'
+// (throwaway calendars the live tests load into the shared project). The active calendar is the highest
+// LIVE version; a test version is never active and never listed. Nothing here updates or deletes one. `load` is Administrator only and writes the version and its dates in one
 // transaction through the `load_holiday_calendar` RPC (security invoker, so RLS applies, and it refuses
 // non-Administrators itself). `versions` is Administrator only. `active` serves any signed-in role: Story
 // 5.2 counts staff leave through the user's own JWT. Every query goes through a per-request client
@@ -29,21 +30,27 @@ export type CalendarVersion = {
   holidayCount: number;
 };
 
-/** What the Administrator loads: one complete calendar (built by `buildCalendar`) and where it came from. */
-export type HolidayCalendarLoad = { jurisdiction: string; source: string; calendar: HolidayCalendar };
+/** 'live' calendars can become active; 'test' calendars (loaded by the live tests) never do. */
+export type CalendarPurpose = "live" | "test";
+
+/**
+ * What the Administrator loads: one complete calendar (built by `buildCalendar`) and where it came from.
+ * `purpose` defaults to 'live'; the app never sets it (only tests pass 'test').
+ */
+export type HolidayCalendarLoad = { jurisdiction: string; source: string; calendar: HolidayCalendar; purpose?: CalendarPurpose };
 
 export const JURISDICTION_MAX = 100;
 export const SOURCE_MAX = 2000;
 
 export interface HolidayCalendarStore {
-  /** Stores the calendar as a new version (which becomes active) and returns it. Administrators only. */
+  /** Stores the calendar as a new version (a live one becomes active) and returns it. Administrators only. */
   load(session: SessionIdentity, input: HolidayCalendarLoad): Promise<CalendarVersion>;
   /**
-   * The active (highest) version and its policy for `countWorkingDays`, or null when no calendar has been
-   * loaded. Any signed-in role.
+   * The active (highest live) version and its policy for `countWorkingDays`, or null when no live calendar
+   * has been loaded. Any signed-in role.
    */
   active(session: SessionIdentity): Promise<{ version: CalendarVersion; policy: CalendarPolicy } | null>;
-  /** Every stored version, newest first, with its holiday count. Administrators only. */
+  /** Every stored live version, newest first (the first is the active one), with its holiday count. Administrators only. */
   versions(session: SessionIdentity): Promise<CalendarVersion[]>;
 }
 
@@ -75,6 +82,7 @@ const DATES = "holiday_calendar_dates";
 const COLUMNS = "id,version,jurisdiction,timezone,supported_year_start,supported_year_end,source,loaded_by,loaded_at";
 /** PostgREST's max rows per response; a calendar has at most 1000 dates (HOLIDAY_CALENDAR_MAX_ROWS). */
 const PAGE = 1000;
+const LIVE: CalendarPurpose = "live";
 
 export function toCalendarVersion(row: CalendarVersionRow, holidayCount: number): CalendarVersion {
   return {
@@ -124,7 +132,7 @@ export function createHolidayCalendarStore({ userClient }: HolidayCalendarStoreC
     if (session?.role !== "admin") throw new HolidayCalendarForbiddenError();
   }
 
-  function checked(input: HolidayCalendarLoad): HolidayCalendarLoad {
+  function checked(input: HolidayCalendarLoad): Required<HolidayCalendarLoad> {
     const jurisdiction = input.jurisdiction.trim().replace(/\s+/g, " ");
     if (jurisdiction.length < 1 || jurisdiction.length > JURISDICTION_MAX) {
       throw new HolidayCalendarInputError(`Enter a jurisdiction of 1 to ${JURISDICTION_MAX} characters.`);
@@ -142,22 +150,24 @@ export function createHolidayCalendarStore({ userClient }: HolidayCalendarStoreC
     if (holidays.some(h => Number(h.date.slice(0, 4)) < supportedYearStart || Number(h.date.slice(0, 4)) > supportedYearEnd)) {
       throw new HolidayCalendarInputError("Every holiday must fall within the calendar's supported years.");
     }
-    return { jurisdiction, source, calendar: input.calendar };
+    const purpose = input.purpose ?? LIVE;
+    if (purpose !== "live" && purpose !== "test") throw new HolidayCalendarInputError("A calendar's purpose is live or test.");
+    return { jurisdiction, source, calendar: input.calendar, purpose };
   }
 
   return {
     async load(session, input) {
       requireAdmin(session);
-      const { jurisdiction, source, calendar } = checked(input);
+      const { jurisdiction, source, calendar, purpose } = checked(input);
       const saved = await run<CalendarVersionRow>(client => client.rpc("load_holiday_calendar", {
         p_jurisdiction: jurisdiction, p_timezone: ORG_TIMEZONE, p_year_start: calendar.supportedYearStart,
-        p_year_end: calendar.supportedYearEnd, p_source: source, p_holidays: calendar.holidays,
+        p_year_end: calendar.supportedYearEnd, p_source: source, p_holidays: calendar.holidays, p_purpose: purpose,
       }).single<CalendarVersionRow>());
       return toCalendarVersion(saved, calendar.holidays.length);
     },
     async active(session) {
       if (!session) throw new HolidayCalendarForbiddenError();
-      const row = await call<CalendarVersionRow>(client => client.from(VERSIONS).select(COLUMNS)
+      const row = await call<CalendarVersionRow>(client => client.from(VERSIONS).select(COLUMNS).eq("purpose", LIVE)
         .order("version", { ascending: false }).limit(1).maybeSingle<CalendarVersionRow>());
       if (row === null) return null;
       const dates = await run<DateRow[]>(client => client.from(DATES).select("holiday_date,name,kind")
@@ -170,7 +180,7 @@ export function createHolidayCalendarStore({ userClient }: HolidayCalendarStoreC
     },
     async versions(session) {
       requireAdmin(session);
-      const rows = await run<CountedVersionRow[]>(client => client.from(VERSIONS).select(`${COLUMNS},${DATES}(count)`)
+      const rows = await run<CountedVersionRow[]>(client => client.from(VERSIONS).select(`${COLUMNS},${DATES}(count)`).eq("purpose", LIVE)
         .order("version", { ascending: false }).returns<CountedVersionRow[]>());
       return rows.map(r => toCalendarVersion(r, r.holiday_calendar_dates?.[0]?.count ?? 0));
     },

@@ -101,6 +101,8 @@ deferred:
 
 ## Spec Change Log
 
+- 2026-10-17 -- **Calendar purpose (bug fix).** "Active = the highest version in the database" let throwaway test calendars (RLS Calendar / E2E Calendar, one with 0 holidays) become the live site's active calendar in the shared project. New migration `20261018010000_holiday_calendar_purpose.sql` (DESTRUCTIVE: redefines `load_holiday_calendar` and `leave_records_guard`; the column is additive) adds `holiday_calendar_versions.purpose` (`live` default / `test`) and an optional `p_purpose` to `load_holiday_calendar`. Active = the highest **live** version; `holidayCalendarStore.active()` and `versions()` read live versions only; the app's Administrator load always passes `live`. Tests load `test` calendars; the two deliberate live-load checks restore the provisional Bangladesh calendar as a new live version afterwards. Every other 5.1 rule (Asia/Dhaka, supported years, append-only, insert only through the RPC, grants) is unchanged.
+
 ## Review Triage Log
 
 ### 2026-10-17 — Review pass

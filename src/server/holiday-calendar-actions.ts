@@ -59,7 +59,8 @@ export async function loadHolidayCalendarAction(_previous: ActionState, form: Fo
     const texts: HolidayCalendarFile[] = await Promise.all(parsed.data.files.map(readUtf8));
     const calendar = buildCalendar(texts);
     const saved = await holidayCalendarStore.load(session, {
-      jurisdiction: parsed.data.jurisdiction, source: texts.map(f => f.name).join(", "), calendar,
+      // The app only ever loads live calendars (the active one); 'test' is for the live tests.
+      jurisdiction: parsed.data.jurisdiction, source: texts.map(f => f.name).join(", "), calendar, purpose: "live",
     });
     revalidatePath("/");
     const count = `${saved.holidayCount} ${saved.holidayCount === 1 ? "holiday" : "holidays"}`;

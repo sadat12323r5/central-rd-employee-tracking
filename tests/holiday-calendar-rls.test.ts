@@ -1,14 +1,17 @@
 // Integration test against the shared Supabase project. Skipped unless the three Supabase env vars
 // are present. Uses its own throwaway auth users (one Administrator, one Staff) and loads its own calendar
-// versions (jurisdiction carrying this run's id, holidays from the provisional bangladesh-2026.csv so the
-// shared project's active calendar stays the same while they exist). afterAll removes every version this
-// run created through the service role (dates first: version_id is ON DELETE RESTRICT); the app itself
-// never deletes a version.
+// versions (jurisdiction carrying this run's id, holidays from the provisional bangladesh-2026.csv), all
+// with purpose 'test' so they never become the shared project's (the live site's) active calendar. The one
+// exception is the first test, which deliberately proves a LIVE load becomes active: it then restores the
+// provisional calendar as a new live version with jurisdiction 'Bangladesh', so the live site keeps
+// Bangladesh active. afterAll removes every version carrying this run's id through the service role (dates
+// first: version_id is ON DELETE RESTRICT); the app itself never deletes a version.
 // Rules under test (Story 5.1): only an Administrator loads a calendar (the RPC refuses anyone else with
 // 42501, and RLS refuses a direct insert); every signed-in role reads it; nobody updates or deletes it
-// through the API; the store's active() returns the highest version as a CalendarPolicy that
-// countWorkingDays accepts, with UNSUPPORTED_YEAR outside its years.
-// Fails with 42P01 / PGRST205 / PGRST202 until the holiday_calendars migration is applied to the shared project.
+// through the API; the store's active() returns the highest LIVE version as a CalendarPolicy that
+// countWorkingDays accepts, with UNSUPPORTED_YEAR outside its years; a 'test' version never becomes active.
+// Fails with 42P01 / PGRST205 / PGRST202 until the holiday_calendars migration is applied to the shared
+// project, and with 42703 / PGRST202 until 20261018010000_holiday_calendar_purpose.sql is applied.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,9 +34,10 @@ const admin = { role: "admin" } as const;
 const staffSession = { role: "staff", employeeId: "BS-9798" } as const;
 const PROVISIONAL = readFileSync(join(import.meta.dirname, "..", "docs", "holiday-calendars", "bangladesh-2026.csv"), "utf8");
 const calendar = buildCalendar([{ name: "bangladesh-2026.csv", text: PROVISIONAL }]);
+/** RPC arguments for a throwaway TEST calendar (never active). */
 const rpcArgs = (jurisdiction: string) => ({
   p_jurisdiction: jurisdiction, p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart, p_year_end: calendar.supportedYearEnd,
-  p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays,
+  p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays, p_purpose: "test",
 });
 
 describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", () => {
@@ -72,6 +76,15 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
     return data as { id: string; version: number }[];
   }
 
+  /** Loads the provisional calendar as a new LIVE version named 'Bangladesh' (what db:seed loads), so it is active again. */
+  async function restoreBangladesh(): Promise<string> {
+    const { data, error } = await service.rpc("load_holiday_calendar", {
+      ...rpcArgs("Bangladesh"), p_purpose: "live",
+    }).single<{ id: string }>();
+    if (error) throw new Error(`Could not restore the Bangladesh calendar (${error.code}): ${error.message}`);
+    return data.id;
+  }
+
   beforeAll(async () => {
     service = createClient(url!, serviceKey!, noSession);
     await createUser(adminEmail, { role: "admin" });
@@ -93,40 +106,81 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
     }
   }, 30_000);
 
-  it("lets an Administrator load a calendar through the store as a new, active version", async () => {
+  // The one deliberate LIVE load in this file (the app's Administrator load): it becomes active, then the
+  // provisional Bangladesh calendar is restored as a newer live version so the live site keeps it active.
+  it("lets an Administrator load a live calendar through the store as a new, active version", async () => {
     const client = await signedIn(adminEmail);
     const store = createHolidayCalendarStore({ userClient: async () => client });
-    const saved = await store.load(admin, { jurisdiction: `${JURISDICTION} A`, source: "bangladesh-2026.csv", calendar });
-    expect(saved).toMatchObject({
-      jurisdiction: `${JURISDICTION} A`, timezone: "Asia/Dhaka", supportedYearStart: 2026, supportedYearEnd: 2026,
-      source: "bangladesh-2026.csv", loadedBy: userIds[0], holidayCount: calendar.holidays.length,
-    });
-    const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true }).eq("version_id", saved.id);
-    expect(count).toBe(calendar.holidays.length);
+    try {
+      const saved = await store.load(admin, { jurisdiction: `${JURISDICTION} A`, source: "bangladesh-2026.csv", calendar });
+      expect(saved).toMatchObject({
+        jurisdiction: `${JURISDICTION} A`, timezone: "Asia/Dhaka", supportedYearStart: 2026, supportedYearEnd: 2026,
+        source: "bangladesh-2026.csv", loadedBy: userIds[0], holidayCount: calendar.holidays.length,
+      });
+      const { data: stored } = await service.from("holiday_calendar_versions").select("purpose").eq("id", saved.id).single();
+      expect(stored?.purpose).toBe("live");
+      const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true }).eq("version_id", saved.id);
+      expect(count).toBe(calendar.holidays.length);
 
-    const active = await store.active(admin);
-    expect(active?.version.id).toBe(saved.id);
-    expect(active?.policy.holidays.size).toBe(calendar.holidays.length);
-    expect(countWorkingDays("2026-02-01", "2026-02-28", active!.policy)).toBe(17);
-    expect(() => countWorkingDays("2027-02-01", "2027-02-03", active!.policy)).toThrow(LeaveValidationError);
-    expect(() => countWorkingDays("2027-02-01", "2027-02-03", active!.policy)).toThrow(expect.objectContaining({ code: "UNSUPPORTED_YEAR" }));
+      const active = await store.active(admin);
+      expect(active?.version.id).toBe(saved.id);
+      expect(active?.policy.holidays.size).toBe(calendar.holidays.length);
+      expect(countWorkingDays("2026-02-01", "2026-02-28", active!.policy)).toBe(17);
+      expect(() => countWorkingDays("2027-02-01", "2027-02-03", active!.policy)).toThrow(LeaveValidationError);
+      expect(() => countWorkingDays("2027-02-01", "2027-02-03", active!.policy)).toThrow(expect.objectContaining({ code: "UNSUPPORTED_YEAR" }));
 
-    const versions = await store.versions(admin);
-    expect(versions[0]).toMatchObject({ id: saved.id, holidayCount: calendar.holidays.length });
+      const versions = await store.versions(admin);
+      expect(versions[0]).toMatchObject({ id: saved.id, holidayCount: calendar.holidays.length });
+    } finally {
+      const restored = await restoreBangladesh();
+      expect((await store.active(admin))?.version).toMatchObject({ id: restored, jurisdiction: "Bangladesh" });
+    }
+  });
+
+  it("never makes a test calendar active, however new (RPC and store), nor lists it", async () => {
+    const client = await signedIn(adminEmail);
+    const store = createHolidayCalendarStore({ userClient: async () => client });
+    const before = await store.active(admin);
+    expect(before).not.toBeNull();
+    const viaRpc = await client.rpc("load_holiday_calendar", rpcArgs(`${JURISDICTION} T1`)).single<{ id: string; version: number; purpose: string }>();
+    expect(viaRpc.error).toBeNull();
+    expect(viaRpc.data).toMatchObject({ purpose: "test" });
+    const viaStore = await store.load(admin, { jurisdiction: `${JURISDICTION} T2`, source: "bangladesh-2026.csv", calendar, purpose: "test" });
+    expect(viaStore.version).toBeGreaterThan(before!.version.version);
+    const { data: stored } = await service.from("holiday_calendar_versions").select("id,purpose").in("id", [viaRpc.data!.id, viaStore.id]);
+    expect((stored ?? []).map(r => r.purpose)).toEqual(["test", "test"]);
+
+    expect((await store.active(admin))?.version.id).toBe(before!.version.id);
+    const staff = await signedIn(staffEmail);
+    expect((await createHolidayCalendarStore({ userClient: async () => staff }).active(staffSession))?.version.id).toBe(before!.version.id);
+    const listed = (await store.versions(admin)).map(v => v.id);
+    expect(listed[0]).toBe(before!.version.id);
+    expect(listed).not.toContain(viaRpc.data!.id);
+    expect(listed).not.toContain(viaStore.id);
+  });
+
+  it("refuses a purpose other than live or test in the database, storing nothing", async () => {
+    const before = (await ownVersions()).length;
+    const client = await signedIn(adminEmail);
+    const refused = await client.rpc("load_holiday_calendar", { ...rpcArgs(`${JURISDICTION} Purpose`), p_purpose: "staging" });
+    expect(refused.error?.code).toBe("23514");
+    expect((await ownVersions()).length).toBe(before);
   });
 
   it("keeps the previous version unchanged when a corrected calendar is loaded", async () => {
     const client = await signedIn(adminEmail);
     const store = createHolidayCalendarStore({ userClient: async () => client });
-    const first = await store.load(admin, { jurisdiction: `${JURISDICTION} B1`, source: "bangladesh-2026.csv", calendar });
-    // Drops a Saturday holiday, so working-day counts stay identical while this version is active.
+    const activeBefore = (await store.active(admin))?.version.id;
+    const first = await store.load(admin, { jurisdiction: `${JURISDICTION} B1`, source: "bangladesh-2026.csv", calendar, purpose: "test" });
     expect(new Date("2026-05-30T00:00:00Z").getUTCDay()).toBe(6);
     const corrected = { ...calendar, holidays: calendar.holidays.filter(h => h.date !== "2026-05-30") };
-    const second = await store.load(admin, { jurisdiction: `${JURISDICTION} B2`, source: "corrected.csv", calendar: corrected });
+    const second = await store.load(admin, { jurisdiction: `${JURISDICTION} B2`, source: "corrected.csv", calendar: corrected, purpose: "test" });
     expect(second.version).toBeGreaterThan(first.version);
+    expect(second.holidayCount).toBe(calendar.holidays.length - 1);
     const { count } = await service.from("holiday_calendar_dates").select("holiday_date", { count: "exact", head: true }).eq("version_id", first.id);
     expect(count).toBe(calendar.holidays.length);
-    expect((await store.active(admin))?.version.id).toBe(second.id);
+    // Both are test versions: the live site's active calendar is untouched.
+    expect((await store.active(admin))?.version.id).toBe(activeBefore);
   });
 
   it("lets Staff read the calendar and the active policy", async () => {
@@ -152,7 +206,7 @@ describe.skipIf(!configured)("holiday calendar RLS (shared Supabase project)", (
     const date = await staff.from("holiday_calendar_dates").insert({ version_id: existing.id, holiday_date: "2026-01-05", name: "X", kind: "general" });
     expect(date.error).not.toBeNull();
     await expect(createHolidayCalendarStore({ userClient: async () => staff }).load(staffSession, {
-      jurisdiction: `${JURISDICTION} Staff store`, source: "x.csv", calendar,
+      jurisdiction: `${JURISDICTION} Staff store`, source: "x.csv", calendar, purpose: "test",
     })).rejects.toBeInstanceOf(HolidayCalendarForbiddenError);
     expect((await ownVersions()).length).toBe(before);
   });

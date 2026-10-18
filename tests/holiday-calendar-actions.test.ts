@@ -64,6 +64,8 @@ describe("loadHolidayCalendarAction", () => {
     expect(session).toEqual(ADMIN);
     expect(input).toMatchObject({ jurisdiction: "Bangladesh", source: "bangladesh-2026.csv", calendar: { supportedYearStart: 2026, supportedYearEnd: 2026 } });
     expect(input.calendar.holidays).toHaveLength(count);
+    // The app always loads a live calendar (the one that becomes active); only tests load 'test' ones.
+    expect(input.purpose).toBe("live");
     expect(revalidatePath).toHaveBeenCalledWith("/");
   });
 

@@ -1,9 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { buildCalendar } from "../../src/domain/holiday-calendar";
 import { STAFF_EMAIL_PREFIX } from "./global-setup";
 import { signIn } from "./staff";
 import { serviceClient } from "./supabase-admin";
@@ -17,13 +14,12 @@ import { serviceClient } from "./supabase-admin";
 // (its email carries the run's Staff prefix, so global-teardown.ts deletes it too). Before and after, every
 // active leave of the employee is cancelled through the service role, so runs never overlap each other;
 // afterwards the employee is unlinked and archived and the account deleted.
-// Calendar: when no holiday calendar is active, the provisional docs/holiday-calendars/bangladesh-2026.csv
-// is loaded through the service-role RPC (what db:seed does); an active calendar is never touched. A calendar
-// loaded here stays once leave references it (calendar_version_id is ON DELETE RESTRICT).
-// Needs the holiday_calendars and leave_records migrations applied.
+// Calendar: the spec counts against whatever LIVE calendar is active in the shared project (the provisional
+// Bangladesh calendar, docs/holiday-calendars/bangladesh-2026.csv, loaded by db:seed) and never loads one;
+// it fails with a clear message when none is active or it does not cover 2026.
+// Needs the holiday_calendars, leave_records and holiday_calendar_purpose migrations applied.
 const run = randomBytes(4).toString("hex");
 const SUBJECT = { id: "BS-8390", name: "E2E Leave Subject" };
-const CSV = join(process.cwd(), "docs", "holiday-calendars", "bangladesh-2026.csv");
 
 async function cancelLeave(service: SupabaseClient) {
   const { error } = await service.from("leave_records").update({ cancelled_at: new Date().toISOString() })
@@ -31,22 +27,15 @@ async function cancelLeave(service: SupabaseClient) {
   if (error) throw new Error(`Could not cancel the throwaway leave (${error.code}): ${error.message}`);
 }
 
-async function ensureCalendar(service: SupabaseClient) {
+/** The spec counts against whatever LIVE calendar is active (Bangladesh); it never loads one of its own. */
+async function requireActiveCalendar(service: SupabaseClient) {
   const active = await service.from("holiday_calendar_versions").select("id,supported_year_start,supported_year_end")
-    .order("version", { ascending: false }).limit(1).maybeSingle();
+    .eq("purpose", "live").order("version", { ascending: false }).limit(1).maybeSingle();
   if (active.error) throw new Error(`Could not read the active calendar (${active.error.code}): ${active.error.message}`);
-  if (active.data) {
-    if (active.data.supported_year_start > 2026 || active.data.supported_year_end < 2026) {
-      throw new Error("The shared project's active holiday calendar does not cover 2026; this spec records 2026 leave.");
-    }
-    return;
+  if (!active.data) throw new Error("The shared project has no active (live) holiday calendar; load the provisional Bangladesh calendar (npm run db:seed).");
+  if (active.data.supported_year_start > 2026 || active.data.supported_year_end < 2026) {
+    throw new Error("The shared project's active holiday calendar does not cover 2026; this spec records 2026 leave.");
   }
-  const calendar = buildCalendar([{ name: "bangladesh-2026.csv", text: readFileSync(CSV, "utf8") }]);
-  const loaded = await service.rpc("load_holiday_calendar", {
-    p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart, p_year_end: calendar.supportedYearEnd,
-    p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays,
-  });
-  if (loaded.error) throw new Error(`Could not load the provisional calendar (${loaded.error.code}): ${loaded.error.message}`);
 }
 
 test("a Staff member records their own leave and sees it with its working days and category", async ({ page }) => {
@@ -55,7 +44,7 @@ test("a Staff member records their own leave and sees it with its working days a
   const password = `E2e-${randomBytes(18).toString("base64url")}`;
   let userId: string | null = null;
   try {
-    await ensureCalendar(service);
+    await requireActiveCalendar(service);
     const created = await service.auth.admin.createUser({ email, password, email_confirm: true, app_metadata: { role: "staff", employee_id: SUBJECT.id } });
     if (created.error || !created.data.user) throw new Error(`Could not create the throwaway Staff user: ${created.error?.message ?? "no user returned"}`);
     userId = created.data.user.id;

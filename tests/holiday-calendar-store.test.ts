@@ -15,13 +15,15 @@ type Options = { throws?: boolean; readError?: DbError; rpcError?: DbError };
 
 const V1 = "ca1e0000-0000-4000-8000-000000000001";
 const V2 = "ca1e0000-0000-4000-8000-000000000002";
-const versionRow = (id: string, version: number, overrides: Partial<CalendarVersionRow> = {}): CalendarVersionRow => ({
+/** A stored row; `purpose` is the database column the store filters on (absent means live, the default). */
+type StoredRow = CalendarVersionRow & { purpose?: "live" | "test" };
+const versionRow = (id: string, version: number, overrides: Partial<StoredRow> = {}): StoredRow => ({
   id, version, jurisdiction: "Bangladesh", timezone: "Asia/Dhaka", supported_year_start: 2026, supported_year_end: 2026,
   source: "bangladesh-2026.csv", loaded_by: "admin-user", loaded_at: "2026-10-17T04:00:00+00:00", ...overrides,
 });
 
 /** Minimal stand-in for supabase-js: records calls, keeps versions and dates in memory, and runs the RPC. */
-function fakeClient(versions: CalendarVersionRow[], dates: DateRow[], options: Options = {}) {
+function fakeClient(versions: StoredRow[], dates: DateRow[], options: Options = {}) {
   const calls: Call[][] = [];
   function builder(target: string, resolve: (query: Call[]) => { data: unknown; error: DbError | null }) {
     const query: Call[] = [];
@@ -40,7 +42,10 @@ function fakeClient(versions: CalendarVersionRow[], dates: DateRow[], options: O
       return builder(table, query => {
         if (options.readError) return { data: null, error: options.readError };
         if (table === "holiday_calendar_versions") {
-          const sorted = [...versions].sort((a, b) => b.version - a.version);
+          const filters = query.filter(c => c.method === "eq").map(c => c.args as [keyof StoredRow, unknown]);
+          const stored = (v: StoredRow, column: keyof StoredRow) => column === "purpose" ? v.purpose ?? "live" : v[column];
+          const sorted = versions.filter(v => filters.every(([column, value]) => stored(v, column) === value))
+            .sort((a, b) => b.version - a.version);
           const counted = sorted.map(v => ({ ...v, holiday_calendar_dates: [{ count: dates.filter(d => d.version_id === v.id).length }] }));
           if (query.some(c => c.method === "maybeSingle")) return { data: sorted[0] ?? null, error: null };
           return { data: counted, error: null };
@@ -58,6 +63,7 @@ function fakeClient(versions: CalendarVersionRow[], dates: DateRow[], options: O
         const row = versionRow(`new-${next}`, next, {
           jurisdiction: args.p_jurisdiction as string, timezone: args.p_timezone as string, source: args.p_source as string,
           supported_year_start: args.p_year_start as number, supported_year_end: args.p_year_end as number,
+          purpose: args.p_purpose as "live" | "test",
         });
         versions.push(row);
         for (const h of args.p_holidays as { date: string; name: string; kind: string }[]) {
@@ -126,11 +132,29 @@ describe("holiday-calendar-store load", () => {
     const rpc = queries(calls).filter(c => c.method === "rpc");
     expect(rpc).toEqual([{ target: "rpc:load_holiday_calendar", method: "rpc", args: [{
       p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: 2026, p_year_end: 2026, p_source: "bangladesh-2026.csv",
-      p_holidays: calendar2026.holidays,
+      p_holidays: calendar2026.holidays, p_purpose: "live",
     }] }]);
     // Never a direct table write.
     expect(queries(calls).filter(c => ["insert", "update", "delete"].includes(c.method))).toEqual([]);
     expect(versions.find(v => v.id === V1)).toEqual(versionRow(V1, 1));
+  });
+
+  it("loads a test calendar with p_purpose 'test' (only tests do), which never becomes active or listed", async () => {
+    const versions = [versionRow(V1, 1)];
+    const { client, calls } = fakeClient(versions, []);
+    const store = storeFor(client);
+    const saved = await store.load(admin, { ...input, purpose: "test" });
+    expect(saved.version).toBe(2);
+    expect(queries(calls).find(c => c.method === "rpc")?.args[0]).toMatchObject({ p_purpose: "test" });
+    expect((await store.active(admin))?.version.id).toBe(V1);
+    expect((await store.versions(admin)).map(v => v.id)).toEqual([V1]);
+  });
+
+  it("rejects a purpose other than live or test without a query", async () => {
+    const { client, calls } = fakeClient([], []);
+    await expect(storeFor(client).load(admin, { ...input, purpose: "staging" as unknown as "live" }))
+      .rejects.toBeInstanceOf(HolidayCalendarInputError);
+    expect(calls).toHaveLength(0);
   });
 
   it.each([["an empty", "   "], ["a too-long", "x".repeat(101)]])("rejects %s jurisdiction without a query", async (_label, jurisdiction) => {
@@ -190,9 +214,18 @@ describe("holiday-calendar-store active", () => {
       expect(active?.version).toMatchObject({ id: V2, version: 2, source: "corrected.csv", holidayCount: 5 });
       expect([...active!.policy.holidays]).toEqual(calendar2026.holidays.map(h => h.date));
       expect(active!.policy).toMatchObject({ supportedYearStart: 2026, supportedYearEnd: 2026 });
+      expect(queries(calls)).toContainEqual({ target: "holiday_calendar_versions", method: "eq", args: ["purpose", "live"] });
       expect(queries(calls)).toContainEqual({ target: "holiday_calendar_versions", method: "order", args: ["version", { ascending: false }] });
       expect(queries(calls)).toContainEqual({ target: "holiday_calendar_dates", method: "eq", args: ["version_id", V2] });
     }
+  });
+
+  it("ignores a higher test version: the active calendar is the highest live one", async () => {
+    const dates = calendar2026.holidays.map(h => ({ version_id: V1, holiday_date: h.date, name: h.name, kind: h.kind }));
+    const versions = [versionRow(V1, 1), versionRow(V2, 2, { jurisdiction: "E2E Calendar x", purpose: "test" })];
+    const active = await storeFor(fakeClient(versions, dates).client).active(staff);
+    expect(active?.version).toMatchObject({ id: V1, jurisdiction: "Bangladesh", holidayCount: 5 });
+    expect(await storeFor(fakeClient([versionRow(V2, 2, { purpose: "test" })], []).client).active(staff)).toBeNull();
   });
 
   it("gives a policy countWorkingDays accepts, with UNSUPPORTED_YEAR outside the years", async () => {
@@ -211,19 +244,21 @@ describe("holiday-calendar-store active", () => {
 });
 
 describe("holiday-calendar-store versions", () => {
-  it("lists every version newest first, with holiday counts", async () => {
+  it("lists every live version newest first, with holiday counts (test versions never)", async () => {
     const dates: DateRow[] = [
       { version_id: V1, holiday_date: "2026-02-18", name: "A", kind: "general" },
       { version_id: V2, holiday_date: "2026-02-18", name: "A", kind: "general" },
       { version_id: V2, holiday_date: "2026-02-19", name: "B", kind: "special" },
     ];
-    const { client, calls } = fakeClient([versionRow(V1, 1), versionRow(V2, 2)], dates);
+    const test = versionRow("ca1e0000-0000-4000-8000-000000000003", 3, { purpose: "test" });
+    const { client, calls } = fakeClient([versionRow(V1, 1), versionRow(V2, 2), test], dates);
     const list = await storeFor(client).versions(admin);
     expect(list.map(v => [v.version, v.holidayCount])).toEqual([[2, 2], [1, 1]]);
     expect(queries(calls)[0]).toEqual({
       target: "holiday_calendar_versions", method: "select",
       args: ["id,version,jurisdiction,timezone,supported_year_start,supported_year_end,source,loaded_by,loaded_at,holiday_calendar_dates(count)"],
     });
+    expect(queries(calls)[1]).toEqual({ target: "holiday_calendar_versions", method: "eq", args: ["purpose", "live"] });
   });
 
   it("returns an empty list when none is loaded, and unavailable on an error", async () => {

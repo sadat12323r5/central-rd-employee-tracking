@@ -23,10 +23,11 @@
 // removals made in the app survive a re-seed. Other nested profile data (attendance) stays in the fixture
 // (read by employees-store); the fixture's interviews, training, current work, skills, evaluations and
 // history are never read at runtime.
-// Story 5.1: last, if no holiday calendar version exists yet, the provisional calendar
-// docs/holiday-calendars/bangladesh-2026.csv is loaded as the first version (jurisdiction Bangladesh,
+// Story 5.1: last, if no live holiday calendar version exists yet, the provisional calendar
+// docs/holiday-calendars/bangladesh-2026.csv is loaded as the first live version (jurisdiction Bangladesh,
 // Asia/Dhaka) through the load_holiday_calendar RPC, so the version and its dates are written together.
-// Insert-only: once any version exists (an Administrator's load, or an earlier seed), nothing is loaded.
+// Insert-only: once any live version exists (an Administrator's load, or an earlier seed), nothing is
+// loaded; test versions (purpose 'test') are ignored.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
 import { existsSync, readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -253,7 +254,8 @@ const calendarUrl = new URL("../src/domain/holiday-calendar.ts", import.meta.url
 const { buildCalendar, HolidayCalendarInputError } = (await import(calendarUrl)) as {
   buildCalendar: typeof BuildCalendar; HolidayCalendarInputError: typeof HolidayCalendarInputErrorType;
 };
-const existingCalendar = await supabase.from("holiday_calendar_versions").select("id").limit(1);
+// Only live versions count: a test calendar (purpose 'test', loaded by the live tests) is never active.
+const existingCalendar = await supabase.from("holiday_calendar_versions").select("id").eq("purpose", "live").limit(1);
 if (existingCalendar.error) {
   console.error(`Reading holiday calendar versions failed: ${existingCalendar.error.message}`);
   process.exit(1);
@@ -273,7 +275,7 @@ if ((existingCalendar.data ?? []).length > 0) {
   }
   const loaded = await supabase.rpc("load_holiday_calendar", {
     p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart,
-    p_year_end: calendar.supportedYearEnd, p_source: fileName, p_holidays: calendar.holidays,
+    p_year_end: calendar.supportedYearEnd, p_source: fileName, p_holidays: calendar.holidays, p_purpose: "live",
   }).single<{ version: number }>();
   if (loaded.error) {
     console.error(`Seeding the holiday calendar failed: ${loaded.error.message}`);

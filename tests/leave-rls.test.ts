@@ -10,19 +10,18 @@
 // (23514 leave_overlap). Nothing is ever deleted: a BEFORE DELETE trigger refuses every delete, the service
 // role's included. leave-store agrees (counting against holidayCalendarStore.active()).
 //
-// Calendar: the tests need an active calendar covering 2026. When none is active, the provisional
-// docs/holiday-calendars/bangladesh-2026.csv is loaded through the service-role RPC (what db:seed does);
-// an existing active calendar is never touched. A calendar this run loaded is deleted afterwards only when
-// no leave row references it (leave_records.calendar_version_id is ON DELETE RESTRICT and leave rows are
-// never deleted, so once this run has recorded leave against it, it stays: it is the provisional calendar
-// the seed loads anyway).
+// Calendar: the tests count against whatever LIVE calendar is active in the shared project (the provisional
+// Bangladesh calendar, docs/holiday-calendars/bangladesh-2026.csv, loaded by db:seed) and never load a live
+// one of their own; they fail with a clear message when none is active or it does not cover 2026. The only
+// calendar this file loads is a throwaway 'test' version (never active), deleted at once.
 //
 // Cleanup: leave rows can never be deleted (and employees.employee_id is ON DELETE RESTRICT), so the test
 // employees cannot be deleted either. afterAll therefore cancels (soft, through the service role) every
 // active leave row of the test employees, so the next run's periods do not overlap them, archives the
 // employees and unlinks them from their accounts and departments, then deletes the departments and the
 // auth users. The next run re-uses the same three ids (upserted), so the leftovers stay bounded.
-// Fails with 42P01 / PGRST205 / PGRST202 until the holiday_calendars and leave_records migrations are applied.
+// Fails with 42P01 / PGRST205 / PGRST202 until the holiday_calendars and leave_records migrations are applied,
+// and with 42703 / PGRST202 until 20261018010000_holiday_calendar_purpose.sql is applied.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -72,7 +71,6 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
   let managerUserId = "";
   let ownUserId = "";
   let calendarVersionId = "";
-  let createdCalendarId: string | null = null;
   /** The active calendar's policy (read through the service role), so direct rows carry the database's own count. */
   let policy: CalendarPolicy = { holidays: new Set(), supportedYearStart: 2026, supportedYearEnd: 2026 };
 
@@ -134,25 +132,16 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     return data.id as string;
   }
 
-  /** The active calendar's id, loading the provisional 2026 calendar through the service role only when none is active. */
-  async function ensureCalendar(): Promise<string> {
+  /** The active (highest live) calendar's id. Never loads one: a test must not change the live site's calendar. */
+  async function activeCalendar(): Promise<string> {
     const active = await service.from("holiday_calendar_versions").select("id,supported_year_start,supported_year_end")
-      .order("version", { ascending: false }).limit(1).maybeSingle();
+      .eq("purpose", "live").order("version", { ascending: false }).limit(1).maybeSingle();
     if (active.error) throw new Error(`Could not read the active calendar (${active.error.code}): ${active.error.message}`);
-    if (active.data) {
-      if (active.data.supported_year_start > 2026 || active.data.supported_year_end < 2026) {
-        throw new Error("The shared project's active holiday calendar does not cover 2026; these tests count 2026 leave.");
-      }
-      return active.data.id as string;
+    if (!active.data) throw new Error("The shared project has no active (live) holiday calendar; load the provisional Bangladesh calendar (npm run db:seed).");
+    if (active.data.supported_year_start > 2026 || active.data.supported_year_end < 2026) {
+      throw new Error("The shared project's active holiday calendar does not cover 2026; these tests count 2026 leave.");
     }
-    const calendar = buildCalendar([{ name: "bangladesh-2026.csv", text: PROVISIONAL }]);
-    const loaded = await service.rpc("load_holiday_calendar", {
-      p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart, p_year_end: calendar.supportedYearEnd,
-      p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays,
-    }).single<{ id: string }>();
-    if (loaded.error) throw new Error(`Could not load the provisional calendar (${loaded.error.code}): ${loaded.error.message}`);
-    createdCalendarId = loaded.data.id;
-    return loaded.data.id;
+    return active.data.id as string;
   }
 
   async function read(id: string): Promise<Row> {
@@ -177,7 +166,7 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
   beforeAll(async () => {
     service = createClient(url!, serviceKey!, noSession);
     await retire(); // leftovers from an aborted run (the employees are re-used below)
-    calendarVersionId = await ensureCalendar();
+    calendarVersionId = await activeCalendar();
     const years = await service.from("holiday_calendar_versions").select("supported_year_start,supported_year_end").eq("id", calendarVersionId).single();
     if (years.error) throw new Error(`Could not read the active calendar's years (${years.error.code}): ${years.error.message}`);
     const dates = await service.from("holiday_calendar_dates").select("holiday_date").eq("version_id", calendarVersionId).range(0, 999);
@@ -205,13 +194,6 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
     if (!service) return;
     try {
       await retire();
-      if (createdCalendarId) {
-        const used = await service.from("leave_records").select("id", { count: "exact", head: true }).eq("calendar_version_id", createdCalendarId);
-        if (!used.error && used.count === 0) {
-          await service.from("holiday_calendar_dates").delete().eq("version_id", createdCalendarId);
-          await service.from("holiday_calendar_versions").delete().eq("id", createdCalendarId);
-        }
-      }
     } finally {
       for (const id of userIds) await service.auth.admin.deleteUser(id);
     }
@@ -294,20 +276,25 @@ describe.skipIf(!configured)("leave records RLS (shared Supabase project)", () =
       .toContain("leave_working_days_mismatch");
   });
 
-  it("refuses a period counted with a calendar version that is no longer active (23514 leave_calendar_changed)", async () => {
-    const stale = calendarVersionId;
-    // A newer version with the same holidays (so counts stay the same while it is active); deleted at once (no leave uses it).
+  it("refuses a period counted with a calendar version that is not the active one (23514 leave_calendar_changed)", async () => {
+    // A newer TEST version with the same holidays: it never becomes active (the live site's calendar is
+    // untouched), so a period counted with it is refused, and one counted with the live version still saves.
+    // Deleted at once (no leave uses it).
     const calendar = buildCalendar([{ name: "bangladesh-2026.csv", text: PROVISIONAL }]);
     const newer = await service.rpc("load_holiday_calendar", {
       p_jurisdiction: `${PREFIX} Newer`, p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart, p_year_end: calendar.supportedYearEnd,
-      p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays,
+      p_source: "bangladesh-2026.csv", p_holidays: calendar.holidays, p_purpose: "test",
     }).single<{ id: string }>();
-    if (newer.error) throw new Error(`Could not load a newer calendar (${newer.error.code}): ${newer.error.message}`);
+    if (newer.error) throw new Error(`Could not load a newer test calendar (${newer.error.code}): ${newer.error.message}`);
     try {
       const admin = await signedIn(adminEmail);
-      const refused = await admin.from("leave_records").insert(period(childEmployee, "2026-04-20", "2026-04-20", { calendar_version_id: stale }));
+      const refused = await admin.from("leave_records").insert(period(childEmployee, "2026-04-20", "2026-04-20", { calendar_version_id: newer.data.id }));
       expect(refused.error?.code).toBe("23514");
       expect(refused.error?.message).toContain("leave_calendar_changed");
+      expect(await activeCalendar()).toBe(calendarVersionId);
+      const saved = await admin.from("leave_records").insert(period(childEmployee, "2026-04-20")).select("calendar_version_id").single();
+      expect(saved.error).toBeNull();
+      expect(saved.data?.calendar_version_id).toBe(calendarVersionId);
     } finally {
       await service.from("holiday_calendar_dates").delete().eq("version_id", newer.data.id);
       await service.from("holiday_calendar_versions").delete().eq("id", newer.data.id);
