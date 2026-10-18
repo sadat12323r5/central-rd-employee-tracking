@@ -1,6 +1,7 @@
 "use client";
 
 import { startTransition, useActionState, useId, useState, type FormEvent } from "react";
+import { CSV_BOM } from "@/domain/csv";
 import { dhakaDate } from "@/domain/timesheet";
 import { exportActivityAction, exportAllActivityAction, type ActivityExportState } from "@/server/activity-actions";
 
@@ -17,9 +18,13 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 
 const initial: ActivityExportState = { error: "", message: "" };
 
-/** Hands the CSV text to the browser as a download. */
+/**
+ * Hands the CSV text to the browser as a download. The UTF-8 BOM is restored when missing: a long action
+ * result reaches the client as a separately decoded text chunk, and that decoding drops a leading BOM.
+ */
 function save(csv: string, filename: string) {
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const body = csv.startsWith(CSV_BOM) ? csv : CSV_BOM + csv;
+  const url = URL.createObjectURL(new Blob([body], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;

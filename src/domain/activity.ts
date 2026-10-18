@@ -1,7 +1,12 @@
 // One employee's activity timeline (Story 8.1): period resolution, timeline rows and their CSV.
 // Pure functions only: reading the sources, sessions and the audit write live in src/server.
+// Story 8.4 adds assignments (tracked and backfilled), closed-assignment evaluations and leave. A record that
+// spans days (an assignment, a leave period) is dated by its start but included when its range touches the period.
+import type { Assignment, AssignmentEvaluation, BackfilledProject, LeaveRecord } from "@/data/employees";
 import { CSV_BOM, guardCell, toCsv } from "./csv";
 import { formatDisplayDate, isCalendarDate } from "./dates";
+import { authorLabel, isAmended } from "./evaluations";
+import { categoryForWorkingDays } from "./leave";
 import { dhakaDate, entryStatus, type TimesheetEntry } from "./timesheet";
 
 export const PERIODS = ["this-week", "last-week", "month", "year", "custom", "all"] as const;
@@ -18,7 +23,7 @@ export type PeriodInput =
 /** An inclusive range of Asia/Dhaka calendar dates, `YYYY-MM-DD`. */
 export type Period = { from: string; to: string };
 
-export const ACTIVITY_TYPES = ["attendance", "interview", "training", "enrolment"] as const;
+export const ACTIVITY_TYPES = ["attendance", "interview", "training", "enrolment", "assignment", "evaluation", "leave"] as const;
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
 export type ActivityRow = {
@@ -41,7 +46,26 @@ export type ActivitySources = {
   training: readonly ActivityTraining[];
   /** LMS enrolments: in progress and LMS-completed (Story 3.2), with the LMS freshness for this employee. */
   enrolments: { entries: readonly ActivityTraining[]; asOf?: string; stale: boolean };
+  /** Tracked assignments (Story 4.5), open and closed. */
+  assignments: readonly ActivityAssignment[];
+  /** Self-reported past projects (Story 4.7), withdrawn ones included. */
+  backfilledProjects: readonly ActivityBackfilledProject[];
+  /** Evaluations of closed assignments (Story 4.6). */
+  evaluations: readonly ActivityEvaluation[];
+  /** Recorded leave periods (Stories 5.2-5.3), cancelled ones included. */
+  leave: readonly ActivityLeave[];
 };
+
+/** The record fields the timeline needs (structurally the stores' records). */
+export type ActivityAssignment = Pick<Assignment, "id" | "client" | "projectName" | "role" | "startDate" | "status" | "completionDate" | "provenance">;
+export type ActivityBackfilledProject = Pick<BackfilledProject, "client" | "projectName" | "completionDate" | "outcome" | "status" | "provenance">;
+export type ActivityEvaluation = Pick<AssignmentEvaluation,
+  "assignmentId" | "evaluation" | "clientFeedback" | "createdBy" | "createdByName" | "createdByRole" | "createdAt"
+  | "authoredBy" | "authoredByName" | "authoredByRole" | "updatedAt">;
+export type ActivityLeave = Pick<LeaveRecord, "startDate" | "endDate" | "workingDays" | "cancelledAt">;
+
+/** How the rows are built. `clientFeedback`: evaluation client feedback goes into `details` (Administrator or manager exporter only). */
+export type TimelineOptions = { clientFeedback?: boolean };
 
 /** The requested period is not a valid one (bad dates, end before start, or ending in the future). */
 export class ActivityPeriodError extends Error {
@@ -126,34 +150,108 @@ function lmsAsOf(asOf: string | undefined): string {
   return Number.isNaN(time) ? "Not recorded" : formatDisplayDate(dhakaDate(new Date(time)));
 }
 
-/** Every date any source records for the employee, as the timeline dates them. */
-function recordDates(sources: ActivitySources): string[] {
+/** The Asia/Dhaka calendar date of an ISO instant; empty when unparseable. */
+function dhakaDayOf(instant: string): string {
+  const time = Date.parse(instant);
+  return Number.isNaN(time) ? "" : dhakaDate(new Date(time));
+}
+
+/** Every date any source records for the employee (spanning records: both ends, an open assignment ending `today`). */
+function recordDates(sources: ActivitySources, today: string): string[] {
   return [
     ...sources.attendance.map(e => e.date),
     ...sources.interviews.map(i => i.date),
     ...sources.training.map(t => t.date),
     ...sources.enrolments.entries.map(e => e.date),
+    ...sources.assignments.flatMap(a => [a.startDate, a.completionDate ?? today]),
+    ...sources.backfilledProjects.map(p => p.completionDate),
+    ...sources.evaluations.map(e => dhakaDayOf(e.createdAt)),
+    ...sources.leave.flatMap(l => [l.startDate, l.endDate]),
   ].filter(isCalendarDate);
 }
 
-/** The employee's first to last record date (for "All time"), or null when nothing is recorded. */
-export function recordSpan(sources: ActivitySources): Period | null {
-  const dates = recordDates(sources).sort();
+/**
+ * The employee's first to last record date (for "All time"), or null when nothing is recorded. `today` is
+ * the Asia/Dhaka date of the server clock (the end of an open assignment).
+ */
+export function recordSpan(sources: ActivitySources, today: string): Period | null {
+  const dates = recordDates(sources, today).sort();
   return dates.length === 0 ? null : { from: dates[0], to: dates[dates.length - 1] };
 }
 
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** A row before the employee is added; `range` (inclusive) decides inclusion for records spanning days. */
+type DraftRow = Omit<ActivityRow, "employeeId" | "employeeName"> & { range?: Period };
+
+const inPeriod = (row: DraftRow, period: Period) => {
+  if (!row.range) return isCalendarDate(row.date) && row.date >= period.from && row.date <= period.to;
+  const { from, to } = row.range;
+  return isCalendarDate(from) && isCalendarDate(to) && from <= period.to && to >= period.from;
+};
+
+function assignmentRow(a: ActivityAssignment, today: string): DraftRow {
+  return {
+    date: a.startDate, time: "", type: "assignment", title: `${a.projectName} — ${a.client}`,
+    details: `Role: ${a.role}; start: ${a.startDate}; end: ${a.completionDate ?? "open"}; provenance: ${a.provenance}`,
+    status: a.status === "closed" ? "Closed" : "Open",
+    // Open: to today, or just its start day when it starts in the future (never an inverted range).
+    range: { from: a.startDate, to: a.completionDate ?? (today > a.startDate ? today : a.startDate) },
+  };
+}
+
+function backfilledRow(p: ActivityBackfilledProject): DraftRow {
+  return {
+    date: p.completionDate, time: "", type: "assignment", title: `${p.projectName} — ${p.client}`,
+    details: `Self-reported past project; completed: ${p.completionDate}; outcome: ${p.outcome}; provenance: ${p.provenance}`,
+    status: p.status === "withdrawn" ? "Withdrawn" : "Self-reported",
+  };
+}
+
+function evaluationRow(e: ActivityEvaluation, assignments: readonly ActivityAssignment[], options: TimelineOptions): DraftRow {
+  const assignment = assignments.find(a => a.id === e.assignmentId);
+  const feedback = options.clientFeedback === true && e.clientFeedback.trim() ? `; client feedback: ${e.clientFeedback}` : "";
+  return {
+    date: dhakaDayOf(e.createdAt), time: "", type: "evaluation",
+    title: assignment ? `Evaluation — ${assignment.projectName} (${assignment.client})` : "Evaluation",
+    // The evaluator of the text as it stands: the latest author (the first one unless amended).
+    details: `Evaluator: ${authorLabel(e.authoredByName, e.authoredByRole)}; outcome: ${e.evaluation}${feedback}`,
+    status: isAmended(e) ? "Amended" : "Written",
+  };
+}
+
+/** The length category's label (the only "type" leave has); "Leave" when the stored count is not a positive integer. */
+function leaveCategoryLabel(workingDays: number): string {
+  try {
+    return categoryForWorkingDays(workingDays).label;
+  } catch {
+    return "Leave";
+  }
+}
+
+function leaveRow(l: ActivityLeave): DraftRow {
+  return {
+    date: l.startDate, time: "", type: "leave", title: leaveCategoryLabel(l.workingDays),
+    details: `From ${l.startDate} to ${l.endDate}; ${l.workingDays} working day${l.workingDays === 1 ? "" : "s"}`,
+    status: l.cancelledAt ? "Cancelled" : "Recorded",
+    range: { from: l.startDate, to: l.endDate },
+  };
+}
+
 /**
  * The employee's timeline rows dated within the inclusive period, sorted by date, then time
  * (attendance clock-in; rows without a time first), then type, then title. Rows whose date is not
  * a calendar date (for example an enrolment without a target date) cannot be placed and are left out.
+ * A tracked assignment (start to completion, or to today while open) and a leave period are included when
+ * their range touches the period, and dated by their start. Evaluation client feedback is in `details` only
+ * with `options.clientFeedback`.
  */
 export function buildTimeline(
-  employee: { id: string; name: string }, sources: ActivitySources, period: Period, now: Date,
+  employee: { id: string; name: string }, sources: ActivitySources, period: Period, now: Date, options: TimelineOptions = {},
 ): ActivityRow[] {
+  const today = dhakaDate(now);
   const staleNote = sources.enrolments.stale ? `; LMS data as of ${lmsAsOf(sources.enrolments.asOf)} (may be out of date)` : "";
-  const rows: Omit<ActivityRow, "employeeId" | "employeeName">[] = [
+  const rows: DraftRow[] = [
     ...sources.attendance.map(entry => attendanceRow(entry, now)),
     ...sources.interviews.map(i => ({
       date: i.date, time: "", type: "interview" as const, title: `${i.company} — ${i.role}`,
@@ -171,10 +269,14 @@ export function buildTimeline(
         status: inProgress ? "In progress" : e.result,
       };
     }),
+    ...sources.assignments.map(a => assignmentRow(a, today)),
+    ...sources.backfilledProjects.map(backfilledRow),
+    ...sources.evaluations.map(e => evaluationRow(e, sources.assignments, options)),
+    ...sources.leave.map(leaveRow),
   ];
   return rows
-    .filter(row => isCalendarDate(row.date) && row.date >= period.from && row.date <= period.to)
-    .map(row => ({ employeeId: employee.id, employeeName: employee.name, ...row }))
+    .filter(row => isCalendarDate(row.date) && inPeriod(row, period))
+    .map(({ range: _range, ...row }) => ({ employeeId: employee.id, employeeName: employee.name, ...row }))
     .sort((a, b) => compare(a.date, b.date) || compare(a.time, b.time) || compare(a.type, b.type) || compare(a.title, b.title));
 }
 

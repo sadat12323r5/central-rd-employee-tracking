@@ -119,3 +119,8 @@ Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the acti
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-4-attendance-real-data.md`
   summary: Mid-month joiners show earlier days as missing (Employee.joined is free text, so no join-date cap); the summary is month-to-date only (no period picker); Staff self-service has no summary.
   evidence: Recorded in the spec's deferred list, Design Notes and triage log.
+## Story 8.4 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-4-exports-assignments-evaluations-leave.md`
+  summary: The 2026-10-16 "Blocked: Story 8.4" entry above and the Epic 5 blocked entry are resolved (provisional calendar adopted; 5.1–5.4 and 8.4 built). Open: bulk exports read every visible record of the four new sources before filtering (cost only); the e2e fixed subject BS-9193 accumulates closed assignments and cancelled leave across runs by design (rows can never be deleted).
+  evidence: Triage log in the spec.
