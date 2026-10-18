@@ -95,3 +95,32 @@ Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the acti
 - source_spec: `_bmad-output/implementation-artifacts/spec-7-3-employment-history.md`
   summary: Employment-history edits are last-write-wins (no optimistic concurrency), like interviews; archived employees and archived subjects can still have history written (no archived_at check in RLS or store, as with interviews); the db:seed history write is untested; no e2e drives Staff self-service or a manager.
   evidence: Recorded in the spec's deferred list with locations.
+
+## Story 5.1 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-holiday-calendar.md`
+  summary: The service role can still delete dates from a stored calendar version (kept so live tests can clean up); the Holiday calendar panel lists versions but not the dates inside each, and has no preview/confirm before a load becomes active.
+  evidence: Recorded in the spec's deferred list with locations.
+
+## Story 5.2 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-record-leave.md`
+  summary: Leave can be recorded for an archived employee (same gap as employment history); the profile Attendance tab still shows fixture stats beside the real leave list until 5.4; the leave guard trigger's UPDATE branch has no live test yet (5.3 should add it).
+  evidence: Recorded in the spec's deferred list with locations.
+
+## Story 5.3 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-3-edit-cancel-leave.md`
+  summary: Leave edits and cancels keep no audit trail (who changed it, previous dates); a manager outside the subtree sees "no longer exists" rather than the department message, because RLS hides the row. (The 5.2 item "guard trigger UPDATE branch has no live test" is now covered by tests/leave-rls.test.ts, pending the migrations.)
+  evidence: Recorded in the spec's deferred list and triage log.
+
+## Story 5.4 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-4-attendance-real-data.md`
+  summary: Mid-month joiners show earlier days as missing (Employee.joined is free text, so no join-date cap); the summary is month-to-date only (no period picker); Staff self-service has no summary.
+  evidence: Recorded in the spec's deferred list, Design Notes and triage log.
+## Story 8.4 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-4-exports-assignments-evaluations-leave.md`
+  summary: The 2026-10-16 "Blocked: Story 8.4" entry above and the Epic 5 blocked entry are resolved (provisional calendar adopted; 5.1–5.4 and 8.4 built). Open: bulk exports read every visible record of the four new sources before filtering (cost only); the e2e fixed subject BS-9193 accumulates closed assignments and cancelled leave across runs by design (rows can never be deleted).
+  evidence: Triage log in the spec.

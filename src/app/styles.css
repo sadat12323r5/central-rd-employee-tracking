@@ -37,3 +37,7 @@
 .assessment-form h2{margin-bottom:6px}.assessment-form .staff-log{margin-top:12px}.staff-assessment .skill-row:last-of-type{border-bottom:0}.staff-assessment h3{font-size:14px}
 /* Story 7.3: employment history */
 .history-controls{margin-top:4px}.history-controls .staff-log{margin-top:8px}.history-controls .staff-actions{gap:18px}.employment-history-add{margin-top:8px;border-top:1px solid var(--line-divider);padding-top:20px}.employment-history-add h3{margin:0}
+/* Story 5.2: leave */
+.leave-category{display:inline-flex;align-items:center;gap:7px}.leave-swatch{width:10px;height:10px;border-radius:3px;flex-shrink:0;display:inline-block}.leave-form{margin-top:20px;border-top:1px solid var(--line-divider);padding-top:20px}.leave-form h3{margin:0}.leave-dates{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;max-width:420px}
+/* Story 5.3: edit / cancel leave */
+.leave-controls .staff-actions{gap:18px}.leave-controls .staff-log{margin-top:8px;white-space:normal;min-width:260px}.leave-controls .staff-log p{max-width:320px}

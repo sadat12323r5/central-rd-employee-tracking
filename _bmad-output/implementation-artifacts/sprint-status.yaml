@@ -70,11 +70,11 @@ development_status:
   4-10-managers-use-my-record-for-their-own-self-service: review
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-administrator-loads-the-approved-holiday-calendar: backlog
-  5-2-record-a-leave-period: backlog
-  5-3-edit-or-cancel-a-leave-period: backlog
-  5-4-attendance-views-use-real-data: backlog
+  epic-5: in-progress
+  5-1-administrator-loads-the-approved-holiday-calendar: review
+  5-2-record-a-leave-period: review
+  5-3-edit-or-cancel-a-leave-period: review
+  5-4-attendance-views-use-real-data: review
   epic-5-retrospective: optional
 
   epic-6: done
@@ -92,7 +92,7 @@ development_status:
 
   epic-8: in-progress
   8-3-department-managers-export-within-their-department: review
-  8-4-exports-include-assignments-evaluations-and-leave: backlog
+  8-4-exports-include-assignments-evaluations-and-leave: review
   epic-8-retrospective: optional
 
 action_items:

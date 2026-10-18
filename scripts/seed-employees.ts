@@ -20,11 +20,16 @@
 // skipped, so a manager's later rating survives) and its evaluations into `employee_evaluations`
 // (insert-only, one per employee), both with updated_by null. Story 7.3: the fixture's employment history
 // is inserted into `employment_history` (ids from employmentHistorySeedId), insert-only, so edits and
-// removals made in the app survive a re-seed. Other nested profile data (attendance) stays in the fixture
-// (read by employees-store); the fixture's interviews, training, current work, skills, evaluations and
-// history are never read at runtime.
+// removals made in the app survive a re-seed. The fixture has no attendance summary (Story 5.4 computes it
+// from real records); the fixture's interviews, training, current work, skills, evaluations and history are
+// never read at runtime.
+// Story 5.1: last, if no live holiday calendar version exists yet, the provisional calendar
+// docs/holiday-calendars/bangladesh-2026.csv is loaded as the first live version (jurisdiction Bangladesh,
+// Asia/Dhaka) through the load_holiday_calendar RPC, so the version and its dates are written together.
+// Insert-only: once any live version exists (an Administrator's load, or an earlier seed), nothing is
+// loaded; test versions (purpose 'test') are ignored.
 // Run with `npm run db:seed`. Credentials come from the environment or .env.local and are never printed.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import type {
   assignmentSeedRows as AssignmentSeedRows, Employee, employmentHistorySeedRows as EmploymentHistorySeedRows,
@@ -32,6 +37,7 @@ import type {
   interviewSeedRows as InterviewSeedRows, lmsStubSeedRows as LmsStubSeedRows,
   missingSkillSeedRows as MissingSkillSeedRows, skillSeedRows as SkillSeedRows, trainingSeedRows as TrainingSeedRows,
 } from "../src/data/employees";
+import type { buildCalendar as BuildCalendar, HolidayCalendarInputError as HolidayCalendarInputErrorType } from "../src/domain/holiday-calendar";
 import type {
   departmentSeedRows as DepartmentSeedRows, pickSeedAdministrator as PickSeedAdministrator, SeedAuthUser,
 } from "../src/data/departments";
@@ -242,3 +248,38 @@ if (enrolments.error) {
   process.exit(1);
 }
 console.log(`Inserted ${enrolments.data?.length ?? 0} new LMS stub enrolments (existing ones left unchanged).`);
+
+// Story 5.1: the provisional holiday calendar, only while no version exists (insert-only, idempotent).
+const calendarUrl = new URL("../src/domain/holiday-calendar.ts", import.meta.url).href;
+const { buildCalendar, HolidayCalendarInputError } = (await import(calendarUrl)) as {
+  buildCalendar: typeof BuildCalendar; HolidayCalendarInputError: typeof HolidayCalendarInputErrorType;
+};
+// Only live versions count: a test calendar (purpose 'test', loaded by the live tests) is never active.
+const existingCalendar = await supabase.from("holiday_calendar_versions").select("id").eq("purpose", "live").limit(1);
+if (existingCalendar.error) {
+  console.error(`Reading holiday calendar versions failed: ${existingCalendar.error.message}`);
+  process.exit(1);
+}
+if ((existingCalendar.data ?? []).length > 0) {
+  console.log("A holiday calendar is already loaded (left unchanged).");
+} else {
+  const fileName = "bangladesh-2026.csv";
+  const text = readFileSync(new URL(`../docs/holiday-calendars/${fileName}`, import.meta.url), "utf8");
+  let calendar: ReturnType<typeof BuildCalendar>;
+  try {
+    calendar = buildCalendar([{ name: fileName, text }]);
+  } catch (error) {
+    if (!(error instanceof HolidayCalendarInputError)) throw error;
+    console.error(`Seeding the holiday calendar failed: ${error.message}`);
+    process.exit(1);
+  }
+  const loaded = await supabase.rpc("load_holiday_calendar", {
+    p_jurisdiction: "Bangladesh", p_timezone: "Asia/Dhaka", p_year_start: calendar.supportedYearStart,
+    p_year_end: calendar.supportedYearEnd, p_source: fileName, p_holidays: calendar.holidays, p_purpose: "live",
+  }).single<{ version: number }>();
+  if (loaded.error) {
+    console.error(`Seeding the holiday calendar failed: ${loaded.error.message}`);
+    process.exit(1);
+  }
+  console.log(`Loaded the provisional holiday calendar as version ${loaded.data.version} (${calendar.holidays.length} holidays).`);
+}

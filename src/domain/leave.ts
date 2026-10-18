@@ -70,6 +70,23 @@ function assertSupported(date: Date, policy: CalendarPolicy): void {
   }
 }
 
+function isWorkingDate(date: Date, policy: CalendarPolicy): boolean {
+  const weekday = date.getUTCDay();
+  const isWeekend = weekday === 0 || weekday === 6;
+  return !isWeekend && !policy.holidays.has(toIsoDate(date));
+}
+
+/**
+ * Story 5.4: whether one ISO date is a scheduled working day (Monday to Friday and not a calendar holiday).
+ * The per-day rule `countWorkingDays` applies, without its range checks: it never throws for a weekend or
+ * holiday. Throws INVALID_DATE for a non-date and UNSUPPORTED_YEAR for a year outside the policy.
+ */
+export function isWorkingDay(value: string, policy: CalendarPolicy): boolean {
+  const date = parseDate(value);
+  assertSupported(date, policy);
+  return isWorkingDate(date, policy);
+}
+
 export function countWorkingDays(
   startValue: string,
   endValue: string,
@@ -86,10 +103,7 @@ export function countWorkingDays(
 
   let workingDays = 0;
   for (let time = start.getTime(); time <= end.getTime(); time += DAY_MS) {
-    const date = new Date(time);
-    const weekday = date.getUTCDay();
-    const isWeekend = weekday === 0 || weekday === 6;
-    if (!isWeekend && !policy.holidays.has(toIsoDate(date))) {
+    if (isWorkingDate(new Date(time), policy)) {
       workingDays += 1;
     }
   }
