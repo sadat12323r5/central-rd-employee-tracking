@@ -15,6 +15,13 @@ export function createMemoryAttendanceStore(): AttendanceStore {
       if (session.role === "admin" || (session.role === "staff" && session.employeeId === employeeId)) return forEmployee(employeeId);
       return [];
     },
+    async listInPeriod(session, { from, to }, employeeIds) {
+      const mayRead = (id: string) => session.role === "admin" || (session.role === "staff" && session.employeeId === id);
+      return [...records.values()]
+        .filter(e => mayRead(e.employeeId) && (employeeIds === undefined || employeeIds.includes(e.employeeId)) && e.date >= from && e.date <= to)
+        .sort((a, b) => a.date.localeCompare(b.date) || a.employeeId.localeCompare(b.employeeId))
+        .map(e => structuredClone(e));
+    },
     async listForEmployee(employeeId) {
       return [...records.values()].filter(e => e.employeeId === employeeId).sort(newestFirst).map(e => structuredClone(e));
     },

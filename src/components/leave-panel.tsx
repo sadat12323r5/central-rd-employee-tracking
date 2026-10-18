@@ -25,8 +25,11 @@ const submitWith = (action: (form: FormData) => void) => (event: FormEvent<HTMLF
   startTransition(() => action(form));
 };
 
-/** A category always shows its text label next to its colour (from the domain, for the period's working days). */
-function Category({ workingDays }: { workingDays: number }) {
+/**
+ * A category always shows its text label next to its colour (from the domain, for the period's working days).
+ * Story 5.4: also used for leave rows in the attendance exceptions table.
+ */
+export function LeaveCategoryLabel({ workingDays }: { workingDays: number }) {
   const display = categoryForWorkingDays(workingDays);
   return <span className="leave-category"><span className="leave-swatch" style={{ background: display.colour }} aria-hidden="true" />{display.label}</span>;
 }
@@ -132,7 +135,7 @@ export default function LeavePanel({ employeeId, records, canEdit, own = false }
       <thead><tr><th>From</th><th>To</th><th>Working days</th><th>Category</th><th>Status</th>{canEdit && <th>Changes</th>}</tr></thead>
       <tbody>{records.map(r => <tr key={r.id}>
         <td>{formatDisplayDate(r.startDate)}</td><td>{formatDisplayDate(r.endDate)}</td><td>{r.workingDays}</td>
-        <td><Category workingDays={r.workingDays} /></td>
+        <td><LeaveCategoryLabel workingDays={r.workingDays} /></td>
         <td>{r.cancelledAt ? <span className="badge withdrawn">Cancelled</span> : <span className="badge green"><span className="dot" />Recorded</span>}</td>
         {canEdit && <td>{!r.cancelledAt && <LeaveControls record={r} employeeId={employeeId} cancelAction={cancelAction} cancelPending={cancelPending} />}</td>}
       </tr>)}</tbody>

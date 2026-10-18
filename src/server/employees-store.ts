@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { employees as fixture, type Employee, type LeaveRecord } from "@/data/employees";
+import type { Employee, LeaveRecord } from "@/data/employees";
 import {
   derivedFields, invalidEmployeeDetailsFields, invalidNewEmployeeFields, normalizeEmployeeDetails, normalizeNewEmployee,
   type EmployeeDetailsInput, type NewEmployeeField, type NewEmployeeInput,
@@ -32,10 +32,9 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // Story 2.1), training through training-store (Story 3.1), assignments through assignments-store
 // (Story 4.5), skills and the evaluation (`review`) through assessments-store (Story 7.4) and employment
 // history through employment-history-store (Story 7.3, active entries, newest first) and leave through
-// leave-store (Story 5.2, newest start first, cancelled periods included and marked); the other nested
-// profile data (attendance summary) still comes from the fixture, merged by Employee ID, so callers see
-// the same shape. The fixture's interviews, training, former "current work", skills, review and history
-// are never read here.
+// leave-store (Story 5.2, newest start first, cancelled periods included and marked). The attendance
+// summary is not part of a profile: it is computed from real records by attendance-summary (Story 5.4).
+// The fixture's interviews, training, former "current work", skills, review and history are never read here.
 //
 // Every read (Administrator and Staff, Story 1.3) goes through a per-request client carrying the
 // signed-in user's Supabase JWT, so the employees RLS policies are the enforced rule: an admin
@@ -236,20 +235,6 @@ const MANAGER_COLUMNS = `${COLUMNS},department_id,archived_at`;
 /** Which extra fields a read maps: Administrator (account, archived, department), manager (archived, department) or none. */
 export type EmployeeView = "admin" | "manager" | "basic";
 
-type NestedProfile = Pick<Employee, "attendance">;
-
-const emptyProfile = (): NestedProfile => ({
-  attendance: { scheduled: 0, worked: 0, leave: 0, unrecorded: 0, records: [] },
-});
-
-/** The fixture's remaining nested data (never skills or the review, from assessments-store, Story 7.4, nor history, from employment-history-store, Story 7.3). */
-function nestedFor(id: string): NestedProfile {
-  const source = fixture.find(e => e.id === id);
-  if (!source) return emptyProfile();
-  const { attendance } = structuredClone(source);
-  return { attendance };
-}
-
 /** No evaluation recorded yet: every field empty (the UI says so rather than showing a blank date). */
 export const emptyReview = (): Employee["review"] => ({ date: "", reviewer: "", readiness: "", strengths: "", next: "" });
 
@@ -286,7 +271,6 @@ export function toEmployee(
     color: row.avatar_color, summary: row.summary,
     ...(mode === "admin" ? { hasAccount: Boolean(row.auth_user_id) } : {}),
     ...(mode !== "basic" ? { archived: Boolean(row.archived_at), departmentId: row.department_id ?? null } : {}),
-    ...nestedFor(row.employee_id),
     skills,
     review,
     history,

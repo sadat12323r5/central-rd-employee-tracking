@@ -113,3 +113,9 @@ Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the acti
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-3-edit-cancel-leave.md`
   summary: Leave edits and cancels keep no audit trail (who changed it, previous dates); a manager outside the subtree sees "no longer exists" rather than the department message, because RLS hides the row. (The 5.2 item "guard trigger UPDATE branch has no live test" is now covered by tests/leave-rls.test.ts, pending the migrations.)
   evidence: Recorded in the spec's deferred list and triage log.
+
+## Story 5.4 (recorded 2026-10-17)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-4-attendance-real-data.md`
+  summary: Mid-month joiners show earlier days as missing (Employee.joined is free text, so no join-date cap); the summary is month-to-date only (no period picker); Staff self-service has no summary.
+  evidence: Recorded in the spec's deferred list, Design Notes and triage log.

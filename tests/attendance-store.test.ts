@@ -26,6 +26,10 @@ function fakeClient(rows: AttendanceRow[], mode: Mode = "ok") {
       const builder = {
         select: (...args: unknown[]) => { record("select", args); return builder; },
         eq: (...args: unknown[]) => { record("eq", args); return builder; },
+        // Recorded but not applied, so the store's own scope and period filter (defence in depth) is exercised.
+        in: (...args: unknown[]) => { record("in", args); return builder; },
+        gte: (...args: unknown[]) => { record("gte", args); return builder; },
+        lte: (...args: unknown[]) => { record("lte", args); return builder; },
         order: (...args: unknown[]) => { record("order", args); return builder; },
         range: (...args: unknown[]) => { record("range", args); return builder; },
         returns: () => builder,
@@ -227,5 +231,90 @@ describe("attendance-store paging (Story 8.2)", () => {
     const { client, requests } = pagedClient([many(1000, rowAt), "error", many(3, rowAt)]);
     await expect(storeFor(client).listAll()).rejects.toBeInstanceOf(AttendanceUnavailableError);
     expect(requests()).toBe(2);
+  });
+});
+
+describe("attendance-store listInPeriod (Story 5.4: session-scoped, date-windowed)", () => {
+  const period = { from: "2026-09-01", to: "2026-09-30" };
+  const at = (id: string, employee_id: string, work_date: string): AttendanceRow => ({ ...row, id, employee_id, work_date, clock_in: `${work_date}T03:00:00+00:00`, clock_out: null });
+  const rows = [
+    at("a", "BS-1001", "2026-09-02"), at("b", "BS-1002", "2026-09-03"), at("c", "BS-1003", "2026-09-04"),
+    at("d", "BS-1001", "2026-08-31"), at("e", "BS-1001", "2026-10-01"),
+  ];
+  const admin = { role: "admin" } as const;
+  const staff = { role: "staff", employeeId: "BS-1001" } as const;
+  const manager = { role: "manager", employeeId: "BS-1099", userId: "aaaa0000-0000-4000-8000-000000000001" } as const;
+  const scopeOf = (employeeIds: string[], fail?: Error): ManagerScope => ({
+    async forManager() { if (fail) throw fail; return { departmentIds: new Set(["d"]), employeeIds: new Set(employeeIds) }; },
+  });
+  const storeWith = (client: SupabaseClient, scope: ManagerScope = scopeOf([])) => createAttendanceStore({ userClient: async () => client, scope });
+  const ids = (entries: TimesheetEntry[]) => entries.map(e => e.id);
+
+  it("reads every employee for an Administrator, windowed on work_date and ordered oldest first", async () => {
+    const { client, calls } = fakeClient(rows);
+    expect(ids(await storeWith(client).listInPeriod(admin, period))).toEqual(["a", "b", "c"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].map(c => [c.method, ...c.args])).toEqual([
+      ["select", "id,employee_id,work_date,clock_in,clock_out,break_minutes,work_mode,log"],
+      ["gte", "work_date", "2026-09-01"],
+      ["lte", "work_date", "2026-09-30"],
+      ["order", "work_date", { ascending: true }],
+      ["order", "employee_id", { ascending: true }],
+      ["order", "id", { ascending: true }],
+      ["range", 0, 999],
+    ]);
+  });
+
+  it("narrows an Administrator's read to the given employees", async () => {
+    const { client, calls } = fakeClient(rows);
+    expect(ids(await storeWith(client).listInPeriod(admin, period, ["BS-1001", "BS-1003"]))).toEqual(["a", "c"]);
+    expect(calls[0].find(c => c.method === "in")?.args).toEqual(["employee_id", ["BS-1001", "BS-1003"]]);
+  });
+
+  it("reads only a staff member's own entries; asking only for others is [] without a query", async () => {
+    const { client, calls } = fakeClient(rows);
+    const store = storeWith(client);
+    expect(ids(await store.listInPeriod(staff, period))).toEqual(["a"]);
+    expect(calls[0].find(c => c.method === "eq")?.args).toEqual(["employee_id", "BS-1001"]);
+    calls.length = 0;
+    expect(await store.listInPeriod(staff, period, ["BS-1002"])).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reads only a manager's subtree, intersected with the given employees", async () => {
+    const { client, calls } = fakeClient(rows);
+    const store = storeWith(client, scopeOf(["BS-1002", "BS-1003"]));
+    expect(ids(await store.listInPeriod(manager, period))).toEqual(["b", "c"]);
+    expect(calls[0].find(c => c.method === "in")?.args).toEqual(["employee_id", ["BS-1002", "BS-1003"]]);
+    calls.length = 0;
+    expect(ids(await store.listInPeriod(manager, period, ["BS-1001", "BS-1003"]))).toEqual(["c"]);
+    expect(calls[0].find(c => c.method === "eq")?.args).toEqual(["employee_id", "BS-1003"]);
+  });
+
+  it("is [] without a query for a manager with an empty scope or no in-scope employee asked for", async () => {
+    const { client, calls } = fakeClient(rows);
+    expect(await storeWith(client, scopeOf([])).listInPeriod(manager, period)).toEqual([]);
+    expect(await storeWith(client, scopeOf(["BS-1002"])).listInPeriod(manager, period, ["BS-1001"])).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reports attendance unavailable when the manager's scope cannot be read", async () => {
+    const { client, calls } = fakeClient(rows);
+    await expect(storeWith(client, scopeOf([], new ManagerScopeUnavailableError())).listInPeriod(manager, period)).rejects.toBeInstanceOf(AttendanceUnavailableError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws AttendanceUnavailableError on a database error or a network failure", async () => {
+    await expect(storeWith(fakeClient(rows, "error").client).listInPeriod(admin, period)).rejects.toBeInstanceOf(AttendanceUnavailableError);
+    await expect(storeWith(fakeClient(rows, "throw").client).listInPeriod(admin, period)).rejects.toBeInstanceOf(AttendanceUnavailableError);
+  });
+
+  it("pages 1000 rows at a time and fails whole when a later page fails", async () => {
+    const rowAt = (i: number): AttendanceRow => at(`row-${i}`, "BS-1001", "2026-09-02");
+    const paged = pagedClient([many(1000, rowAt), many(2, rowAt, 1000)]);
+    expect(await storeWith(paged.client).listInPeriod(admin, period)).toHaveLength(1002);
+    expect(paged.ranges).toEqual([[0, 999], [1000, 1999]]);
+    const failing = pagedClient([many(1000, rowAt), "error"]);
+    await expect(storeWith(failing.client).listInPeriod(admin, period)).rejects.toBeInstanceOf(AttendanceUnavailableError);
   });
 });
