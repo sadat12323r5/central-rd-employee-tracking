@@ -117,7 +117,12 @@ Administrators (and Department Managers within their own department) add new emp
 Administrators, and Department Managers within their own department, download a CSV timeline of everything recorded about an employee in a chosen period: attendance and work logs, interviews, training, LMS enrolments and, once their epics land, assignments (placements), evaluations and leave. It works for one employee or for everyone in scope.
 **Covers:** System Owner request 2026-10-13 (extends the directory CSV export, FR-1). Depends on Epic 1 (8.1, 8.2), Epic 4 (8.3, 8.4) and Epic 5 (8.4).
 
-**Dependency flow:** Epic 1 gates Epics 2–5, 7 and 8; Epic 4 gates Epics 5, 7 and the manager and assignment parts of Epic 8; Epic 6 is independent.
+### Epic 9: Agentic Workplace Simulation
+*Added 2026-10-19 at the System Owner's request.*
+AI agents role-play the L&D manager, the Central R&D manager and eight staff members over eight simulated working weeks. They act only through the app's own server-side logic, under each persona's own permissions, to produce realistic demonstration data and a readable timeline of the workflows (attendance, leave, interviews, assignments, evaluations, transfers, exports). The bots also exercise the system as exploratory testing: whatever they cannot do, a real user cannot do either.
+**Covers:** System Owner request 2026-10-19. Depends on Epics 1–8 (all done).
+
+**Dependency flow:** Epic 1 gates Epics 2–5, 7 and 8; Epic 4 gates Epics 5, 7 and the manager and assignment parts of Epic 8; Epic 6 is independent; Epic 9 depends on Epics 1–8.
 
 ## Definition of Done (applies to every story)
 
@@ -1153,3 +1158,151 @@ So that the timeline is complete once those records exist.
 **Given** recorded leave
 **When** an export covers any day of a leave period
 **Then** `leave` rows show the type, the dates, the working-day count and the status (including cancelled)
+
+## Epic 9: Agentic Workplace Simulation
+
+*Added 2026-10-19 at the System Owner's request.* LLM agents role-play the workplace: one L&D manager (Administrator), one Central R&D department manager and eight staff, over eight simulated working weeks. They generate realistic demonstration data and a narrated timeline. The simulator is a developer tool run from a laptop (`npm run sim:*`). It is never part of the deployed web app.
+
+**System Owner decisions (2026-10-19):**
+- **Scale:** eight simulated working weeks and eight staff personas, plus the two managers.
+- **Models:** the Anthropic API (TypeScript SDK `@anthropic-ai/sdk`).
+  - Manager personas use `claude-opus-5-5`; staff personas use `claude-haiku-5-5`. Both are configurable by environment variable.
+  - The key is `ANTHROPIC_API_KEY` in `.env.local`. It is never committed and never printed.
+  - Implementers must load the `claude-api` skill before writing SDK code. They must not guess SDK APIs. On Opus 5.5, forced `tool_choice` is a 400, so use `auto` with `strict: true` tools.
+- **Process:** BMAD-lightweight, as these four stories.
+
+**Architecture rules (all stories):**
+- **Through the app, never around it.** Every persona action calls the same server-side stores and actions the web app uses, with that persona's own Supabase session (its own JWT), so RLS, validation and role scoping all apply.
+  - The simulator never writes tables directly with the service role, except to provision the cohort's accounts and employees through the existing accounts-store and employee-create paths.
+  - An action the app refuses is returned to the agent as a tool error and logged. It is never forced through.
+- **Simulated clock.** Time-dependent logic (clock-in/out timestamps, "today", leave dates, assignment dates) takes an injectable clock, used only by the simulator from server-side code. No HTTP route or server action accepts a client-supplied time.
+  - **Simulated period:** the eight working weeks Mon 2026-08-03 to Fri 2026-09-25, so every date sits inside the active 2026 holiday calendar.
+  - **Working days:** Monday–Friday, skipping holidays in the active live holiday calendar (Bangladesh 2026).
+- **Cohorts instead of resets.** Leave, assignments and audit records are append-only by design. So each run creates a **new cohort**:
+  - new employees with ids `BS-2xxx`, a fresh range per run;
+  - bot accounts `sim-<run>-<persona>@example.com`;
+  - a cohort label in each employee's summary.
+
+  `npm run sim:retire` archives the previous cohorts' employees and accounts through the app's own archive path, which hides them from the default directory. Real and seeded employees (`BS-1xxx`) and throwaway test ranges are never touched.
+- **Safety and cost.**
+  - A hard budget, `SIM_MAX_USD` (default 15). Cost is tracked from each response's `usage` at the configured models' prices, and the run stops cleanly at a day boundary before the budget is exceeded.
+  - Per-persona caps on actions per day.
+  - Prompt caching on the stable prefix (tool definitions plus persona system prompt).
+  - A dry-run mode that uses a scripted fake model, needing no API key, for tests and CI.
+- **Shared database.** It is one shared project, so CI never runs a real (paid) simulation. Tests use the fake model and the existing live-test conventions: their own id range, sign in once per file, serial files.
+
+### Story 9.1: Simulation foundations: cohort, personas, clock and timeline
+
+As the developer,
+I want a simulation runner skeleton that provisions a cohort, steps a simulated calendar and records a timeline,
+So that agents can be added on top safely.
+
+**Acceptance Criteria:**
+
+**Given** `npm run sim:run -- --dry-run`
+**When** it runs
+**Then**:
+- it provisions a new cohort: an Administrator persona, the manager of a new sub-department "Simulation Cohort <run>" under Central R&D, and eight staff placed in it, all through the app's provisioning paths;
+- it steps day by day through the 40 simulated working days, skipping weekends and holidays;
+- it writes `sim-output/<run>/timeline.jsonl` and `timeline.md` (one narrated line per event);
+- it makes no API call.
+
+**Given** the persona definitions
+**When** they are loaded
+**Then** each persona has a role, seniority, personality and goals, chosen so the cohort covers:
+- a trainee;
+- a senior engineer;
+- someone job-hunting, who reports external interviews;
+- someone on a client project;
+- someone who takes leave around a holiday;
+- someone transferred mid-run.
+
+**Given** `npm run sim:retire`
+**When** it runs
+**Then** every earlier cohort's employees are archived through the archive action; nothing outside `BS-2xxx` cohorts is touched
+
+**Given** a time-dependent store or action
+**When** it is called by the simulator with a simulated date
+**Then** the record carries that date. No web route can pass a date, and a test proves the HTTP-facing actions cannot accept one.
+
+### Story 9.2: Persona tool layer
+
+As a persona agent,
+I want tools that match what my role can do in the app,
+So that my choices become real records under my own permissions.
+
+**Acceptance Criteria:**
+
+**Given** the tool set
+**When** it is built for a persona
+**Then** it exposes only that role's actions, as `strict` JSON-schema tools with zod-validated input:
+- **Staff:** clock in or out with a work log; record, edit or cancel leave; add, update or withdraw an external interview; backfill a past project; edit own employment history; read own record.
+- **Manager:** read the department's team; create, update or close assignments; evaluate closed assignments; rate skills and write evaluations; record leave for the team; transfer within authority; read the department activity export.
+- **Administrator:** everything a manager can do, org-wide; plus department and manager administration and the all-employee export.
+
+**Given** an action the app refuses (validation, RLS, overlap, calendar or authority)
+**When** a tool runs it
+**Then** the tool returns an error result with the app's message, the timeline records the refusal, and the agent can adapt
+
+**Given** the tool layer
+**When** unit tests run with a fake model and fake stores
+**Then** each tool maps its input to the right store or action call under the persona's session and simulated clock
+
+### Story 9.3: Persona agents and the eight-week orchestration
+
+As the System Owner,
+I want each persona to decide its actions day by day in character,
+So that the data reads like a real team's two months.
+
+**Acceptance Criteria:**
+
+**Given** a simulated working day
+**When** the orchestrator runs it
+**Then** each persona gets a short daily brief: the date, its recent timeline, open items, and any scripted event affecting it. It acts through the SDK Tool Runner with a small action cap, staff first and then the managers. Each persona's state is carried in its own compact notes, not an ever-growing transcript.
+
+**Given** the event script
+**When** the run covers eight weeks
+**Then** at least these occur:
+- a client project kickoff with assignments;
+- a mid-run deadline crunch;
+- leave clustered around a public holiday;
+- an external interview round for the job-hunting persona;
+- assignment closure followed by evaluations, some with client feedback;
+- one transfer;
+- a skills review.
+
+**Given** model settings
+**When** agents run
+**Then**:
+- managers use `claude-opus-5-5` and staff `claude-haiku-5-5`, overridable with env `SIM_MANAGER_MODEL` / `SIM_STAFF_MODEL`;
+- prompt caching covers the stable tools and persona prefix;
+- `max_tokens` is bounded, and refusal and `max_tokens` stop reasons are handled without crashing the run.
+
+**Given** `SIM_MAX_USD`
+**When** projected spend would exceed it
+**Then** the run stops at a day boundary, records why, and leaves consistent data
+
+### Story 9.4: Run report, demo and documentation
+
+As the System Owner,
+I want a report of each run and simple instructions,
+So that I can show my manager what the team "did" and rerun it.
+
+**Acceptance Criteria:**
+
+**Given** a finished run
+**When** the report is generated
+**Then** `sim-output/<run>/report.md` (and an HTML version) contains:
+- per-week highlights;
+- per-persona stories;
+- counts of actions taken and refused (refusals grouped by reason, as exploratory-testing findings);
+- the cost (tokens and USD per model);
+- the cohort's login emails (passwords never written).
+
+**Given** the deployed site after a real run
+**When** an Administrator opens the directory filtered to the cohort's department
+**Then** the cohort's attendance, leave, interviews, assignments, evaluations, history and activity exports are visible
+
+**Given** `docs/SIMULATION.md`
+**When** a developer follows it
+**Then** they can set `ANTHROPIC_API_KEY`, run a dry run, run a real simulation, read the report and retire cohorts. It also states the cost guardrails and the shared-database caveat.
