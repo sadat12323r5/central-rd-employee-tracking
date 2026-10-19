@@ -131,6 +131,45 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-19 — Review pass
+- verdicts: 35 findings — high 3, medium 15, low 14, false 3, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` (verification-gap) the recent-activity 3-day window is untested — 5-day driver test added
+  - `[low]` `[patch]` (verification-gap) stopReason "completed" is never asserted — asserted in the 37-day test
+  - `[low]` `[reject]` (verification-gap) the dry-run SDK boundary is checked only by source text — the reviewer itself proposed defer; the only effect would be loading an installed dependency
+  - `[high]` `[patch]` (blind) the budget is not hard inside a persona's day — the day stops after the response that reaches the budget
+  - `[medium]` `[patch]` (blind) run files are not written on failure — written in a finally with the partial result
+  - `[medium]` `[reject]` (blind) a real run is the default with no opt-in flag — the spec makes `sim:run` without --dry-run the real run; the new preflight and the hard budget bound the risk
+  - `[medium]` `[patch]` (blind) fatal API errors do not stop the run — 401/403/404/400 rethrown; transient errors stay per-persona refusals
+  - `[low]` `[reject]` (blind) model and cap refusals are mixed with app refusals in the count — `detail.source` separates them for Story 9.4's report
+  - `[medium]` `[patch]` (blind) the iteration limit leaves no trace — recorded as a model stop
+  - `[low]` `[patch]` (blind) notes taken from a stale turn — only the final message is accepted
+  - `[medium]` `[patch]` (blind) aliased model ids mispriced; wrong "highest tier" comment — prefix match, comment fixed
+  - `[medium]` `[patch]` (blind) a partial day makes cost.json inconsistent — partial day closed and marked
+  - `[low]` `[patch]` (blind) the brief says "nothing recorded" when lines were omitted, and cuts notes first — fixed
+  - `[low]` `[patch]` (blind) wrong usage line — fixed
+  - `[low]` `[reject]` (blind) missing tests for the loadAgents rejection, beginDay failure and other paths — rare failure paths; the main ones are covered by the patches above
+  - `[low]` `[reject]` (blind) unused date param, unused quietModel, silent max_tokens clamp, no upper bound on the budget — cosmetic; the clamp is the spec's
+  - `[high]` `[patch]` (edge) budget exceeded mid persona-day — grouped
+  - `[medium]` `[patch]` (edge) fatal API errors — grouped
+  - `[medium]` `[patch]` (edge) missing credentials found only after provisioning — models.retrieve preflight before provisioning
+  - `[medium]` `[patch]` (edge) model_context_window_exceeded / pause_turn not handled — recorded
+  - `[medium]` `[patch]` (edge) max_iterations with tool_use dropped silently — grouped
+  - `[medium]` `[patch]` (edge) no run files after a throw — grouped
+  - `[medium]` `[patch]` (edge) partial day missing from dayCostsUsd — grouped
+  - `[low]` `[reject]` (edge) an empty day is counted when projectedDay is 0 and spent equals the budget — the in-day stop now records why; an edge with no real spend
+  - `[low]` `[patch]` (edge) the brief says "nothing recorded" — grouped
+  - `[low]` `[patch]` (edge) notes truncated last — grouped
+  - `[medium]` `[patch]` (edge claim) the day-boundary consistency claim — grouped with partial-day marking
+  - `[high]` `[patch]` (edge claim) the hard-budget claim — grouped
+  - `[low]` `[reject]` (intent) events are prompted, not verified as having occurred — the epic has each persona decide in character, and occurrence in a real run cannot be tested offline; 9.4's report shows what happened
+  - `[low]` `[patch]` (intent) leave clusters on only one persona — more staff targeted
+  - `[medium]` `[patch]` (intent) the brief has no system-derived open items, which the epic requires — open-items section from the persona's own stores
+  - `[false]` `[reject]` (intent) the Administrator runs after the manager — the epic's "managers" covers both management personas; the order is staff first as required
+  - `[low]` `[reject]` (intent) cache hits are not verified — needs a paid call; the request shape follows the caching rules and the tools-plus-system prefix is several thousand tokens
+  - `[false]` `[reject]` (intent) a mid-day stop is not a day boundary — the spec's intent contract defines this hard guard alongside the boundary stop
+  - `[false]` `[reject]` (intent) eight weeks are not run in tests — tests cannot make paid calls; the dry run covers all 37 days
+
 ## Design Notes
 
 - **Transfer target.** The transfer needs a second department. The script has the Administrator create "Simulation Cohort <run> Platform" under the cohort department in week 4. In week 5 the manager closes the transfer persona's open assignment, and the Administrator then transfers the persona: a transfer is blocked while an assignment is open (Story 4.8).
