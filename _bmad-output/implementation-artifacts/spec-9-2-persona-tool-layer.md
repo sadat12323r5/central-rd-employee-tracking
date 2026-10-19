@@ -118,6 +118,51 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-10-19 — Review pass
+- verdicts: 41 findings — high 0, medium 13, low 24, false 4, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` (verification-gap) personaStoresFor clock wiring untested — offline test with a stub client: backfill refuses a date after the simulated today; signIn tools reach cohort members
+  - `[medium]` `[patch]` (verification-gap) read_team projection untested — mixed-employee test asserting openAssignment, closedToEvaluate and leave
+  - `[medium]` `[patch]` (blind) runTool never checks the tool's role — ToolNotAllowed refusal before parsing
+  - `[medium]` `[patch]` (blind) export tools skip the app's mayExport gate — same gate applied first
+  - `[medium]` `[patch]` (blind) SimDeps.clock is not movable without a cast — typed as the movable clock
+  - `[low]` `[reject]` (blind) two time sources (driver vs clock) not reconciled — 9.3's orchestrator owns advancing the clock; the dry-run driver is unchanged by design
+  - `[low]` `[reject]` (blind) no toolContextFor(member) helper — built by 9.3's orchestrator; adding it now is speculative surface
+  - `[low]` `[reject]` (blind) interview and work-log limits hard-coded — the actions keep them in local zod; exporting them is new surface in src/server for little gain
+  - `[low]` `[patch]` (blind) save_work_log description promises unenforced rules — enforced in zod
+  - `[low]` `[reject]` (blind) float hours stringify oddly — quarter-hour multipleOf now rejects such values first
+  - `[low]` `[reject]` (blind) strictSchema does not recurse into records or tuples — no current tool uses them
+  - `[low]` `[patch]` (blind) the adapter test's keyword regex is incomplete — extended
+  - `[low]` `[patch]` (blind) timeline input unbounded — recorded input capped
+  - `[low]` `[patch]` (blind) tool name repeated in refusal text — fixed
+  - `[low]` `[patch]` (blind) day read after the call while at is read before it — day derived from at
+  - `[low]` `[patch]` (blind) advance rounds and set does not validate — validated
+  - `[low]` `[patch]` (blind) BOM written as an invisible literal — escape used
+  - `[low]` `[reject]` (blind) personaStoresFor duplicates storesFor — the two graphs serve 9.1 provisioning and 9.2 tools; merging is a refactor with no named harm today
+  - `[low]` `[patch]` (blind) sign-in wiring untested — grouped with the first verification-gap patch
+  - `[low]` `[patch]` (blind) thin refusal coverage for manager/admin tools — authority and calendar refusal cases added
+  - `[low]` `[reject]` (blind) transfer returns the whole store result — the store returns a small fixed shape; consistency only
+  - `[low]` `[patch]` (blind) `&&`-chained mockClear — split
+  - `[medium]` `[patch]` (edge) text() does not trim — trimmed
+  - `[low]` `[patch]` (edge) a timeline write failure throws after a committed write — recording wrapped
+  - `[low]` `[patch]` (edge) day/at mismatch — grouped
+  - `[medium]` `[patch]` (edge) a truncated list read is invalid JSON — list shrunk to fit with truncated/shown/total
+  - `[medium]` `[patch]` (edge) archived employees not flagged in read_team — `archived` added
+  - `[low]` `[patch]` (edge) code becomes "undefined" — fixed
+  - `[low]` `[patch]` (edge) a non-Error object message is lost — fixed
+  - `[low]` `[patch]` (edge) set accepts unreal dates — grouped with clock validation
+  - `[medium]` `[patch]` (edge) default clock not movable — grouped
+  - `[medium]` `[patch]` (edge) training/LMS now not simulated — clock passed
+  - `[medium]` `[patch]` (edge claim) not every call is on the simulated clock — grouped with training/LMS
+  - `[medium]` `[patch]` (edge claim) nothing-throws claim broken by timeline.record — grouped
+  - `[low]` `[reject]` (intent a) refusal text is the store message, not the action's UI wording — chosen in Design Notes; both are the app's own text and the model can adapt to either
+  - `[false]` `[reject]` (intent b) action gates are not run — the stores re-check authority under RLS; the one gate that lives only in the action (mayExport) is now applied
+  - `[medium]` `[patch]` (intent c) no fake-model loop — a toolRunner test with a scripted fake fetch asserts the is_error tool_result
+  - `[low]` `[patch]` (intent d) calendar and authority refusals untested — grouped
+  - `[false]` `[reject]` (intent e) real wiring untested — covered by the new personaStoresFor test
+  - `[false]` `[reject]` (intent f) scope choices — they follow the AC lists literally
+  - `[false]` `[reject]` (intent g) changes outside the AC — the helper extraction and the narrowed boundary test are required by the spec
+
 ## Design Notes
 
 - **Stores, not actions.** The server actions read the Next request cookie (`getSession`), so a script cannot call them. The tools call the same stores the actions call, and replicate the action-level zod checks where a store relies on them (interviews, backfill `departmentId`).
