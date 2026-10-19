@@ -14,9 +14,15 @@ import { describeError } from "./errors";
 // clock-in on a past simulated date is refused (42501) and recorded as a refusal. No migration is added for it.
 
 export type SimDay = { date: string; index: number };
-export type DriverStep = { at: Date; kind: "action" | "refusal"; text: string; detail?: Record<string, unknown> };
+export type DriverStep = {
+  at: Date; kind: "action" | "refusal"; text: string; detail?: Record<string, unknown>;
+  /** Story 9.3: already in the timeline (recorded by the tool layer); the runner only counts it. */
+  recorded?: boolean;
+};
 
 export interface SimDriver {
+  /** Story 9.3: called once per working day, after its `day` event and before any persona acts. */
+  beginDay?(day: SimDay): Promise<void> | void;
   /** What the persona does on the day; `position` is its index among the personas of its role. */
   act(member: CohortMember, day: SimDay, position: number): Promise<DriverStep[]>;
 }

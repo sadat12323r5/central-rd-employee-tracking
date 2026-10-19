@@ -1,10 +1,11 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCalendar, toCalendarPolicy } from "@/domain/holiday-calendar";
 import { dhakaInstant, simulatedCalendar } from "../sim/calendar";
-import { REAL_RUN_UNAVAILABLE, simRetire, simRun } from "../sim/cli";
+import { simRetire, simRun } from "../sim/cli";
 import { provisionCohort } from "../sim/cohort";
 import { AttendanceUnavailableError } from "@/server/attendance-store";
 import { createDryRunDriver, type SimDriver } from "../sim/dry-run-driver";
@@ -12,8 +13,10 @@ import { loadSimEnv } from "../sim/env";
 import { PERSONAS } from "../sim/personas";
 import { runSimulation } from "../sim/runner";
 import { createTimeline, type TimelineEvent } from "../sim/timeline";
+import { createSimClock } from "../sim/tools/clock";
 import { createMemoryAttendanceStore } from "./support/memory-attendance-store";
 import { fakeProvisionDeps, fakeRetireDeps } from "./support/sim-fakes";
+import { fakeToolContext } from "./support/sim-tool-fakes";
 
 const root = join(import.meta.dirname, "..");
 const csv = readFileSync(join(root, "docs", "holiday-calendars", "bangladesh-2026.csv"), "utf8");
@@ -131,12 +134,67 @@ describe("sim:run and sim:retire commands (Story 9.1)", () => {
     return { lines, errors, out: { log: (l: string) => lines.push(l), error: (l: string) => errors.push(l) } };
   };
 
-  it("refuses a real run: it arrives in Story 9.3", async () => {
+  it.each(["abc", "0", "-3"])("exits 2 on SIM_MAX_USD=%s and provisions nothing (Story 9.3)", async budget => {
     const { errors, out } = quiet();
     const loadDeps = vi.fn();
-    expect(await simRun([], { loadDeps, out })).not.toBe(0);
-    expect(errors).toEqual([REAL_RUN_UNAVAILABLE]);
+    const createClient = vi.fn();
+    expect(await simRun([], { loadDeps, out, env: { SIM_MAX_USD: budget }, createClient })).toBe(2);
+    expect(errors).toEqual([expect.stringMatching(/^SIM_MAX_USD must be a positive number/)]);
     expect(loadDeps).not.toHaveBeenCalled();
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("exits 2 on another bad SIM_* setting (Story 9.3)", async () => {
+    const { errors, out } = quiet();
+    const loadDeps = vi.fn();
+    expect(await simRun([], { loadDeps, out, env: { SIM_EFFORT: "extreme" } })).toBe(2);
+    expect(errors[0]).toMatch(/^SIM_EFFORT must be one of/);
+    expect(loadDeps).not.toHaveBeenCalled();
+  });
+
+  it("runs a real run with a fake-fetch client, writing the timeline, cost.json and notes.json (Story 9.3)", async () => {
+    const { lines, errors, out } = quiet();
+    const { deps } = fakeProvisionDeps();
+    const { stores, serviceAudit } = fakeToolContext("staff");
+    const outputRoot = tempDir();
+    const requests: { model: string }[] = [];
+    const fakeFetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      requests.push(body);
+      return new Response(JSON.stringify({
+        id: `msg_${requests.length}`, type: "message", role: "assistant", model: body.model,
+        content: [{ type: "text", text: "A quiet day.\nNOTES: all good" }], stop_reason: "end_turn", stop_sequence: null, stop_details: null,
+        usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const loadDeps = () => ({
+      ...deps,
+      signIn: async (email: string, password: string) => ({ ...await deps.signIn(email, password), tools: stores }),
+      activeCalendar: async () => ({ policy }),
+      clock: createSimClock("2026-08-03"),
+      serviceAudit,
+    });
+    const code = await simRun(["--days", "2"], {
+      loadDeps, out, outputRoot, env: { SIM_MAX_USD: "5" },
+      createClient: () => new Anthropic({ apiKey: "test", fetch: fakeFetch, maxRetries: 0 }),
+    });
+    expect(errors).toEqual([]);
+    expect(code).toBe(0);
+    expect(requests).toHaveLength(20);
+    const dir = join(outputRoot, "c00ab12");
+    expect(readJsonl(dir).filter(e => e.kind === "day")).toHaveLength(2);
+    const cost = JSON.parse(readFileSync(join(dir, "cost.json"), "utf8"));
+    expect(cost).toMatchObject({ run: "c00ab12", maxUsd: 5, days: 2, stopReason: { kind: "max-days" } });
+    expect(cost.perModel["claude-haiku-5-5"].requests).toBe(16);
+    expect(cost.perModel["claude-opus-5-5"].requests).toBe(4);
+    expect(cost.spentUsd).toBeCloseTo(16 * (1000 * 0.1 + 100 * 0.5) / 1e6 + 4 * (1000 * 4 + 100 * 20) / 1e6, 10);
+    const notes = JSON.parse(readFileSync(join(dir, "notes.json"), "utf8"));
+    expect(Object.keys(notes.personas)).toHaveLength(10);
+    expect(notes.personas.trainee.notes).toBe("all good");
+    const printed = lines.join("\n");
+    expect(printed).toContain("c00ab12");
+    expect(printed).toMatch(/spent \$0\.03 of \$5\.00/);
+    expect(printed).not.toMatch(/Sim-[A-Za-z0-9_-]{20,}/);
   });
 
   it("exits non-zero and provisions nothing without an active calendar", async () => {
@@ -275,13 +333,22 @@ describe("simulator boundaries (Story 9.1)", () => {
   const filesUnder = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
     entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]);
 
-  it("imports the Anthropic SDK only in the tool adapter and never reads the API key (Story 9.2)", () => {
+  it("imports the Anthropic SDK only in the tool adapter and the agents, and never reads the API key (Stories 9.2-9.3)", () => {
     const adapter = join(root, "sim", "tools", "anthropic.ts");
+    const agents = join(root, "sim", "agents");
     for (const file of [...filesUnder(join(root, "sim")), ...filesUnder(join(root, "scripts", "sim"))]) {
       const text = readFileSync(file, "utf8");
-      if (file !== adapter) expect(text, file).not.toMatch(/@anthropic-ai/);
+      if (file !== adapter && !file.startsWith(`${agents}/`)) expect(text, file).not.toMatch(/@anthropic-ai/);
       expect(text, file).not.toMatch(/ANTHROPIC_API_KEY/);
     }
+  });
+
+  it("loads the agents from the CLI only with a dynamic import (Story 9.3)", () => {
+    const cli = readFileSync(join(root, "sim", "cli.ts"), "utf8");
+    // No runtime (non-type) static import or re-export of ./agents.
+    expect(cli).not.toMatch(/^\s*(import|export)\s+(?!type\b)[^;]*from\s+["']\.\/agents/m);
+    expect(cli).not.toMatch(/^\s*import\s+["']\.\/agents/m);
+    expect(cli).toMatch(/import\("\.\/agents\/index"\)/);
   });
 
   it("keeps the dry-run modules free of the tool adapter (Story 9.2)", () => {

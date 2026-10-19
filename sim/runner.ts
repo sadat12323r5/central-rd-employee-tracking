@@ -1,6 +1,6 @@
 import { dhakaInstant, type SimCalendar } from "./calendar";
 import type { Cohort, CohortMember } from "./cohort";
-import type { SimDriver } from "./dry-run-driver";
+import type { DriverStep, SimDriver } from "./dry-run-driver";
 import type { Timeline } from "./timeline";
 
 // Story 9.1: steps the simulated calendar. Records `provisioned`, then walks the period's weekdays in
@@ -8,8 +8,27 @@ import type { Timeline } from "./timeline";
 // persona's steps (staff first, then managers, then the Administrator). A step the app refused is a
 // `refusal` event, and a driver that throws is recorded as one too: the run never crashes on an app
 // refusal. `maxDays` stops after that many working days. Ends with an `end` event.
+//
+// Story 9.3: an optional `budget` hook stops the run at a day boundary (`beforeDay`) or skips the rest of a
+// day (`duringDay`, checked before each persona); the reason is in the `end` event and in `stopReason`.
+// `driver.beginDay` runs after the `day` event. A step marked `recorded` was already written to the
+// timeline (by the tool layer) and is only counted here.
 
-export type SimulationResult = { run: string; days: string[]; holidays: string[]; actions: number; refusals: number };
+export type StopReason = { kind: "completed" | "max-days" | "budget"; message: string };
+
+export type SimulationResult = {
+  run: string; days: string[]; holidays: string[]; actions: number; refusals: number; stopReason: StopReason;
+};
+
+/** Budget checks: each returns null to carry on, or the reason the run stops. */
+export type SimBudget = {
+  /** Before a working day starts (before its `day` event). */
+  beforeDay(date: string): string | null;
+  /** Before each persona acts; a stop skips the rest of the day. */
+  duringDay(date: string): string | null;
+  /** After every persona has acted on a working day. */
+  afterDay?(date: string): void;
+};
 
 const ROLE_ORDER = ["staff", "manager", "admin"] as const;
 
@@ -17,8 +36,8 @@ function longDate(iso: string): string {
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-export async function runSimulation({ cohort, driver, calendar, timeline, maxDays }: {
-  cohort: Cohort; driver: SimDriver; calendar: SimCalendar; timeline: Timeline; maxDays?: number;
+export async function runSimulation({ cohort, driver, calendar, timeline, maxDays, budget }: {
+  cohort: Cohort; driver: SimDriver; calendar: SimCalendar; timeline: Timeline; maxDays?: number; budget?: SimBudget;
 }): Promise<SimulationResult> {
   const limit = maxDays === undefined ? calendar.workingDays.length : Math.max(0, Math.min(Math.floor(maxDays), calendar.workingDays.length));
   const firstDay = calendar.weekdays[0] ?? calendar.workingDays[0];
@@ -35,11 +54,18 @@ export async function runSimulation({ cohort, driver, calendar, timeline, maxDay
   const ordered: { member: CohortMember; position: number }[] = ROLE_ORDER.flatMap(role =>
     cohort.members.filter(m => m.persona.role === role).map((member, position) => ({ member, position })));
   const holidays = new Map(calendar.holidays.map(h => [h.date, h]));
-  const result: SimulationResult = { run: cohort.run, days: [], holidays: [], actions: 0, refusals: 0 };
+  const result: SimulationResult = {
+    run: cohort.run, days: [], holidays: [], actions: 0, refusals: 0,
+    stopReason: { kind: "completed", message: "Every working day of the period ran." },
+  };
   let lastDay = firstDay;
+  let stopped = false;
 
   for (const date of calendar.weekdays) {
-    if (result.days.length >= limit) break;
+    if (result.days.length >= limit) {
+      if (limit < calendar.workingDays.length) result.stopReason = { kind: "max-days", message: `Stopped after ${limit} working days, as asked.` };
+      break;
+    }
     const holiday = holidays.get(date);
     if (holiday) {
       timeline.record({
@@ -51,6 +77,11 @@ export async function runSimulation({ cohort, driver, calendar, timeline, maxDay
       continue;
     }
     if (!calendar.workingDays.includes(date)) continue;
+    const beforeDay = budget?.beforeDay(date) ?? null;
+    if (beforeDay) {
+      result.stopReason = { kind: "budget", message: beforeDay };
+      break;
+    }
     const index = result.days.length;
     result.days.push(date);
     lastDay = date;
@@ -58,8 +89,19 @@ export async function runSimulation({ cohort, driver, calendar, timeline, maxDay
       day: date, at: dhakaInstant(date, "08:30").toISOString(), actor: "simulator", kind: "day",
       text: `Day ${index + 1} of ${limit}: ${longDate(date)}.`, detail: { index: index + 1 },
     });
+    try {
+      await driver.beginDay?.({ date, index });
+    } catch (error) {
+      console.warn(`Could not prepare ${date}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     for (const { member, position } of ordered) {
-      let steps;
+      const duringDay = budget?.duringDay(date) ?? null;
+      if (duringDay) {
+        result.stopReason = { kind: "budget", message: duringDay };
+        stopped = true;
+        break;
+      }
+      let steps: DriverStep[];
       try {
         steps = await driver.act(member, { date, index }, position);
       } catch (error) {
@@ -69,17 +111,25 @@ export async function runSimulation({ cohort, driver, calendar, timeline, maxDay
         }];
       }
       for (const step of steps) {
-        timeline.record({ day: date, at: step.at.toISOString(), actor: member.persona.name, kind: step.kind, text: step.text, detail: step.detail });
+        if (!step.recorded) {
+          timeline.record({ day: date, at: step.at.toISOString(), actor: member.persona.name, kind: step.kind, text: step.text, detail: step.detail });
+        }
         if (step.kind === "refusal") result.refusals += 1;
         else result.actions += 1;
       }
     }
+    if (stopped) break;
+    budget?.afterDay?.(date);
   }
 
   timeline.record({
     day: lastDay, at: dhakaInstant(lastDay, "19:00").toISOString(), actor: "simulator", kind: "end",
-    text: `Run ${cohort.run} ended after ${result.days.length} working days and ${result.holidays.length} holidays: ${result.actions} actions, ${result.refusals} refusals.`,
-    detail: { days: result.days.length, holidays: result.holidays.length, actions: result.actions, refusals: result.refusals },
+    text: `Run ${cohort.run} ended after ${result.days.length} working days and ${result.holidays.length} holidays: ${result.actions} actions, ${result.refusals} refusals.`
+      + (result.stopReason.kind === "budget" ? ` ${result.stopReason.message}` : ""),
+    detail: {
+      days: result.days.length, holidays: result.holidays.length, actions: result.actions, refusals: result.refusals,
+      stopReason: result.stopReason.kind, ...(result.stopReason.kind === "budget" ? { stopMessage: result.stopReason.message } : {}),
+    },
   });
   timeline.close();
   return result;
