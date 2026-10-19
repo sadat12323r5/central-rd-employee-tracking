@@ -2,10 +2,10 @@
 title: 'Story 9.1: Simulation foundations: cohort, personas, clock and timeline'
 type: 'feature'
 created: '2026-10-18'
-status: 'in-review'
+status: 'done'
 baseline_revision: '349fe26bb82a6f809caaf4fdb39e9923f798b91a'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
 warnings: ['oversized']
@@ -187,3 +187,54 @@ deferred:
 - `npm run build` -- expected: success
 - `npm run test:e2e` -- expected: pass
 - `npm run sim:run -- --dry-run --days 2` then `npm run sim:retire -- --all` -- expected: the timeline files are written, and the cohort is archived
+
+## Auto Run Result
+
+Status: done
+
+**Summary.** This adds a developer-only simulator skeleton (`sim/`, run under `tsx`):
+- `npm run sim:run -- --dry-run [--days N]` provisions a fresh cohort through the app's own stores: the admin account, the "Simulation Cohort <run>" department under Central R&D, 9 labelled `BS-2xxx` employees with staff accounts, and the department manager.
+- It steps the 40 weekdays of 2026-08-03 to 2026-09-25, skipping the 3 Bangladesh holidays, so 37 working days run.
+- A scripted driver clocks staff in and out at simulated instants through the new `attendance-commands`.
+- Each event goes to `sim-output/<run>/timeline.jsonl` and `timeline.md`.
+- `npm run sim:retire [-- --all]` archives earlier cohorts through `accounts-store.archive`.
+- No migration.
+
+**Files.**
+- `src/server/attendance-commands.ts` (new): clock-in, clock-out and save-log, with `now` injected.
+- `src/server/attendance-actions.ts`: now calls the commands with the server's `new Date()`.
+- `src/server/employees-store.ts`: optional server-only `{ summary }` option on create.
+- `sim/` modules:
+  - `calendar.ts`: the simulated period and Dhaka instants.
+  - `personas.ts`: 10 personas plus a coverage check.
+  - `timeline.ts`: the jsonl and markdown writer.
+  - `cohort.ts`: block allocation, provisioning and retire.
+  - `dry-run-driver.ts`: the scripted driver.
+  - `runner.ts`: the day loop.
+  - `env.ts`: real dependencies.
+  - `cli.ts`: the command logic, with exit codes.
+- `scripts/sim/run.ts` and `scripts/sim/retire.ts`: the CLI entry points.
+- `package.json`: the `sim:*` scripts and the `tsx` devDependency.
+- `.gitignore`: `sim-output/`.
+- Tests: `tests/attendance-commands.test.ts`, `tests/sim-{calendar,personas,timeline,cohort,runner,live}.test.ts` and `tests/support/sim-fakes.ts`, plus new cases in `attendance-actions` and `employees-store`.
+
+**Review.** The review had 36 findings.
+- 10 were patched:
+  - a refused clock-in no longer cascades into extra refusals;
+  - a partial provisioning failure now names the run and the step that failed;
+  - the dry run prints a refusal-count hint;
+  - retire messages report skipped and failed cohorts;
+  - retire's failure path and exit codes are tested;
+  - `loadSimEnv` loads and checks the same env object.
+- 7 grouped findings were deferred: the past-dated attendance RLS decision (high), and retire leaving the bot admin account and the department (low).
+- 19 were rejected; each reason is in the triage log.
+- Patched entries by verdict: 4 medium (retire failure tests, partial-provisioning error, refusal hint, refused clock-in cascade), 2 low. Follow-up review recommended: true. Unverified risk: the post-allocation `step()` wrapper in `sim/cohort.ts` and the `parseEnv`-based `loadSimEnv` rewrite in `sim/env.ts` were added after the review pass and have not been reviewed independently.
+
+**Verification.**
+- `npm run check` passed: typecheck, 104 test files with 2278 tests including the live shared-project tests, and the build.
+- `npm run test:e2e` was run with `PLAYWRIGHT_CHANNEL=chromium`, because msedge is not installed in this sandbox.
+- A manual `sim:run -- --dry-run --days 2` and `sim:retire -- --all` both worked against the shared project.
+
+**Residual risk.**
+- Against the shared project, every past-dated attendance write is refused by the existing today-only RLS policy, so a real dry run's timeline is mostly refusals. This needs a System Owner decision (deferred-work.md, Story 9.1).
+- Every run leaves a disabled-in-practice sim admin account and an empty department behind.
