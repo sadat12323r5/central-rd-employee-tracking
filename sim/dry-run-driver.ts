@@ -1,5 +1,6 @@
 import { dhakaInstant } from "./calendar";
 import type { CohortMember } from "./cohort";
+import { describeError } from "./errors";
 
 // Story 9.1: the scripted dry-run driver: a stand-in for the persona agents (Story 9.3) with no model, no
 // API key and no network beyond the app's own stores. Each staff persona clocks in (09:00 to 09:40, by
@@ -20,29 +21,15 @@ export interface SimDriver {
   act(member: CohortMember, day: SimDay, position: number): Promise<DriverStep[]>;
 }
 
-function describeCause(cause: unknown): string {
-  if (cause instanceof Error) return `${cause.name}: ${cause.message}`;
-  if (typeof cause === "object" && cause) {
-    const { code, message } = cause as { code?: unknown; message?: unknown };
-    return [code, message].filter(v => typeof v === "string" && v !== "").join(" ") || "unknown";
-  }
-  return String(cause);
-}
-
 /** Runs one app call at a simulated instant: its message as an `action`, or its error as a `refusal`. */
 export async function attempt(at: Date, command: string, call: () => Promise<string>, detail: Record<string, unknown> = {}): Promise<DriverStep> {
   try {
     const message = await call();
     return { at, kind: "action", text: message, detail: { command, ...detail } };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : undefined;
     // An "unavailable" error's cause (the database's own refusal) is part of the finding.
-    const cause = error instanceof Error && error.cause !== undefined ? describeCause(error.cause) : undefined;
-    return {
-      at, kind: "refusal", text: message,
-      detail: { command, ...detail, error: error instanceof Error ? error.name : "Error", ...(code ? { code } : {}), ...(cause ? { cause } : {}) },
-    };
+    const { message, ...described } = describeError(error);
+    return { at, kind: "refusal", text: message, detail: { command, ...detail, ...described } };
   }
 }
 

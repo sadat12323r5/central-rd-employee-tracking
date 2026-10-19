@@ -275,11 +275,18 @@ describe("simulator boundaries (Story 9.1)", () => {
   const filesUnder = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
     entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]);
 
-  it("never imports an Anthropic SDK or reads the API key in the dry run", () => {
+  it("imports the Anthropic SDK only in the tool adapter and never reads the API key (Story 9.2)", () => {
+    const adapter = join(root, "sim", "tools", "anthropic.ts");
     for (const file of [...filesUnder(join(root, "sim")), ...filesUnder(join(root, "scripts", "sim"))]) {
       const text = readFileSync(file, "utf8");
-      expect(text, file).not.toMatch(/@anthropic-ai/);
+      if (file !== adapter) expect(text, file).not.toMatch(/@anthropic-ai/);
       expect(text, file).not.toMatch(/ANTHROPIC_API_KEY/);
+    }
+  });
+
+  it("keeps the dry-run modules free of the tool adapter (Story 9.2)", () => {
+    for (const name of ["cli.ts", "runner.ts", "dry-run-driver.ts", "cohort.ts", "env.ts"]) {
+      expect(readFileSync(join(root, "sim", name), "utf8"), name).not.toMatch(/tools\/anthropic/);
     }
   });
 

@@ -7,6 +7,7 @@ import type { DepartmentsStore } from "@/server/departments-store";
 import type { EmployeesStore } from "@/server/employees-store";
 import type { SessionIdentity } from "@/server/session";
 import { ADMIN_KEY, type Persona } from "./personas";
+import type { ToolStores } from "./tools/types";
 
 // Story 9.1: a run's cohort. Each run provisions a fresh cohort through the app's own paths (leave,
 // assignments and audit rows are append-only, so runs never reset data):
@@ -84,7 +85,11 @@ export type PersonaStores = {
   attendance: Pick<AttendanceStore, "listForEmployee" | "save">;
 };
 
-export type SignedIn = { userId: string; stores: PersonaStores };
+/**
+ * Story 9.2: `tools` are the stores the persona's tools call (sim/tools), on the same signed-in client.
+ * Absent from offline provisioning fakes; provisioning itself never uses them.
+ */
+export type SignedIn = { userId: string; stores: PersonaStores; tools?: ToolStores };
 
 export type ProvisionDeps = {
   /** accounts-store on the service-role client: create only. */
@@ -108,6 +113,8 @@ export type CohortMember = {
   session: SessionIdentity;
   /** The persona's own attendance commands; null for the Administrator. */
   attendance: AttendanceCommands | null;
+  /** Story 9.2: the persona's tool stores (its own JWT client); null when the sign-in provided none. */
+  tools: ToolStores | null;
 };
 
 export type Cohort = {
@@ -188,6 +195,7 @@ export async function provisionCohort(
   // 6. One sign-in per manager and staff persona.
   const members: CohortMember[] = [{
     persona: admin, email: adminEmail, userId: adminSignedIn.userId, employeeId: null, session: adminSession, attendance: null,
+    tools: adminSignedIn.tools ?? null,
   }];
   for (const persona of people) {
     const email = cohortEmail(run, persona.key);
@@ -198,6 +206,7 @@ export async function provisionCohort(
       persona, email, userId: signedIn.userId, employeeId,
       session: persona.role === "manager" ? { role: "manager", employeeId, userId: signedIn.userId } : { role: "staff", employeeId },
       attendance: createAttendanceCommands(signedIn.stores.attendance),
+      tools: signedIn.tools ?? null,
     });
   }
   return { run, block, ids, departmentId: department.id, departmentName, members };
