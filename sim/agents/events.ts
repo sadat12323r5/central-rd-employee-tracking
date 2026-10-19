@@ -59,9 +59,20 @@ export const EVENT_SCRIPT: readonly ScriptedEvent[] = [
     text: "You are on leave this week around the 26 August holiday. Do not clock in; check your leave is on record and fix it if it is not.",
     dates: { startDate: "2026-08-24", endDate: "2026-08-28" },
   },
+  // Leave clusters around the holiday: two more staff take a short break touching it.
+  {
+    kind: "holiday-leave", from: 6, to: 8, targets: { keys: ["trainee"] },
+    text: "Several colleagues are taking time off around the 26 August public holiday. Record leave from 2026-08-25 to 2026-08-27 for a short family visit.",
+    dates: { startDate: "2026-08-25", endDate: "2026-08-27" },
+  },
+  {
+    kind: "holiday-leave", from: 6, to: 8, targets: { keys: ["intern"] },
+    text: "You want a few days off around the 26 August public holiday. Record leave from 2026-08-24 to 2026-08-26.",
+    dates: { startDate: "2026-08-24", endDate: "2026-08-26" },
+  },
   {
     kind: "holiday-leave", from: 14, to: 15, targets: { keys: ["manager"] },
-    text: `${name("leaver")} is on leave around the 26 August holiday (24-28 August). If it is not on record, record it for him with record_team_leave.`,
+    text: `Leave clusters around the 26 August holiday: ${name("leaver")} (24-28 August), ${name("trainee")} (25-27 August) and ${name("intern")} (24-26 August). Record any that is missing with record_team_leave.`,
   },
   // Week 3: an external interview round.
   {

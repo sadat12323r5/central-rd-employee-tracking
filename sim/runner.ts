@@ -1,6 +1,7 @@
 import { dhakaInstant, type SimCalendar } from "./calendar";
 import type { Cohort, CohortMember } from "./cohort";
 import type { DriverStep, SimDriver } from "./dry-run-driver";
+import { SimFatalError } from "./errors";
 import type { Timeline } from "./timeline";
 
 // Story 9.1: steps the simulated calendar. Records `provisioned`, then walks the period's weekdays in
@@ -14,7 +15,7 @@ import type { Timeline } from "./timeline";
 // `driver.beginDay` runs after the `day` event. A step marked `recorded` was already written to the
 // timeline (by the tool layer) and is only counted here.
 
-export type StopReason = { kind: "completed" | "max-days" | "budget"; message: string };
+export type StopReason = { kind: "completed" | "max-days" | "budget" | "error"; message: string };
 
 export type SimulationResult = {
   run: string; days: string[]; holidays: string[]; actions: number; refusals: number; stopReason: StopReason;
@@ -26,8 +27,8 @@ export type SimBudget = {
   beforeDay(date: string): string | null;
   /** Before each persona acts; a stop skips the rest of the day. */
   duringDay(date: string): string | null;
-  /** After every persona has acted on a working day. */
-  afterDay?(date: string): void;
+  /** After a working day: every persona acted, or (`partial`) the budget stopped it mid-day. */
+  afterDay?(date: string, options?: { partial?: boolean }): void;
 };
 
 const ROLE_ORDER = ["staff", "manager", "admin"] as const;
@@ -105,6 +106,12 @@ export async function runSimulation({ cohort, driver, calendar, timeline, maxDay
       try {
         steps = await driver.act(member, { date, index }, position);
       } catch (error) {
+        if (error instanceof SimFatalError) {
+          // Nothing later in the run can succeed (credentials, model id, request shape): stop here.
+          result.stopReason = { kind: "error", message: error.message };
+          stopped = true;
+          break;
+        }
         steps = [{
           at: dhakaInstant(date, "12:00"), kind: "refusal" as const, text: error instanceof Error ? error.message : String(error),
           detail: { error: error instanceof Error ? error.name : "Error" },
@@ -118,17 +125,18 @@ export async function runSimulation({ cohort, driver, calendar, timeline, maxDay
         else result.actions += 1;
       }
     }
+    // A day the budget (or a fatal error) cut short is still closed (as partial) so the per-day costs sum to the total.
+    budget?.afterDay?.(date, stopped ? { partial: true } : undefined);
     if (stopped) break;
-    budget?.afterDay?.(date);
   }
 
   timeline.record({
     day: lastDay, at: dhakaInstant(lastDay, "19:00").toISOString(), actor: "simulator", kind: "end",
     text: `Run ${cohort.run} ended after ${result.days.length} working days and ${result.holidays.length} holidays: ${result.actions} actions, ${result.refusals} refusals.`
-      + (result.stopReason.kind === "budget" ? ` ${result.stopReason.message}` : ""),
+      + (result.stopReason.kind === "budget" || result.stopReason.kind === "error" ? ` ${result.stopReason.message}` : ""),
     detail: {
       days: result.days.length, holidays: result.holidays.length, actions: result.actions, refusals: result.refusals,
-      stopReason: result.stopReason.kind, ...(result.stopReason.kind === "budget" ? { stopMessage: result.stopReason.message } : {}),
+      stopReason: result.stopReason.kind, ...(result.stopReason.kind === "budget" || result.stopReason.kind === "error" ? { stopMessage: result.stopReason.message } : {}),
     },
   });
   timeline.close();

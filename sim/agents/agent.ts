@@ -1,9 +1,10 @@
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import { ToolError } from "@anthropic-ai/sdk/lib/tools/ToolError";
 import type { BetaMessage, BetaTextBlockParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 import { dhakaDate } from "@/domain/timesheet";
 import type { DriverStep } from "../dry-run-driver";
+import { SimFatalError } from "../errors";
 import type { Persona } from "../personas";
 import type { NewTimelineEvent } from "../timeline";
 import { toRunnableTools, type RunnablePersonaTool } from "../tools/anthropic";
@@ -26,7 +27,36 @@ export const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 /** Server-side fallbacks exist only for Opus and Fable models (not Haiku). */
 export const hasServerSideFallback = (model: string) => /opus|fable/i.test(model);
 
-export type DayStop = "refusal" | "max_tokens" | "error" | null;
+export type DayStop = "refusal" | "max_tokens" | "tool_use" | "pause_turn" | "model_context_window_exceeded" | "budget" | "error" | null;
+
+/** Stop reasons that end a persona's day without a usable reply (recorded as model refusals). */
+const UNFINISHED: Record<string, string> = {
+  refusal: "The model declined to continue",
+  max_tokens: "The model's reply hit max_tokens",
+  tool_use: "The model was still calling tools when the day's request limit was reached",
+  pause_turn: "The model paused its turn",
+  model_context_window_exceeded: "The conversation exceeded the model's context window",
+};
+
+/**
+ * SDK errors no retry or other persona can fix (credentials, permissions, an unknown model, an invalid
+ * request): they stop the whole run. Rate limits, server errors and connection errors stay per persona.
+ */
+export function isFatalApiError(error: unknown): boolean {
+  return error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError
+    || error instanceof Anthropic.NotFoundError || error instanceof Anthropic.BadRequestError;
+}
+
+/** A short description of a fatal SDK error (class, status and the API's message); never a credential. */
+export function describeApiError(error: unknown, model: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = (error as { status?: unknown }).status;
+  const short = message.length > 300 ? `${message.slice(0, 299)}…` : message;
+  if (error instanceof Anthropic.AuthenticationError) return `The model API rejected the credentials (AuthenticationError 401); check the Anthropic API key in .env.local. ${short}`;
+  if (error instanceof Anthropic.PermissionDeniedError) return `The model API denied access to ${model} (PermissionDeniedError 403). ${short}`;
+  if (error instanceof Anthropic.NotFoundError) return `Model ${model} was not found (NotFoundError 404); check SIM_MANAGER_MODEL and SIM_STAFF_MODEL. ${short}`;
+  return `The model API rejected a request to ${model} (${errorClass(error)}${typeof status === "number" ? ` ${status}` : ""}). ${short}`;
+}
 
 export type PersonaDayResult = { steps: DriverStep[]; notes: string; stop: DayStop };
 
@@ -71,7 +101,7 @@ function errorClass(error: unknown): string {
   return "Error";
 }
 
-export async function runPersonaDay({ client, model, settings, persona, ctx, brief, notes, onUsage }: {
+export async function runPersonaDay({ client, model, settings, persona, ctx, brief, notes, onUsage, overBudget }: {
   client: Anthropic;
   model: string;
   settings: AgentSettings;
@@ -80,6 +110,8 @@ export async function runPersonaDay({ client, model, settings, persona, ctx, bri
   brief: string;
   notes: string;
   onUsage: (model: string, usage: UsageLike) => void;
+  /** Checked after each response's usage is added: a reason stops this persona's day at once (the hard budget). */
+  overBudget?: () => string | null;
 }): Promise<PersonaDayResult> {
   const steps: DriverStep[] = [];
   // Every event the tool layer records for this persona today is also a (recorded) step.
@@ -126,6 +158,7 @@ export async function runPersonaDay({ client, model, settings, persona, ctx, bri
     ({ at: ctx.clock.now(), kind: "refusal", text, detail: { source: "model", ...detail } });
 
   const messages: BetaMessage[] = [];
+  let budgetStop: string | null = null;
   try {
     const runner = client.beta.messages.toolRunner(personaDayParams({ model, settings, persona, tools, brief }));
     for await (const message of runner) {
@@ -135,8 +168,12 @@ export async function runPersonaDay({ client, model, settings, persona, ctx, bri
       } catch (error) {
         console.warn(`Could not cost a response: ${error instanceof Error ? error.message : String(error)}`);
       }
+      budgetStop = overBudget?.() ?? null;
+      // Leaving the loop ends the runner before it runs this reply's tool calls or sends another request.
+      if (budgetStop) break;
     }
   } catch (error) {
+    if (isFatalApiError(error)) throw new SimFatalError(describeApiError(error, model), { cause: error });
     const message = error instanceof Error ? error.message : String(error);
     const status = (error as { status?: unknown }).status;
     steps.push(refusal(`The model call failed: ${message.length > 500 ? `${message.slice(0, 499)}…` : message}`, {
@@ -145,17 +182,37 @@ export async function runPersonaDay({ client, model, settings, persona, ctx, bri
     return { steps, notes, stop: "error" };
   }
 
+  if (budgetStop) {
+    steps.push(refusal(`${persona.name}'s day was cut short: ${budgetStop}`, { reason: "budget", model }));
+    return { steps, notes, stop: "budget" };
+  }
   const last = messages.at(-1);
-  if (last && (last.stop_reason === "refusal" || last.stop_reason === "max_tokens")) {
-    const why = last.stop_reason === "refusal" ? "The model declined to continue" : "The model's reply hit max_tokens";
-    steps.push(refusal(`${why}; ${persona.name}'s day ended there.`, {
-      stop_reason: last.stop_reason, model: last.model || model, ...(last.stop_details ? { stop_details: last.stop_details } : {}),
+  const stop = last?.stop_reason;
+  if (last && stop && stop in UNFINISHED) {
+    steps.push(refusal(`${UNFINISHED[stop]}; ${persona.name}'s day ended there.`, {
+      stop_reason: stop, model: last.model || model, ...(last.stop_details ? { stop_details: last.stop_details } : {}),
     }));
-    return { steps, notes, stop: last.stop_reason };
+    return { steps, notes, stop: stop as DayStop };
   }
-  for (const message of [...messages].reverse()) {
-    const parsed = parseNotes(textOf(message));
-    if (parsed !== null) return { steps, notes: parsed, stop: null };
+  // Only the final reply's NOTES count; otherwise yesterday's notes stand.
+  const parsed = last ? parseNotes(textOf(last)) : null;
+  return { steps, notes: parsed ?? notes, stop: null };
+}
+
+/**
+ * Checks, before anything is provisioned, that the client's credentials work and that each distinct model
+ * exists (the free models endpoint). Returns null when all are fine, or a message naming the model or the
+ * credential problem (never a credential).
+ */
+export async function preflightModels(client: Anthropic, models: readonly string[]): Promise<string | null> {
+  for (const model of [...new Set(models)]) {
+    try {
+      await client.models.retrieve(model);
+    } catch (error) {
+      if (error instanceof Anthropic.APIError && error.status !== undefined) return `${describeApiError(error, model)} Nothing was provisioned.`;
+      const message = error instanceof Error ? error.message : String(error);
+      return `Could not check model ${model} (${errorClass(error)}): ${message.length > 300 ? `${message.slice(0, 299)}…` : message} Check the Anthropic API key in .env.local and the network. Nothing was provisioned.`;
+    }
   }
-  return { steps, notes, stop: null };
+  return null;
 }

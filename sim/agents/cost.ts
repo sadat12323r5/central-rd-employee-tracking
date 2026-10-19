@@ -20,7 +20,10 @@ export const PRICES: Readonly<Record<string, ModelPrice>> = {
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
 };
 
-/** An unknown model is priced at the highest known tier (with a warning), so spend is never under-counted. */
+/**
+ * An unknown model is priced at this conservative rate, above every known price (with a warning), so spend
+ * is never under-counted.
+ */
 export const UNKNOWN_MODEL_PRICE: ModelPrice = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
 
 export const DEFAULT_MAX_USD = 15;
@@ -46,9 +49,16 @@ export function tokensOf(usage: UsageLike | null | undefined): Tokens {
   };
 }
 
+/**
+ * A model's price: an exact id, else the longest known id it extends (a dated or aliased id such as
+ * `claude-opus-5-5-20261001`), else the unknown-model rate.
+ */
 export function priceOf(model: string): { price: ModelPrice; known: boolean } {
-  const price = PRICES[model];
-  return price ? { price, known: true } : { price: UNKNOWN_MODEL_PRICE, known: false };
+  const exact = PRICES[model];
+  if (exact) return { price: exact, known: true };
+  const base = Object.keys(PRICES).filter(id => model.startsWith(`${id}-`) || model.startsWith(`${id}@`))
+    .sort((a, b) => b.length - a.length)[0];
+  return base ? { price: PRICES[base], known: true } : { price: UNKNOWN_MODEL_PRICE, known: false };
 }
 
 /** The USD cost of one response's usage on `model`. */
@@ -79,8 +89,13 @@ export type CostTracker = {
   add(model: string, usage: UsageLike | null | undefined): number;
   spent(): number;
   perModel(): Record<string, ModelSpend>;
-  /** Marks a working day complete: its spend joins the per-day mean. */
-  dayClosed(): void;
+  /**
+   * Closes a working day: its spend joins the per-day costs. A partial day (stopped mid-day by the budget)
+   * is recorded too, so the per-day costs always sum to the total, but it is left out of the projection.
+   */
+  dayClosed(date?: string, options?: { partial?: boolean }): void;
+  /** The date of the day the budget cut short, or null. */
+  partialDay(): string | null;
   /** The projected cost of one day: the completed days' mean, or the estimate before any. */
   projectedDay(): number;
   /** The completed days' costs, in order. */
@@ -92,7 +107,7 @@ export function createCostTracker({ dayEstimateUsd, warn = line => console.warn(
 }): CostTracker {
   const models = new Map<string, ModelSpend>();
   const warned = new Set<string>();
-  const closed: number[] = [];
+  const closed: { usd: number; partial: boolean; date?: string }[] = [];
   let spent = 0;
   let atLastClose = 0;
   return {
@@ -116,12 +131,16 @@ export function createCostTracker({ dayEstimateUsd, warn = line => console.warn(
     },
     spent: () => spent,
     perModel: () => Object.fromEntries([...models].map(([m, s]) => [m, { requests: s.requests, tokens: { ...s.tokens }, usd: s.usd }])),
-    dayClosed() {
-      closed.push(spent - atLastClose);
+    dayClosed(date, { partial = false } = {}) {
+      closed.push({ usd: spent - atLastClose, partial, ...(date ? { date } : {}) });
       atLastClose = spent;
     },
-    projectedDay: () => (closed.length === 0 ? dayEstimateUsd : closed.reduce((a, b) => a + b, 0) / closed.length),
-    days: () => [...closed],
+    partialDay: () => closed.find(d => d.partial)?.date ?? null,
+    projectedDay() {
+      const full = closed.filter(d => !d.partial);
+      return full.length === 0 ? dayEstimateUsd : full.reduce((a, d) => a + d.usd, 0) / full.length;
+    },
+    days: () => closed.map(d => d.usd),
   };
 }
 
@@ -141,8 +160,8 @@ export function budgetHooks(cost: CostTracker, maxUsd: number) {
       if (spent < maxUsd) return null;
       return `Stopped during ${date}: spent ${usd(spent)} reached SIM_MAX_USD (${usd(maxUsd)}); the rest of the day was skipped.`;
     },
-    afterDay(): void {
-      cost.dayClosed();
+    afterDay(date: string, options?: { partial?: boolean }): void {
+      cost.dayClosed(date, options);
     },
   };
 }

@@ -22,3 +22,15 @@ export function describeError(error: unknown): ErrorDescription {
   const cause = error instanceof Error && error.cause !== undefined ? describeCause(error.cause) : undefined;
   return { error: error instanceof Error ? error.name : "Error", message, ...(code ? { code } : {}), ...(cause ? { cause } : {}) };
 }
+
+/**
+ * Story 9.3: an error that must stop the whole run (for example the model API rejecting the credentials,
+ * the model id or the request shape), as opposed to one persona's refusal. The runner records the stop
+ * and ends the run instead of carrying on.
+ */
+export class SimFatalError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "SimFatalError";
+  }
+}

@@ -1,3 +1,5 @@
+import type { Employee } from "@/data/employees";
+import { SIM_END } from "../calendar";
 import type { Persona, PersonaRole } from "../personas";
 
 // Story 9.3: what a persona agent is told. The system prompt is the stable, cached prefix: it holds the
@@ -58,24 +60,66 @@ export type BriefInput = {
   /** The persona's own recent timeline lines (oldest first). */
   recent: readonly string[];
   notes: string;
+  /** Open items from the persona's own stores; null when they could not be read. */
+  openItems?: readonly string[] | null;
 };
 
-const cap = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
+export const OPEN_ITEMS_MAX = 600;
+
+const cap = (text: string, max: number) => (max <= 0 ? "" : text.length <= max ? text : `${text.slice(0, max - 1)}…`);
 
 function weekday(date: string): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-/** The day's brief: date and day number, today's scripted events, recent events, notes and a reminder. At most BRIEF_MAX characters. */
-export function dailyBrief({ date, index, total, events, recent, notes }: BriefInput): string {
+/** A staff member's open items from its own record: open assignment, leave from today on, active interviews. */
+export function ownOpenItems(employee: Employee, today: string): string[] {
+  const items: string[] = [];
+  const open = employee.assignments.find(a => a.status === "open");
+  if (open) items.push(`Open assignment ${open.id}: ${open.projectName} (${open.client}), ${open.role}, since ${open.startDate}`);
+  for (const l of employee.leave.filter(l => !l.cancelledAt && l.endDate >= today && l.startDate <= SIM_END)) {
+    items.push(`Leave ${l.id}: ${l.startDate} to ${l.endDate}`);
+  }
+  for (const i of employee.interviews.filter(i => !i.withdrawn)) {
+    items.push(`Interview ${i.id}: ${i.company}, ${i.role}, ${i.date}, ${i.stage}${i.outcome ? ` (${i.outcome})` : ""}`);
+  }
+  return items;
+}
+
+/** A manager's or the Administrator's open items: the team's open assignments and closed ones still to evaluate. */
+export function teamOpenItems(employees: readonly Employee[]): string[] {
+  const items: string[] = [];
+  for (const e of employees.filter(e => !e.archived)) {
+    const evaluated = new Set(e.evaluations.map(v => v.assignmentId));
+    const open = e.assignments.find(a => a.status === "open");
+    if (open) items.push(`${e.name} (${e.id}): open assignment ${open.id}, ${open.projectName}`);
+    for (const a of e.assignments.filter(a => a.status === "closed" && !evaluated.has(a.id))) {
+      items.push(`${e.name} (${e.id}): closed assignment ${a.id} (${a.projectName}) not yet evaluated`);
+    }
+  }
+  return items;
+}
+
+/**
+ * The day's brief: date and day number, today's scripted events, open items, recent events, notes and a
+ * reminder. At most BRIEF_MAX characters. The header, notes (the carried state) and reminder always fit;
+ * open items and events are capped; recent activity gets what is left and is cut first.
+ */
+export function dailyBrief({ date, index, total, events, recent, notes, openItems = [] }: BriefInput): string {
   const header = `Today is ${weekday(date)} (${date}), working day ${index + 1} of ${total}.`;
-  const today = events.length > 0 ? cap(`Happening today:\n${events.map(e => `- ${e}`).join("\n")}`, EVENTS_MAX) : "Nothing special is scheduled today.";
   const notesText = `Your notes from yesterday:\n${notes.trim() ? cap(notes.trim(), NOTES_MAX) : "(none yet)"}`;
   const reminder = "Act only through your tools and stay in character. End your reply with a line starting \"NOTES:\".";
-  const fixed = [header, today, notesText, reminder].join("\n\n");
+  const openText = cap(`Open items:\n${openItems === null ? "(open items unavailable)" : openItems.length > 0 ? openItems.map(i => `- ${i}`).join("\n") : "(none)"}`, OPEN_ITEMS_MAX);
+  const recentTitle = "Your recent activity (last 3 working days):\n";
+  const omitted = "- (older activity omitted for length)";
+  const separators = 5 * 2;
+  const reserved = header.length + notesText.length + reminder.length + openText.length + recentTitle.length + omitted.length + separators;
+  const today = events.length > 0
+    ? cap(`Happening today:\n${events.map(e => `- ${e}`).join("\n")}`, Math.min(EVENTS_MAX, BRIEF_MAX - reserved))
+    : "Nothing special is scheduled today.";
 
   // The recent events fill what is left, newest kept first.
-  const room = BRIEF_MAX - fixed.length - "\n\nYour recent activity (last 3 working days):\n".length - 2;
+  const room = BRIEF_MAX - (reserved - omitted.length) - today.length;
   const lines: string[] = [];
   let used = 0;
   for (const line of [...recent].slice(-RECENT_MAX_EVENTS).reverse()) {
@@ -84,8 +128,7 @@ export function dailyBrief({ date, index, total, events, recent, notes }: BriefI
     lines.unshift(item);
     used += item.length + 1;
   }
-  const recentText = `Your recent activity (last 3 working days):\n${lines.length > 0 ? lines.join("\n") : "- (nothing recorded)"}`;
-  // The reminder always survives: anything over the cap is cut before it.
-  const body = cap([header, today, recentText, notesText].join("\n\n"), BRIEF_MAX - reminder.length - 2);
-  return `${body}\n\n${reminder}`;
+  const recentBody = lines.length > 0 ? lines.join("\n") : recent.length > 0 ? omitted : "- (nothing recorded)";
+  const brief = [header, today, openText, `${recentTitle}${recentBody}`, notesText, reminder].join("\n\n");
+  return cap(brief, BRIEF_MAX);
 }

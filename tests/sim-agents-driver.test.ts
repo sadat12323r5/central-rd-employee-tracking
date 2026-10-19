@@ -30,9 +30,10 @@ afterEach(() => {
 
 const personaOf = (body: Record<string, any>) => PERSONAS.find(p => (body.system[0].text as string).startsWith(`You are ${p.name},`))!;
 
-async function setup(script: (body: Record<string, any>, n: number) => FakeReply, env: Record<string, string> = {}) {
+async function setup(script: (body: Record<string, any>, n: number) => FakeReply, env: Record<string, string> = {},
+  stores: Parameters<typeof fakeToolContext>[1] = {}) {
   const { deps, attendance } = fakeProvisionDeps();
-  const fake = fakeToolContext("staff");
+  const fake = fakeToolContext("staff", stores);
   const signedIn = { ...deps, signIn: async (email: string, password: string) => ({ ...await deps.signIn(email, password), tools: fake.stores }) };
   const cohort = await provisionCohort(signedIn, { personas: PERSONAS });
   const clock = createSimClock("2026-08-03");
@@ -149,5 +150,76 @@ describe("createAgentDriver (Story 9.3)", () => {
     const end = readJsonl(dir).at(-1)!;
     expect(end.kind).toBe("end");
     expect(end.text).toMatch(/Stopped during 2026-08-03/);
+    // The manager's own day was cut off at the budget, recorded as a model refusal.
+    expect(readJsonl(dir).filter(e => e.kind === "refusal")).toEqual([expect.objectContaining({ actor: PERSONAS[1].name, detail: expect.objectContaining({ source: "model", reason: "budget" }) })]);
+  });
+
+  it("closes a day the budget cut short as partial, so the day costs in cost.json sum to the total", async () => {
+    // Day 1 costs $0.10 (the manager and the Administrator $0.05 each); on day 2 the manager alone costs
+    // $0.50 and reaches the $0.60 budget, so the Administrator is skipped.
+    const { run, dir, driver } = await setup(body => priced(body, String(body.messages[0].content).includes("2026-08-03") ? 0.05 : 0.5),
+      { SIM_MAX_USD: "0.6", SIM_DAY_ESTIMATE_USD: "0.01" });
+    const result = await run();
+    expect(result.days).toEqual(["2026-08-03", "2026-08-04"]);
+    expect(result.stopReason.message).toMatch(/^Stopped during 2026-08-04/);
+    driver.writeRunFiles(dir, result);
+    const costFile = JSON.parse(readFileSync(join(dir, "cost.json"), "utf8"));
+    expect(costFile.partialDay).toBe("2026-08-04");
+    expect(costFile.dayCostsUsd).toEqual([expect.closeTo(0.1, 6), expect.closeTo(0.5, 6)]);
+    expect(costFile.dayCostsUsd.reduce((a: number, b: number) => a + b, 0)).toBeCloseTo(costFile.spentUsd, 9);
+  });
+
+  it("writes partialDay: null after a full run", async () => {
+    const { run, dir, driver } = await setup(() => ends("ok"));
+    driver.writeRunFiles(dir, await run(1));
+    expect(JSON.parse(readFileSync(join(dir, "cost.json"), "utf8")).partialDay).toBeNull();
+  });
+
+  it("stops the whole run on a fatal API error, recording why", async () => {
+    const { run, dir, seen } = await setup(() => ({ status: 401 }));
+    const result = await run();
+    expect(seen).toHaveLength(1);
+    expect(result.days).toEqual(["2026-08-03"]);
+    expect(result.stopReason).toEqual({ kind: "error", message: expect.stringMatching(/rejected the credentials \(AuthenticationError 401\)/) });
+    const end = readJsonl(dir).at(-1)!;
+    expect(end).toMatchObject({ kind: "end", detail: { stopReason: "error" } });
+  });
+
+  it("gives day 5's brief the persona's own events of days 2-4 only", async () => {
+    const { run, seen } = await setup(body => (["trainee", "senior"].includes(personaOf(body).key) && body.messages.length === 1
+      ? { content: [toolUse("toolu_1", "clock_in", { workMode: "Office" })], stop_reason: "tool_use" }
+      : ends("ok")));
+    await run(5);
+    const days = [...new Set(seen.map(s => s.at.slice(0, 10)))];
+    expect(days).toEqual(["2026-08-03", "2026-08-04", "2026-08-06", "2026-08-07", "2026-08-10"]);
+    const brief = seen.filter(s => s.persona === "trainee").at(-1)!.brief;
+    expect(brief).toContain("2026-08-10");
+    for (const day of ["2026-08-04", "2026-08-06", "2026-08-07"]) expect(brief).toContain(`${day} 09:00 `);
+    expect(brief).not.toContain("2026-08-03 09:00");
+    expect(brief).not.toMatch(/09:05/); // the senior's clock-ins
+  });
+
+  it("puts the persona's open items, read through its own stores, in the brief", async () => {
+    const employee = {
+      id: "BS-2002", name: "Sadia Mahmud", evaluations: [], interviews: [],
+      assignments: [{ id: "a-1", client: "Meghna", projectName: "Portal", role: "QA", startDate: "2026-08-03", status: "open" }],
+      leave: [{ id: "l-1", startDate: "2026-08-24", endDate: "2026-08-28", cancelledAt: null }],
+    };
+    const { run, seen } = await setup(() => ends("ok"), {}, { results: { "employees.getFor": employee, "employees.listFor": [employee] } });
+    await run(1);
+    const trainee = seen.find(s => s.persona === "trainee")!.brief;
+    expect(trainee).toContain("Open items:\n- Open assignment a-1: Portal (Meghna), QA, since 2026-08-03\n- Leave l-1: 2026-08-24 to 2026-08-28");
+    const manager = seen.find(s => s.persona === "manager")!.brief;
+    expect(manager).toContain("Sadia Mahmud (BS-2002): open assignment a-1, Portal");
+  });
+
+  it("says open items are unavailable when the store fails, and carries on", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { run, seen } = await setup(() => ends("ok"), {}, { failures: { "employees.getFor": new Error("rls"), "employees.listFor": new Error("rls") } });
+    const result = await run(1);
+    expect(seen).toHaveLength(10);
+    expect(seen.every(s => s.brief.includes("Open items:\n(open items unavailable)"))).toBe(true);
+    expect(result.refusals).toBe(0);
+    warn.mockRestore();
   });
 });

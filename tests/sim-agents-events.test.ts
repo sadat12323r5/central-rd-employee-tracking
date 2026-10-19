@@ -66,6 +66,16 @@ describe("EVENT_SCRIPT (Story 9.3)", () => {
     expect(calendar.holidays.map(h => h.date)).toContain("2026-08-26");
   });
 
+  it("clusters leave around a public holiday: at least three staff ask for leave touching it", () => {
+    const holidays = calendar.holidays.map(h => h.date);
+    const touching = EVENT_SCRIPT.filter(e => e.kind === "holiday-leave" && e.dates
+      && holidays.some(h => e.dates!.startDate <= h && e.dates!.endDate >= h));
+    const staff = new Set(PERSONAS.filter(p => touching.some(e => e.targets.keys?.includes(p.key) || e.targets.traits?.some(t => p.traits.includes(t))))
+      .filter(p => p.role === "staff").map(p => p.key));
+    expect(staff.size).toBeGreaterThanOrEqual(3);
+    expect([...staff]).toContain("leaver");
+  });
+
   it("orders the transfer: department first, then the assignment closed, then the transfer", () => {
     const transfer = EVENT_SCRIPT.filter(e => e.kind === "transfer");
     const create = transfer.find(e => /Create the department/.test(e.text))!;

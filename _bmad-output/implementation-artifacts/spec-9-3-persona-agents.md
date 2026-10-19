@@ -2,10 +2,10 @@
 title: 'Story 9.3: Persona agents and the eight-week orchestration'
 type: 'feature'
 created: '2026-10-19'
-status: 'in-review'
+status: 'done'
 baseline_revision: '65a778604de9f152bf16c7da83d832c4b7e0724d'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-9-2-persona-tool-layer.md'
@@ -183,3 +183,32 @@ deferred: []
 - `npm run typecheck` -- expected: no errors
 - `npx vitest run tests/sim-agents-*.test.ts tests/sim-runner.test.ts` -- expected: all pass
 - `npm run check` -- expected: all pass
+
+## Auto Run Result
+
+Status: done
+
+**Summary.** `npm run sim:run` without `--dry-run` now runs the real model-driven eight-week simulation.
+- **Daily loop:** each working day, each persona gets a brief (date, recent own activity over 3 working days, open items from its own stores, scripted events, its notes). It acts through the SDK Tool Runner with its role's strict 9.2 tools, under a daily action cap: staff first, then the manager, then the Administrator.
+- **Models:** managers use Opus 5.5 and staff Haiku 5.5, both overridable with `SIM_*_MODEL`. Opus requests carry server-side fallbacks.
+- **Requests:** the stable system prompt is cached, `max_tokens` is bounded and effort is configurable.
+- **Stop handling:** `refusal`, `max_tokens`, `max_iterations`, `pause_turn` and `model_context_window_exceeded` are recorded and never crash the run. Fatal API errors stop the run, and a free `models.retrieve` preflight runs before anything is provisioned.
+- **Budget:** a hard `SIM_MAX_USD` budget stops the run at a day boundary on projection, and also inside a persona's day once spend reaches it.
+- **Run files:** `cost.json` (per model, per day with the partial day marked, stop reason) and `notes.json` are always written, even when the run fails.
+
+**Files.**
+- New: `sim/agents/{settings,cost,events,brief,agent,driver,index}.ts`.
+- Changed: `sim/runner.ts`, `sim/cli.ts`, `sim/dry-run-driver.ts`, `sim/errors.ts` and `scripts/sim/run.ts`.
+- Tests: `tests/sim-agents-{cost,events,brief,agent,driver}.test.ts` and `tests/support/sim-agent-fakes.ts`, plus updates to `tests/sim-runner.test.ts`.
+
+**Review.** The review had 35 findings (3 high, 15 medium, 14 low, 3 false).
+- Patched: the hard in-day budget, partial-day accounting, fatal-error stop, model preflight, run files in a finally, unfinished-stop recording, final-message notes, alias pricing, brief cut order, open items in the brief, clustered holiday leave, the usage line and the missing assertions.
+- Rejected: 12, with reasons in the triage log.
+- Deferred: none.
+
+**Follow-up review recommended: true.** Patches included three high entries. Unverified risk: the real request shape (effort on Haiku, `fallbacks: "default"` with its beta, the strict-schema transform) has never reached the live API. The preflight checks only credentials and model ids, so a 400 on the first real request would stop the run as a fatal error (by design, before spending more).
+
+**Residual risk.**
+- The one response that crosses the budget is still paid for, so spend can exceed `SIM_MAX_USD` by at most one request.
+- Past-dated attendance is still refused by RLS (Story 9.1's open decision).
+- Scripted events are prompted, not guaranteed; Story 9.4's report shows what actually happened.

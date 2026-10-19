@@ -9,7 +9,8 @@ import type { Timeline } from "../timeline";
 import type { MovableSimClock } from "../tools/clock";
 import type { ServiceAudit } from "../tools/types";
 import { runPersonaDay } from "./agent";
-import { dailyBrief, RECENT_MAX_EVENTS } from "./brief";
+import { ownRecordIdentity } from "@/server/session";
+import { dailyBrief, ownOpenItems, RECENT_MAX_EVENTS, teamOpenItems } from "./brief";
 import type { CostTracker } from "./cost";
 import { eventsFor } from "./events";
 import type { AgentSettings } from "./settings";
@@ -61,6 +62,24 @@ export function createAgentDriver({ client, deps, cohort, settings, cost, timeli
       .map(e => `${e.day} ${dhakaClock(e.at)} ${e.kind === "refusal" ? "REFUSED " : ""}${e.text}`);
   }
 
+  /** The persona's open items, read through its own stores before it acts; null when they cannot be read. */
+  async function openItems(member: CohortMember, today: string): Promise<string[] | null> {
+    const stores = member.tools;
+    if (!stores) return null;
+    try {
+      if (member.persona.role === "staff") {
+        const own = ownRecordIdentity(member.session);
+        if (!own) return null;
+        const employee = await stores.employees.getFor(own, own.employeeId);
+        return employee ? ownOpenItems(employee, today) : null;
+      }
+      return teamOpenItems(await stores.employees.listFor(member.session));
+    } catch (error) {
+      console.warn(`Could not read ${member.persona.name}'s open items: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
   return {
     beginDay(day: SimDay) {
       deps.clock.set(day.date, "08:30");
@@ -78,6 +97,7 @@ export function createAgentDriver({ client, deps, cohort, settings, cost, timeli
         events: eventsFor(persona.key, day.index, day.date, vars),
         recent: recent(member, day.date),
         notes: notes.get(persona.key) ?? "",
+        openItems: await openItems(member, day.date),
       });
       const model = persona.role === "staff" ? settings.staffModel : settings.managerModel;
       const result = await runPersonaDay({
@@ -85,6 +105,9 @@ export function createAgentDriver({ client, deps, cohort, settings, cost, timeli
         notes: notes.get(persona.key) ?? "",
         ctx: { member, stores: member.tools, clock: deps.clock, timeline, serviceAudit: deps.serviceAudit },
         onUsage: (responseModel, usage) => cost.add(responseModel, usage),
+        // The hard budget: a persona's day stops as soon as spend reaches SIM_MAX_USD.
+        overBudget: () => (cost.spent() >= settings.maxUsd
+          ? `spent $${cost.spent().toFixed(2)} reached SIM_MAX_USD ($${settings.maxUsd.toFixed(2)}).` : null),
       });
       notes.set(persona.key, result.notes);
       return result.steps;
@@ -103,6 +126,8 @@ export function createAgentDriver({ client, deps, cohort, settings, cost, timeli
         spentUsd: cost.spent(),
         days: result.days.length,
         dayCostsUsd: cost.days(),
+        /** The day the budget (or a fatal error) cut short, included in dayCostsUsd; null when none. */
+        partialDay: cost.partialDay(),
         models: { manager: settings.managerModel, staff: settings.staffModel },
         perModel: Object.fromEntries(Object.entries(perModel).map(([model, s]) => [model, {
           requests: s.requests,

@@ -15,7 +15,17 @@ describe("costOf (Story 9.3)", () => {
     expect(costOf("claude-opus-5-5", { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: null, cache_creation_input_tokens: null })).toBeCloseTo(40 / 1e6, 12);
   });
 
-  it("prices an unknown model at the highest tier, warning once", () => {
+  it("prices dated or aliased ids by their longest known prefix", () => {
+    const warn = vi.fn();
+    const cost = createCostTracker({ dayEstimateUsd: 1.5, warn });
+    expect(cost.add("claude-opus-5-5-20261001", usage)).toBeCloseTo(29.2, 10);
+    expect(costOf("claude-haiku-5-5@latest", usage)).toBeCloseTo(0.735, 10);
+    expect(warn).not.toHaveBeenCalled();
+    // Not a prefix at an id boundary: unknown.
+    expect(costOf("claude-opus-5-50", usage)).toBeCloseTo(73.5, 10);
+  });
+
+  it("prices an unknown model at the conservative rate, warning once", () => {
     const warn = vi.fn();
     const cost = createCostTracker({ dayEstimateUsd: 1.5, warn });
     expect(cost.add("claude-mystery", usage)).toBeCloseTo(UNKNOWN_MODEL_PRICE.input + UNKNOWN_MODEL_PRICE.output + UNKNOWN_MODEL_PRICE.cacheRead + UNKNOWN_MODEL_PRICE.cacheWrite, 10);
@@ -42,6 +52,21 @@ describe("createCostTracker (Story 9.3)", () => {
     expect(cost.days()).toEqual([expect.closeTo(12_260e-6, 12), expect.closeTo(1, 12)]);
     expect(cost.projectedDay()).toBeCloseTo((12_260e-6 + 1) / 2, 12);
     expect(cost.spent()).toBeCloseTo(1.01226, 10);
+  });
+});
+
+describe("partial days (Story 9.3)", () => {
+  it("records a partial day so the day costs sum to the total, leaving it out of the projection", () => {
+    const cost = createCostTracker({ dayEstimateUsd: 1.5, warn: vi.fn() });
+    const hooks = budgetHooks(cost, 10);
+    cost.add("claude-opus-5-5", { input_tokens: 0, output_tokens: 10_000 }); // $0.20
+    hooks.afterDay("2026-08-03");
+    cost.add("claude-opus-5-5", { input_tokens: 0, output_tokens: 5_000 }); // $0.10
+    hooks.afterDay("2026-08-04", { partial: true });
+    expect(cost.days()).toEqual([expect.closeTo(0.2, 10), expect.closeTo(0.1, 10)]);
+    expect(cost.days().reduce((a, b) => a + b, 0)).toBeCloseTo(cost.spent(), 12);
+    expect(cost.partialDay()).toBe("2026-08-04");
+    expect(cost.projectedDay()).toBeCloseTo(0.2, 10);
   });
 });
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DAILY_ACTION_CAP_REACHED, parseNotes, runPersonaDay, SERVER_SIDE_FALLBACK_BETA } from "../sim/agents/agent";
+import { DAILY_ACTION_CAP_REACHED, parseNotes, preflightModels, runPersonaDay, SERVER_SIDE_FALLBACK_BETA } from "../sim/agents/agent";
+import { SimFatalError } from "../sim/errors";
 import { NOTES_MAX } from "../sim/agents/brief";
 import { parseAgentSettings } from "../sim/agents/settings";
 import { toolsFor } from "../sim/tools/catalog";
@@ -15,6 +16,7 @@ type Role = "staff" | "manager" | "admin";
 
 async function day(role: Role, model: ReturnType<typeof fakeModel>, {
   env = {} as Record<string, string>, brief = "Today is Monday 10 August 2026.", notes = "old notes",
+  overBudget = undefined as (() => string | null) | undefined,
 } = {}) {
   const settings = parseAgentSettings(env);
   const fake = fakeToolContext(role);
@@ -22,7 +24,7 @@ async function day(role: Role, model: ReturnType<typeof fakeModel>, {
   const modelId = role === "staff" ? settings.staffModel : settings.managerModel;
   const result = await runPersonaDay({
     client: model.client, model: modelId, settings, persona: fake.ctx.member.persona, ctx: fake.ctx, brief, notes,
-    onUsage: (m, u) => usage.push({ model: m, usage: u }),
+    onUsage: (m, u) => usage.push({ model: m, usage: u }), overBudget,
   });
   return { ...fake, result, usage, settings };
 }
@@ -101,6 +103,32 @@ describe("runPersonaDay (Story 9.3)", () => {
     expect(model.requests).toHaveLength(5);
     expect(calls).toHaveLength(3);
     expect(result.notes).toBe("old notes");
+    // Stopping at max_iterations mid-tool-use is recorded as a model refusal.
+    expect(result.stop).toBe("tool_use");
+    expect(result.steps.at(-1)).toMatchObject({ kind: "refusal", detail: { source: "model", stop_reason: "tool_use" } });
+    expect(result.steps.at(-1)!.recorded).toBeFalsy();
+  });
+
+  it("records a model_context_window_exceeded stop as a model refusal", async () => {
+    const model = fakeModel(() => ({ content: [text("NOTES: no")], stop_reason: "model_context_window_exceeded" }));
+    const { result } = await day("staff", model);
+    expect(result).toMatchObject({ stop: "model_context_window_exceeded", notes: "old notes" });
+    expect(result.steps).toEqual([expect.objectContaining({ kind: "refusal", detail: expect.objectContaining({ stop_reason: "model_context_window_exceeded" }) })]);
+  });
+
+  it("cuts the day off as soon as the budget is reached: no further requests or tool calls", async () => {
+    // The model would ask for a tool on every one of 5 requests; the budget is reached after the second.
+    const model = fakeModel((_, n) => ({ content: [toolUse(`toolu_${n}`, "clock_in", { workMode: "Office" })], stop_reason: "tool_use" }));
+    let responses = 0;
+    const { result, calls } = await day("staff", model, {
+      env: { SIM_MAX_ACTIONS_PER_DAY: "3" },
+      overBudget: () => (++responses >= 2 ? "spent $1.00 reached SIM_MAX_USD ($1.00)." : null),
+    });
+    expect(model.requests).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    expect(result.stop).toBe("budget");
+    expect(result.steps.at(-1)).toMatchObject({ kind: "refusal", detail: { source: "model", reason: "budget" } });
+    expect(result.steps.at(-1)!.text).toMatch(/reached SIM_MAX_USD/);
   });
 
   it.each(["refusal", "max_tokens"])("ends the day on a %s stop with one model refusal step, keeping the notes", async stop => {
@@ -126,6 +154,40 @@ describe("runPersonaDay (Story 9.3)", () => {
     })]);
   });
 
+  it.each([
+    [401, "AuthenticationError"], [403, "PermissionDeniedError"], [404, "NotFoundError"], [400, "BadRequestError"],
+  ])("rethrows a fatal %s API error as SimFatalError so the run stops", async (status, name) => {
+    const model = fakeModel(() => ({ status }));
+    const settings = parseAgentSettings({});
+    const { ctx } = fakeToolContext("staff");
+    const run = runPersonaDay({ client: model.client, model: "claude-haiku-5-5", settings, persona: ctx.member.persona, ctx, brief: "b", notes: "", onUsage: () => {} });
+    await expect(run).rejects.toBeInstanceOf(SimFatalError);
+    await expect(run).rejects.toMatchObject({ cause: expect.objectContaining({ constructor: expect.objectContaining({ name }) }) });
+  });
+
+  it.each([429, 529])("keeps a transient %s API error a per-persona refusal", async status => {
+    const { result } = await day("staff", fakeModel(() => ({ status })));
+    expect(result.stop).toBe("error");
+    expect(result.steps).toEqual([expect.objectContaining({ kind: "refusal", detail: expect.objectContaining({ source: "model", status }) })]);
+  });
+
+  it("keeps a connection error a per-persona refusal", async () => {
+    const settings = parseAgentSettings({});
+    const { ctx } = fakeToolContext("staff");
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const client = new Anthropic({ apiKey: "test", maxRetries: 0, fetch: async () => { throw new TypeError("fetch failed"); } });
+    const result = await runPersonaDay({ client, model: "claude-haiku-5-5", settings, persona: ctx.member.persona, ctx, brief: "b", notes: "kept", onUsage: () => {} });
+    expect(result).toMatchObject({ stop: "error", notes: "kept" });
+    expect(result.steps[0].detail).toMatchObject({ source: "model", error: "APIConnectionError" });
+  });
+
+  it("only takes NOTES from the final reply", async () => {
+    const model = fakeModel((_, n) => n === 1
+      ? { content: [text("NOTES: early"), toolUse("toolu_1", "clock_in", { workMode: "Office" })], stop_reason: "tool_use" }
+      : { content: [text("Done for today.")], stop_reason: "end_turn" });
+    expect((await day("staff", model)).result.notes).toBe("old notes");
+  });
+
   it("keeps the old notes when the reply has no NOTES line", async () => {
     const model = fakeModel(() => ({ content: [text("Nothing to do today.")], stop_reason: "end_turn" }));
     expect((await day("staff", model)).result.notes).toBe("old notes");
@@ -142,6 +204,26 @@ describe("runPersonaDay (Story 9.3)", () => {
     expect(a.tools).toEqual(b.tools);
     expect(a.messages).toEqual([{ role: "user", content: "Today is Monday 10 August 2026." }]);
     expect(b.messages).toEqual([{ role: "user", content: "Today is Tuesday 11 August 2026." }]);
+  });
+});
+
+describe("preflightModels (Story 9.3)", () => {
+  it("checks each distinct model once and passes when all exist", async () => {
+    const model = fakeModel(() => ({ content: [], stop_reason: "end_turn" }));
+    expect(await preflightModels(model.client, ["claude-opus-5-5", "claude-haiku-5-5", "claude-opus-5-5"])).toBeNull();
+    expect(model.modelChecks).toEqual(["claude-opus-5-5", "claude-haiku-5-5"]);
+  });
+
+  it("names an unknown model", async () => {
+    const model = fakeModel(() => ({ content: [], stop_reason: "end_turn" }), { models: id => (id === "claude-nope" ? 404 : 200) });
+    expect(await preflightModels(model.client, ["claude-opus-5-5", "claude-nope"])).toMatch(/^Model claude-nope was not found \(NotFoundError 404\)[\s\S]*Nothing was provisioned\.$/);
+  });
+
+  it("names a credential problem without showing the key", async () => {
+    const model = fakeModel(() => ({ content: [], stop_reason: "end_turn" }), { models: () => 401 });
+    const message = await preflightModels(model.client, ["claude-opus-5-5"]);
+    expect(message).toMatch(/rejected the credentials \(AuthenticationError 401\)/);
+    expect(message).not.toContain("test");
   });
 });
 

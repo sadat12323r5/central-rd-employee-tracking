@@ -4,7 +4,7 @@ import { calendarFromActive, SimSetupError } from "./calendar";
 import { CohortError, DEFAULT_RANGE, provisionCohort, retireCohorts, type IdRange, type ProvisionDeps, type RetireDeps } from "./cohort";
 import { createDryRunDriver } from "./dry-run-driver";
 import { PERSONAS, type Persona } from "./personas";
-import { runSimulation } from "./runner";
+import { runSimulation, type SimulationResult, type StopReason } from "./runner";
 import { createTimeline } from "./timeline";
 import type { MovableSimClock } from "./tools/clock";
 import type { ServiceAudit } from "./tools/types";
@@ -118,7 +118,19 @@ async function realRun(args: RunArgs, {
     if (!deps.clock || !deps.serviceAudit) throw new SimSetupError("A real run needs the simulated clock and the export audit store (sim/env.ts createSimDeps).");
     const { clock, serviceAudit } = deps;
     const calendar = calendarFromActive(await deps.activeCalendar());
-    const client = createClient ? createClient(agents) : agents.createAnthropicClient();
+    // Credentials and model ids are checked before anything is provisioned.
+    let client: ReturnType<AgentsModule["createAnthropicClient"]>;
+    try {
+      client = createClient ? createClient(agents) : agents.createAnthropicClient();
+    } catch (error) {
+      out.error(`Could not create the model client: ${error instanceof Error ? error.message : String(error)} Check the Anthropic API key in .env.local. Nothing was provisioned.`);
+      return 1;
+    }
+    const preflight = await agents.preflightModels(client, [settings.managerModel, settings.staffModel]);
+    if (preflight) {
+      out.error(preflight);
+      return 1;
+    }
     const cohort = await provisionCohort(deps, { range, personas });
     const dir = join(outputRoot, cohort.run);
     out.log(`Cohort ${cohort.run}: ${cohort.departmentName}, employees ${cohort.ids[0]}-${cohort.ids[cohort.members.length - 2] ?? cohort.ids[0]}.`);
@@ -127,11 +139,33 @@ async function realRun(args: RunArgs, {
     const cost = agents.createCostTracker({ dayEstimateUsd: settings.dayEstimateUsd, warn: line => out.error(line) });
     const totalDays = Math.min(args.days ?? calendar.workingDays.length, calendar.workingDays.length);
     const driver = agents.createAgentDriver({ client, deps: { clock, serviceAudit }, cohort, settings, cost, timeline, totalDays });
-    const result = await runSimulation({ cohort, driver, calendar, timeline, maxDays: args.days, budget: agents.budgetHooks(cost, settings.maxUsd) });
-    driver.writeRunFiles(dir, result);
+    let result: SimulationResult | undefined;
+    let failure: unknown;
+    try {
+      result = await runSimulation({ cohort, driver, calendar, timeline, maxDays: args.days, budget: agents.budgetHooks(cost, settings.maxUsd) });
+    } catch (error) {
+      failure = error;
+    } finally {
+      // Whatever happened, the run files describe what was done and spent, and the timeline is closed.
+      timeline.close();
+      const days = result?.days ?? [...new Set(timeline.events().filter(e => e.kind === "day" && e.day).map(e => e.day!))];
+      const stopReason: StopReason = result?.stopReason ?? {
+        kind: "error", message: `The simulation stopped: ${failure instanceof Error ? `${failure.name}: ${failure.message}` : String(failure)}`,
+      };
+      try {
+        driver.writeRunFiles(dir, { run: cohort.run, days, stopReason });
+      } catch (error) {
+        out.error(`Could not write cost.json and notes.json: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!result) throw failure;
     out.log(`Run ${cohort.run} done: ${result.days.length} working days, ${result.holidays.length} holidays, ${result.actions} actions, ${result.refusals} refusals; spent $${cost.spent().toFixed(2)} of $${settings.maxUsd.toFixed(2)}.`);
     if (result.stopReason.kind === "budget") out.log(result.stopReason.message);
     out.log(`Timeline: ${join(dir, "timeline.md")} and ${join(dir, "timeline.jsonl")}; cost: ${join(dir, "cost.json")}; notes: ${join(dir, "notes.json")}`);
+    if (result.stopReason.kind === "error") {
+      out.error(`The run stopped early: ${result.stopReason.message}`);
+      return 1;
+    }
     return 0;
   } catch (error) {
     out.error(error instanceof SimSetupError || error instanceof CohortError

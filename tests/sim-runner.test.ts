@@ -16,7 +16,11 @@ import { createTimeline, type TimelineEvent } from "../sim/timeline";
 import { createSimClock } from "../sim/tools/clock";
 import { createMemoryAttendanceStore } from "./support/memory-attendance-store";
 import { fakeProvisionDeps, fakeRetireDeps } from "./support/sim-fakes";
+import { fakeModel } from "./support/sim-agent-fakes";
 import { fakeToolContext } from "./support/sim-tool-fakes";
+
+/** The persona name a fake-model request's system prompt is written for. */
+const personaOf = (body: Record<string, unknown>) => /^You are ([^,]+),/.exec((body.system as { text: string }[])[0].text)?.[1];
 
 const root = join(import.meta.dirname, "..");
 const csv = readFileSync(join(root, "docs", "holiday-calendars", "bangladesh-2026.csv"), "utf8");
@@ -47,8 +51,10 @@ describe("runSimulation with the dry-run driver (Story 9.1)", () => {
     expect(result.days).toHaveLength(37);
     expect(result.holidays).toEqual(["2026-08-05", "2026-08-26", "2026-09-04"]);
     expect(result.refusals).toBe(0);
+    expect(result.stopReason.kind).toBe("completed");
 
     const events = readJsonl(dir);
+    expect(events.at(-1)!.detail).toMatchObject({ stopReason: "completed" });
     expect(events[0].kind).toBe("provisioned");
     expect(events.at(-1)!.kind).toBe("end");
     expect(events.filter(e => e.kind === "day")).toHaveLength(37);
@@ -144,6 +150,45 @@ describe("sim:run and sim:retire commands (Story 9.1)", () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [404, /^Model claude-opus-5-5 was not found/],
+    [401, /rejected the credentials \(AuthenticationError 401\)/],
+  ])("checks the models before provisioning: a %s exits 1 and provisions nothing (Story 9.3)", async (status, message) => {
+    const { errors, out } = quiet();
+    const { deps, calls } = fakeProvisionDeps();
+    const model = fakeModel(() => ({ content: [], stop_reason: "end_turn" }), { models: id => (id === "claude-opus-5-5" ? status : 200) });
+    const loadDeps = () => ({ ...deps, activeCalendar: async () => ({ policy }), clock: createSimClock("2026-08-03"), serviceAudit: fakeToolContext("staff").serviceAudit });
+    expect(await simRun([], { loadDeps, out, env: {}, outputRoot: tempDir(), createClient: () => model.client })).toBe(1);
+    expect(errors).toEqual([expect.stringMatching(message)]);
+    expect(errors[0]).toMatch(/Nothing was provisioned\.$/);
+    expect(calls).toEqual([]);
+    expect(model.requests).toEqual([]);
+  });
+
+  it("writes cost.json and notes.json and closes the timeline when the run throws after provisioning (Story 9.3)", async () => {
+    const { errors, out } = quiet();
+    const { deps } = fakeProvisionDeps();
+    const { stores, serviceAudit } = fakeToolContext("staff");
+    const outputRoot = tempDir();
+    const dir = join(outputRoot, "c00ab12");
+    // On day 1 the output directory disappears, so the next timeline write (day 2's `day` event) throws.
+    const model = fakeModel(body => {
+      if (personaOf(body) === "Farzana Kabir") rmSync(dir, { recursive: true, force: true });
+      return { content: [{ type: "text", text: "NOTES: kept" }], stop_reason: "end_turn" };
+    });
+    const loadDeps = () => ({
+      ...deps,
+      signIn: async (email: string, password: string) => ({ ...await deps.signIn(email, password), tools: stores }),
+      activeCalendar: async () => ({ policy }), clock: createSimClock("2026-08-03"), serviceAudit,
+    });
+    expect(await simRun(["--days", "2"], { loadDeps, out, env: {}, outputRoot, createClient: () => model.client })).toBe(1);
+    expect(errors).toEqual([expect.stringMatching(/^The simulation stopped: Error: ENOENT/)]);
+    const cost = JSON.parse(readFileSync(join(dir, "cost.json"), "utf8"));
+    expect(cost.stopReason).toEqual({ kind: "error", message: expect.stringMatching(/^The simulation stopped: Error: ENOENT/) });
+    expect(cost.perModel["claude-opus-5-5"].requests).toBe(2);
+    expect(JSON.parse(readFileSync(join(dir, "notes.json"), "utf8")).personas.admin.notes).toBe("kept");
+  });
+
   it("exits 2 on another bad SIM_* setting (Story 9.3)", async () => {
     const { errors, out } = quiet();
     const loadDeps = vi.fn();
@@ -158,7 +203,11 @@ describe("sim:run and sim:retire commands (Story 9.1)", () => {
     const { stores, serviceAudit } = fakeToolContext("staff");
     const outputRoot = tempDir();
     const requests: { model: string }[] = [];
-    const fakeFetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("/v1/models/")) {
+        return new Response(JSON.stringify({ type: "model", id: url.split("/v1/models/")[1].split("?")[0], display_name: "x", created_at: "2026-01-01T00:00:00Z" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       const body = JSON.parse(String(init?.body));
       requests.push(body);
       return new Response(JSON.stringify({
