@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,10 +6,13 @@ import { buildCalendar, toCalendarPolicy } from "@/domain/holiday-calendar";
 import { dhakaInstant, simulatedCalendar } from "../sim/calendar";
 import { REAL_RUN_UNAVAILABLE, simRetire, simRun } from "../sim/cli";
 import { provisionCohort } from "../sim/cohort";
+import { AttendanceUnavailableError } from "@/server/attendance-store";
 import { createDryRunDriver, type SimDriver } from "../sim/dry-run-driver";
+import { loadSimEnv } from "../sim/env";
 import { PERSONAS } from "../sim/personas";
 import { runSimulation } from "../sim/runner";
 import { createTimeline, type TimelineEvent } from "../sim/timeline";
+import { createMemoryAttendanceStore } from "./support/memory-attendance-store";
 import { fakeProvisionDeps, fakeRetireDeps } from "./support/sim-fakes";
 
 const root = join(import.meta.dirname, "..");
@@ -92,11 +95,22 @@ describe("runSimulation with the dry-run driver (Story 9.1)", () => {
     const result = await runSimulation({ cohort, driver: twice, calendar, timeline: createTimeline(dir), maxDays: 2 });
     const refusals = readJsonl(dir).filter(e => e.kind === "refusal");
     expect(result.refusals).toBe(refusals.length);
-    expect(refusals.length).toBe(2 * 8 * 2); // per day and staff: the second clock-in and the second clock-out
-    expect(refusals.map(r => r.text)).toContain("Today's attendance is already recorded.");
+    expect(refusals.length).toBe(2 * 8); // per day and staff: the second clock-in, which ends that persona's day
+    expect(new Set(refusals.map(r => r.text))).toEqual(new Set(["Today's attendance is already recorded."]));
     expect(refusals[0].detail).toMatchObject({ command: "clockIn", error: "TimesheetValidationError" });
     expect(result.days).toHaveLength(2);
     expect(readJsonl(dir).at(-1)!.kind).toBe("end");
+  });
+
+  it("skips the log and clock-out when the clock-in is refused, recording one refusal", async () => {
+    const store = createMemoryAttendanceStore();
+    const refusing = { ...store, save: async () => { throw new AttendanceUnavailableError({ cause: { code: "42501", message: "rls" } }); } };
+    const { deps } = fakeProvisionDeps({ attendance: refusing });
+    const cohort = await provisionCohort(deps, { personas: PERSONAS });
+    const trainee = cohort.members.find(m => m.persona.key === "trainee")!;
+    const steps = await createDryRunDriver().act(trainee, { date: "2026-08-03", index: 0 }, 0);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ kind: "refusal", text: "Attendance records are temporarily unavailable.", detail: { command: "clockIn", cause: "42501 rls" } });
   });
 
   it("records a driver that throws as a refusal instead of crashing", async () => {
@@ -176,6 +190,31 @@ describe("sim:run and sim:retire commands (Story 9.1)", () => {
     expect(lines.join("\n")).toContain(join(outputRoot, run, "timeline.md"));
   });
 
+  it("says how many steps the app refused, still exiting 0", async () => {
+    const { lines, out } = quiet();
+    const refusing = { ...createMemoryAttendanceStore(), save: async () => { throw new AttendanceUnavailableError(); } };
+    const { deps } = fakeProvisionDeps({ attendance: refusing });
+    const outputRoot = tempDir();
+    const code = await simRun(["--dry-run", "--days", "2"], { loadDeps: () => ({ ...deps, activeCalendar: async () => ({ policy }) }), out, outputRoot });
+    expect(code).toBe(0);
+    expect(lines).toContain(`The app refused 16 steps; the reasons are in ${join(outputRoot, "c00ab12", "timeline.md")}.`);
+  });
+
+  it("names the partly provisioned cohort and the failed step when provisioning fails", async () => {
+    const { errors, out } = quiet();
+    const { deps } = fakeProvisionDeps();
+    const failing = {
+      ...deps,
+      signIn: async (email: string, password: string) => {
+        if (email.includes("-trainee@")) throw new Error("Sign-in refused.");
+        return deps.signIn(email, password);
+      },
+      activeCalendar: async () => ({ policy }),
+    };
+    expect(await simRun(["--dry-run"], { loadDeps: () => failing, out, outputRoot: tempDir() })).toBe(1);
+    expect(errors).toEqual(["Cohort c00ab12 is partly provisioned: the sign-in of trainee failed: Sign-in refused. Nothing was rolled back."]);
+  });
+
   it("rejects unknown options", async () => {
     const { out } = quiet();
     expect(await simRun(["--dry-run", "--days", "zero"], { loadDeps: vi.fn(), out })).toBe(2);
@@ -194,6 +233,41 @@ describe("sim:run and sim:retire commands (Story 9.1)", () => {
     const all = fakeRetireDeps(employees, users);
     expect(await simRetire(["--all"], { loadDeps: () => all.deps, out: quiet().out })).toBe(0);
     expect(all.archived.map(a => a.employeeId)).toEqual(["BS-2000", "BS-2010"]);
+  });
+
+  it("reports skipped cohorts (exit 0) and failed archives (exit 1), never 'No earlier cohort'", async () => {
+    const employees = [
+      { employeeId: "BS-2000", summary: "Simulation cohort c00aaaa. A.", archived: false },
+      { employeeId: "BS-2001", summary: "Simulation cohort c00aaaa. B.", archived: false },
+      { employeeId: "BS-2010", summary: "Simulation cohort c01bbbb. C.", archived: false },
+    ];
+    const users = [{ id: "aaaa0000-0000-4000-8000-000000000000", email: "sim-c00aaaa-admin@example.com" }];
+    const skipped = quiet();
+    expect(await simRetire(["--all"], { loadDeps: () => fakeRetireDeps(employees, users).deps, out: skipped.out })).toBe(0);
+    expect(skipped.lines).toContain("Skipped 1 cohort whose Administrator account was not found.");
+    expect(skipped.lines).not.toContain("No earlier cohort to retire.");
+
+    const failed = quiet();
+    const onlySkipped = employees.filter(e => e.employeeId === "BS-2010");
+    expect(await simRetire(["--all"], { loadDeps: () => fakeRetireDeps(onlySkipped, users).deps, out: failed.out })).toBe(0);
+    expect(failed.lines).toEqual(["Skipped 1 cohort whose Administrator account was not found."]);
+
+    const failing = quiet();
+    const deps = fakeRetireDeps(employees, users, ["BS-2000"]);
+    expect(await simRetire(["--all"], { loadDeps: () => deps.deps, out: failing.out })).toBe(1);
+    expect(failing.lines).toContain("Could not archive 1 employee; see the warnings above.");
+    expect(failing.lines).not.toContain("No earlier cohort to retire.");
+    expect(deps.archived.map(a => a.employeeId)).toEqual(["BS-2001"]);
+  });
+});
+
+describe("loadSimEnv (Story 9.1)", () => {
+  it("loads the env file into the env object it checks, keeping existing values", () => {
+    const file = join(tempDir(), ".env.local");
+    writeFileSync(file, "NEXT_PUBLIC_SUPABASE_URL=https://file.example\nNEXT_PUBLIC_SUPABASE_ANON_KEY=anon-from-file\n");
+    const env: Record<string, string | undefined> = { SUPABASE_SERVICE_ROLE_KEY: "service", NEXT_PUBLIC_SUPABASE_URL: "https://env.example" };
+    expect(loadSimEnv(env, file)).toEqual({ url: "https://env.example", anonKey: "anon-from-file", serviceKey: "service" });
+    expect(() => loadSimEnv({}, join(tempDir(), "missing"))).toThrow(/^Set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY/);
   });
 });
 

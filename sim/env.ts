@@ -32,7 +32,7 @@ export const SUPABASE_VARS = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_
 const noSession = { auth: { persistSession: false, autoRefreshToken: false } };
 
 /** Loads `.env.local` when present (existing environment variables win) and checks the Supabase variables. */
-export function loadSimEnv(env: NodeJS.ProcessEnv = process.env, envFile = ".env.local") {
+export function loadSimEnv(env: Record<string, string | undefined> = process.env, envFile = ".env.local") {
   // Like process.loadEnvFile, but into `env` (the object checked below); existing variables win.
   if (existsSync(envFile)) {
     for (const [name, value] of Object.entries(parseEnv(readFileSync(envFile, "utf8")))) env[name] ??= value;

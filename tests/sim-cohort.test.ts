@@ -78,6 +78,22 @@ describe("provisionCohort (Story 9.1)", () => {
     for (const password of passwords) expect(serialised).not.toContain(password);
   });
 
+  it("names the run and the failed step when a step fails after allocation, keeping the cause", async () => {
+    const { deps } = fakeProvisionDeps();
+    const cause = new Error("Choose an existing department.");
+    const failing = {
+      ...deps,
+      async signIn(email: string, password: string) {
+        const signedIn = await deps.signIn(email, password);
+        return { ...signedIn, stores: { ...signedIn.stores, departments: { ...signedIn.stores.departments, create: async () => { throw cause; } } } };
+      },
+    };
+    const error = await provisionCohort(failing, { personas: PERSONAS }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CohortError);
+    expect((error as Error).message).toBe("Cohort c00ab12 is partly provisioned: the department failed: Choose an existing department. Nothing was rolled back.");
+    expect((error as Error).cause).toBe(cause);
+  });
+
   it("provisions nothing when the range is full", async () => {
     const { deps, calls } = fakeProvisionDeps({ used: ["BS-2990"] });
     await expect(provisionCohort(deps, { personas: PERSONAS })).rejects.toThrow(/full/);
@@ -133,6 +149,14 @@ describe("retireCohorts (Story 9.1)", () => {
     expect(archived.map(a => a.employeeId)).toEqual(["BS-2010", "BS-2011"]);
     expect(result.skipped.map(s => s.run)).toEqual(["c00aaaa"]);
     expect(warnings[0]).toMatch(/c00aaaa.*not found/);
+  });
+
+  it("records a refused archive as failed with its reason and a warning, archiving the cohort's others", async () => {
+    const { deps, archived, warnings } = fakeRetireDeps(employees, users, ["BS-2000"]);
+    const result = await retireCohorts(deps, { all: true });
+    expect(result.failed).toEqual([{ run: "c00aaaa", employeeId: "BS-2000", reason: "The employee BS-2000 could not be archived." }]);
+    expect(warnings).toEqual(["Could not archive BS-2000 (cohort c00aaaa): The employee BS-2000 could not be archived."]);
+    expect(archived.map(a => a.employeeId)).toEqual(["BS-2001", "BS-2010", "BS-2011"]);
   });
 
   it("does nothing when only the newest cohort exists", async () => {
