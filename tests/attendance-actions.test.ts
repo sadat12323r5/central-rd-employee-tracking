@@ -103,6 +103,33 @@ describe("attendance actions", () => {
     expect((await clockInAction(blank, form({ workMode: "Office" }))).error).toMatch(/already recorded/i);
   });
 
+  // Story 9.1: only the simulator injects a time (through attendance-commands); a form never can.
+  it("ignores forged time fields in the form: every entry uses the server time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T09:00:00+06:00"));
+    const forged = { now: "2026-08-03T09:00:00+06:00", date: "2026-08-03", workDate: "2026-08-03", clockIn: "2026-08-03T03:00:00.000Z" };
+    await signIn(blank, form(NADIA));
+    expect(await clockInAction(blank, form({ workMode: "Office", ...forged }))).toEqual({ error: "", message: "Clocked in." });
+    let [entry] = await attendanceStore.listForEmployee("BS-1001");
+    expect(entry).toMatchObject({ date: "2026-09-28", clockIn: "2026-09-28T03:00:00.000Z" });
+
+    vi.setSystemTime(new Date("2026-09-28T17:00:00+06:00"));
+    const saved = await saveLogAction(blank, form({
+      summary: "Work", blockers: "", taskDescription: "Task", taskHours: "2", taskLink: "", ...forged, updatedAt: "2026-08-03T10:00:00.000Z",
+    }));
+    expect(saved).toEqual({ error: "", message: "Daily log saved." });
+    vi.setSystemTime(new Date("2026-09-28T18:00:00+06:00"));
+    expect(await clockOutAction(blank, form({ breakMinutes: "0", ...forged, clockOut: "2026-08-03T12:00:00.000Z" })))
+      .toEqual({ error: "", message: "Clocked out." });
+
+    [entry] = await attendanceStore.listForEmployee("BS-1001");
+    expect(entry).toMatchObject({
+      date: "2026-09-28", clockIn: "2026-09-28T03:00:00.000Z", clockOut: "2026-09-28T12:00:00.000Z",
+      log: { updatedAt: "2026-09-28T11:00:00.000Z" },
+    });
+    expect(await attendanceStore.listAll()).toHaveLength(1);
+  });
+
   it("says nothing was saved when attendance is unavailable, for every action", async () => {
     await signIn(blank, form(NADIA));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

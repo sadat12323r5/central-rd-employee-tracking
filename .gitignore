@@ -14,3 +14,6 @@ test-results/
 # Personal skill-manager cache (mattpocock/skills installer); skills-lock.json is
 # committed so the installer stays reproducible across the team, this raw cache is not
 .agents/
+
+# Story 9.1: simulator output (timelines; never committed)
+sim-output/

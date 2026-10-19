@@ -1209,6 +1209,26 @@ describe("employees-store.create (Story 7.1)", () => {
     expect(scope.calls).toEqual([]);
   });
 
+  // Story 9.1: the server-only summary option (the simulator's cohort label); employee-actions never passes it.
+  it("stores a trimmed summary option in place of the derived empty summary", async () => {
+    const { client, inserts } = insertClient();
+    await storeWith(client).create(admin, input, { summary: "  Simulation cohort c00ab12. Trainee.  " });
+    expect(inserts[0].row.summary).toBe("Simulation cohort c00ab12. Trainee.");
+    const plain = insertClient();
+    await storeWith(plain.client).create(admin, input, {});
+    expect(plain.inserts[0].row.summary).toBe("");
+  });
+
+  it("refuses a summary option over 500 characters before any insert", async () => {
+    const { client, inserts } = insertClient();
+    await storeWith(client).create(admin, input, { summary: "x".repeat(500) });
+    expect(inserts).toHaveLength(1);
+    const refused = insertClient();
+    await expect(storeWith(refused.client).create(admin, input, { summary: "x".repeat(501) }))
+      .rejects.toMatchObject({ name: "EmployeeValidationError", fields: ["summary"] });
+    expect(refused.inserts).toEqual([]);
+  });
+
   it("defaults the join date to today in Asia/Dhaka", async () => {
     const { client, inserts } = insertClient();
     await storeWith(client).create(admin, { ...input, joinedOn: undefined });

@@ -2,14 +2,28 @@
 title: 'Story 9.1: Simulation foundations: cohort, personas, clock and timeline'
 type: 'feature'
 created: '2026-10-18'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '349fe26bb82a6f809caaf4fdb39e9923f798b91a'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - summary: >-
+      Past-dated simulated attendance is refused by the attendance RLS policies (today's Dhaka work_date only), so a real dry run against the shared project records every staff clock-in as a refusal; loosening it for sim cohorts is a System Owner decision.
+    evidence: |-
+      attendance_insert_own / attendance_update_own in supabase/migrations/20261012000000_attendance.sql require work_date = today in Asia/Dhaka; tests/sim-live.test.ts asserts the 42501 refusal. Options and a proposed additive policy are in deferred-work.md (Story 9.1).
+    location: >-
+      supabase/migrations/20261012000000_attendance.sql:39
+    severity: high
+  - summary: >-
+      Retire leaves each cohort's sim Administrator auth account (admin role, forgotten random password) and its department; cohort blocks are never reused (100 runs in BS-2000..BS-2999).
+    evidence: |-
+      The admin persona has no employee row, so the employee archive path cannot reach it; the departments store has no delete or archive.
+    location: >-
+      sim/cohort.ts
+    severity: low
 ---
 
 <intent-contract>
@@ -117,6 +131,46 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 2026-10-19 — Review pass
+- verdicts: 36 findings — high 0, medium 12, low 17, false 7, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` (verification-gap) retire archive-failure path and sim:retire exit code untested — fake archive can reject; tests assert failed, warning, remaining archived, exit 1 vs 0
+  - `[medium]` `[defer]` (verification-gap other) real dry run writes no attendance: RLS accepts only today's work_date — System Owner decision; deferred with options
+  - `[false]` `[reject]` (verification-gap other) live test runs in CI — informational, no defect claimed
+  - `[medium]` `[patch]` (blind) dry run exits 0 and says "done" with no hint of refusals — prints a refusal-count line pointing to timeline.md; exit stays 0 (refusals are findings per the epic)
+  - `[medium]` `[defer]` (blind) offline fakes accept past dates the real RLS refuses — same root as the attendance decision
+  - `[medium]` `[patch]` (blind) partial provisioning failure gives no run id — post-allocation failures rethrown as CohortError naming run and step; no rollback (append-only data)
+  - `[low]` `[defer]` (blind) retire leaves the cohort department and sim admin account — deferred (admin has no employee row; no department delete path)
+  - `[low]` `[reject]` (blind) retire trusts the summary label alone — the summary is set only at create by an admin/manager, and real ids are BS-1xxx; an extra guard adds complexity for an unlikely case
+  - `[low]` `[reject]` (blind) the allocator never reuses blocks and races — a developer tool run one at a time; partial failure is now reported with the run id
+  - `[low]` `[reject]` (blind) holiday names never reach real runs — active() exposes no names; not required by the AC
+  - `[false]` `[reject]` (blind) every calendar error reported as a year problem — dates are generated internally, so isWorkingDay can only throw the unsupported-year error
+  - `[low]` `[reject]` (blind) dhakaClock hard-codes +6h — Asia/Dhaka has no DST; cosmetic
+  - `[low]` `[patch]` (blind) loadSimEnv loads into process.env but checks the env parameter — load and check made consistent
+  - `[false]` `[reject]` (blind) fragile `members.length - 2` index — provisionCohort enforces exactly one admin persona, so the arithmetic holds
+  - `[low]` `[reject]` (blind) timeline left open when the run throws — empty weekdays are unreachable with the fixed period
+  - `[low]` `[reject]` (blind) missingCoverage not enforced at run time — the default PERSONAS are covered by a unit test; overrides come only from tests
+  - `[low]` `[reject]` (blind) --days above 37 is clamped silently — the summary line reports the actual days run
+  - `[low]` `[reject]` (blind) live-test purge can leak auth users after an aborted run — test hygiene, needs prefix sweeps; unlikely
+  - `[medium]` `[patch]` (blind) missing tests for exit paths — grouped with the verification-gap patch and the partial-failure test
+  - `[low]` `[reject]` (edge) concurrent runs pick the same block — as above
+  - `[medium]` `[patch]` (edge) partial provisioning leaves orphans — grouped with the CohortError patch
+  - `[medium]` `[patch]` (edge) run id printed only after success — grouped with the CohortError patch
+  - `[low]` `[patch]` (edge) "No earlier cohort to retire." printed when cohorts were skipped or failed — message reports skipped/failed counts
+  - `[medium]` `[patch]` (edge) a refused clock-in adds two NOT_CLOCKED_IN refusals — the driver skips saveLog/clockOut after a refused clock-in
+  - `[low]` `[reject]` (edge) empty calendar makes firstDay undefined — unreachable with the fixed period
+  - `[low]` `[reject]` (edge) holiday names are not passed — as above
+  - `[medium]` `[defer]` (edge claim) the live test does not show simulated work_dates stored — attendance decision
+  - `[medium]` `[defer]` (edge claim) a shared-project dry run writes no attendance — attendance decision
+  - `[medium]` `[defer]` (intent) simulated date proven only in memory — attendance decision
+  - `[false]` `[reject]` (intent) only attendance gets a clock — leave and assignment stores take explicit dates and compute no "today"; the investigation found no hidden clock there
+  - `[false]` `[reject]` (intent) the forged-time test covers only the attendance actions — the other actions take dates only as user data, not as a clock
+  - `[low]` `[defer]` (intent) the admin account is never archived — grouped with the retire defer
+  - `[low]` `[reject]` (intent) no test asserts that no HTTP path passes the summary option — employee-actions builds its input from a whitelist (fieldsOf), and the existing forged-field tests cover it
+  - `[low]` `[reject]` (intent) CLI tested through functions, not npm scripts — the real scripts were run by hand during verification
+  - `[false]` `[reject]` (intent) persona behaviours exist only as tags — the AC asks for definitions; behaviour is 9.3
+  - `[false]` `[reject]` (intent) 37 vs 40 days — settled in Design Notes from the fixed-period decision
 
 ## Design Notes
 
