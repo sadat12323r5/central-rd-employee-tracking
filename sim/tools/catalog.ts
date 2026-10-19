@@ -7,11 +7,12 @@ import { DEPARTMENT_NAME_MAX } from "@/domain/departments";
 import { EMPLOYEE_ID_PATTERN } from "@/domain/employee-input";
 import { DETAIL_MAX, EMPLOYER_MAX, hasPeriodYear, PERIOD_MAX, ROLE_MAX } from "@/domain/employment-history";
 import { WORK_MODES } from "@/domain/timesheet";
-import { exportActivity, exportAllActivity, type ActivityExport } from "@/server/activity-export";
+import { ActivityForbiddenError, exportActivity, exportAllActivity, mayExport, type ActivityExport } from "@/server/activity-export";
 import { CLIENT_FEEDBACK_MAX, EVALUATION_MAX } from "@/server/assignment-evaluations-store";
 import { ASSIGNMENT_NOTE_MAX, ASSIGNMENT_TEXT_MAX } from "@/server/assignments-store";
 import { BACKFILL_OUTCOME_MAX, BACKFILL_TEXT_MAX } from "@/server/backfilled-project-store";
 import { ownRecordIdentity, type StaffIdentity } from "@/server/session";
+import { fitJsonList } from "./run";
 import type { AnyZodObject, PersonaRole, SimTool, ToolContext } from "./types";
 
 // Story 9.2: the persona tool catalogue. Each tool mirrors exactly one thing the persona's role can do in
@@ -39,7 +40,7 @@ export class NoAttendanceError extends Error {
 
 // ---- input building blocks (limits mirror the server actions' zod rules) ----
 
-const text = (max: number, min = 1) => z.string().min(min).max(max);
+const text = (max: number, min = 1) => z.string().trim().min(min).max(max);
 const isoDate = (what: string) => z.string().regex(/^\d{4}-\d{2}-\d{2}$/, `Enter the ${what} as YYYY-MM-DD.`)
   .refine(isCalendarDate, `Enter the ${what} as a real date (YYYY-MM-DD).`);
 const id = () => z.uuid();
@@ -67,11 +68,26 @@ function own(ctx: ToolContext): StaffIdentity {
 }
 
 const json = (value: unknown) => JSON.stringify(value);
+
+/** The export actions' gate (activity-actions.ts): only an Administrator or a department manager exports. */
+function exporter(ctx: ToolContext) {
+  if (!mayExport(ctx.member.session)) throw new ActivityForbiddenError();
+  return ctx.member.session;
+}
+
+const isHttpUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+};
 const said = (sentence: string, value: unknown) => `${sentence} ${json(value)}`;
 
 /** The number of data rows in an export CSV (every cell is quoted; rows end in CRLF; the header excluded). */
 export function csvRowCount(csv: string): number {
-  if (csv.replace(/^﻿/, "") === "") return 0;
+  if (csv.replace(/^\uFEFF/, "") === "") return 0;
   let rows = 1;
   let quoted = false;
   for (let i = 0; i < csv.length; i++) {
@@ -110,7 +126,7 @@ function teamMember(employee: Employee) {
   const open = employee.assignments.find(a => a.status === "open");
   const evaluated = new Set(employee.evaluations.map(e => e.assignmentId));
   return {
-    id: employee.id, name: employee.name, title: employee.title,
+    id: employee.id, name: employee.name, title: employee.title, archived: employee.archived === true,
     ...(employee.departmentId !== undefined ? { departmentId: employee.departmentId } : {}),
     openAssignment: open ? { id: open.id, client: open.client, projectName: open.projectName, role: open.role, allocation: open.allocation, startDate: open.startDate } : null,
     closedToEvaluate: employee.assignments.filter(a => a.status === "closed" && !evaluated.has(a.id))
@@ -151,8 +167,8 @@ const staffTools: SimTool[] = [
       blockers: text(1000, 0),
       tasks: z.array(z.object({
         description: text(300),
-        hours: z.number().positive().max(24),
-        link: z.string().max(2000).nullable(),
+        hours: z.number().positive().max(24).multipleOf(0.25),
+        link: z.string().trim().max(2000).refine(isHttpUrl, "A link must start with http:// or https://.").nullable(),
       }).strict()).min(1).max(8),
     }).strict(),
     async run(ctx, { summary, blockers, tasks }) {
@@ -288,7 +304,7 @@ const managerTools: SimTool[] = [
     description: "Read the employees you manage: open assignment, closed assignments still to evaluate, and recorded leave.",
     input: z.object({}).strict(),
     async run(ctx) {
-      return json((await ctx.stores.employees.listFor(ctx.member.session)).map(teamMember));
+      return fitJsonList((await ctx.stores.employees.listFor(ctx.member.session)).map(teamMember));
     },
   }),
   tool({
@@ -374,16 +390,17 @@ const managerTools: SimTool[] = [
     description: "Export an activity timeline CSV for one employee you manage (employeeId) or for everyone you manage (employeeId null). period: this-week, last-week, month (month and year), year (year), custom (from and to) or all; unused fields are null. Returns the filename and row count.",
     input: z.object({ employeeId: employeeId().nullable(), ...periodFields }).strict(),
     async run(ctx, { employeeId: target, ...period }) {
+      const session = exporter(ctx);
       const { stores, member } = ctx;
       const records = { assignments: stores.assignments, backfilledProjects: stores.backfilled, evaluations: stores.evaluations, leave: stores.leave };
       const result = target
         ? await exportActivity(
           { ...records, employees: stores.employees, attendance: stores.attendance, interviews: stores.interviews, training: stores.training, audit: ctx.serviceAudit },
-          member.session, member.userId, { employeeId: target, ...periodInput(period) }, ctx.clock.now(),
+          session, member.userId, { employeeId: target, ...periodInput(period) }, ctx.clock.now(),
         )
         : await exportAllActivity(
           { ...records, employees: stores.employees, attendance: stores.attendance, training: stores.training, audit: ctx.serviceAudit, scope: stores.scope },
-          member.session, member.userId, { ...periodInput(period), includeArchived: "" }, ctx.clock.now(),
+          session, member.userId, { ...periodInput(period), includeArchived: "" }, ctx.clock.now(),
         );
       return exported(result);
     },
@@ -425,13 +442,14 @@ const adminTools: SimTool[] = [
     description: "Export the activity timeline CSV of every employee (archived ones too when includeArchived). Period fields as in export_department_activity. Returns the filename and row count.",
     input: z.object({ ...periodFields, includeArchived: z.boolean() }).strict(),
     async run(ctx, { includeArchived, ...period }) {
+      const session = exporter(ctx);
       const { stores, member } = ctx;
       const result = await exportAllActivity(
         {
           employees: stores.employees, attendance: stores.attendance, training: stores.training, audit: ctx.serviceAudit, scope: stores.scope,
           assignments: stores.assignments, backfilledProjects: stores.backfilled, evaluations: stores.evaluations, leave: stores.leave,
         },
-        member.session, member.userId, { ...periodInput(period), includeArchived: includeArchived ? "on" : "" }, ctx.clock.now(),
+        session, member.userId, { ...periodInput(period), includeArchived: includeArchived ? "on" : "" }, ctx.clock.now(),
       );
       return exported(result);
     },

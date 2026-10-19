@@ -15,8 +15,10 @@ function describeCause(cause: unknown): string {
 
 /** The class name, message, code (when the error has one) and cause (when it has one) of a thrown value. */
 export function describeError(error: unknown): ErrorDescription {
-  const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : undefined;
+  const object = typeof error === "object" && error !== null ? (error as { code?: unknown; message?: unknown }) : null;
+  const message = error instanceof Error ? error.message : typeof object?.message === "string" ? object.message : String(error);
+  // A code property that is present but null or undefined is no code.
+  const code = object?.code === null || object?.code === undefined ? undefined : String(object.code);
   const cause = error instanceof Error && error.cause !== undefined ? describeCause(error.cause) : undefined;
   return { error: error instanceof Error ? error.name : "Error", message, ...(code ? { code } : {}), ...(cause ? { cause } : {}) };
 }

@@ -20,7 +20,7 @@ import { readAllPages } from "@/server/paging";
 import { createTrainingStore } from "@/server/training-store";
 import { SIM_START, SimSetupError } from "./calendar";
 import { employeeIdFor, type IdRange, type PersonaStores, type ProvisionDeps, type RangeEmployee, type RetireDeps, type SignedIn } from "./cohort";
-import { createSimClock } from "./tools/clock";
+import { createSimClock, type MovableSimClock } from "./tools/clock";
 import type { ServiceAudit, SimClock, ToolStores } from "./tools/types";
 
 // Story 9.1: the simulator's real dependencies against the shared Supabase project. Developer-only:
@@ -72,17 +72,18 @@ export function storesFor(client: SupabaseClient): PersonaStores {
 /**
  * Story 9.2: the stores a persona's tools call, all on its own signed-in client (never the Next request
  * client, never the service role) and scoped through its own manager-scope. The backfill store's "today"
- * comes from the simulated clock.
+ * (and the training store's and stub LMS's "now") come from the simulated clock.
  */
 export function personaStoresFor(client: SupabaseClient, clock: SimClock): ToolStores {
   const userClient = async () => client;
   const scope = createManagerScope({ userClient });
   const leave = createLeaveStore({ userClient, scope, calendar: createHolidayCalendarStore({ userClient }) });
   const interviews = createInterviewsStore({ userClient });
-  const training = createTrainingStore({ userClient, scope, lms: createStubLmsClient({ userClient }) });
+  const now = () => clock.now();
+  const training = createTrainingStore({ userClient, scope, now, lms: createStubLmsClient({ userClient, now }) });
   const assignments = createAssignmentsStore({ userClient, scope });
   const evaluations = createAssignmentEvaluationsStore({ userClient, scope });
-  const backfilled = createBackfilledProjectStore({ userClient, scope, now: () => clock.now() });
+  const backfilled = createBackfilledProjectStore({ userClient, scope, now });
   const assessments = createAssessmentsStore({ userClient, scope });
   const history = createEmploymentHistoryStore({ userClient, scope });
   return {
@@ -94,14 +95,14 @@ export function personaStoresFor(client: SupabaseClient, clock: SimClock): ToolS
 }
 
 export type SimDeps = ProvisionDeps & RetireDeps & {
-  /** Story 9.2: the run's simulated clock, which every persona's tool stores read. */
-  clock: SimClock;
+  /** Story 9.2: the run's simulated clock, which every persona's tool stores read; the orchestrator moves it. */
+  clock: MovableSimClock;
   /** Story 9.2: the export audit store on the service-role client (as activity-actions.ts does). */
   serviceAudit: ServiceAudit;
   activeCalendar(): ReturnType<ReturnType<typeof createHolidayCalendarStore>["active"]>;
 };
 
-export function createSimDeps(config = loadSimEnv(), clock: SimClock = createSimClock(SIM_START)): SimDeps {
+export function createSimDeps(config = loadSimEnv(), clock: MovableSimClock = createSimClock(SIM_START)): SimDeps {
   const service = createClient(config.url, config.serviceKey, noSession);
   const accounts = createAccountsStore(() => service);
 

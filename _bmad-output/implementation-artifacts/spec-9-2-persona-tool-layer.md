@@ -2,10 +2,10 @@
 title: 'Story 9.2: Persona tool layer'
 type: 'feature'
 created: '2026-10-19'
-status: 'in-review'
+status: 'done'
 baseline_revision: '67bac87d176755a4ce4d957165d0a9ccf0f47eec'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-9-1-simulation-foundations.md'
@@ -176,3 +176,32 @@ deferred: []
 - `npm run typecheck` -- expected: no errors
 - `npx vitest run tests/sim-tools-catalog.test.ts tests/sim-tools-anthropic.test.ts tests/sim-runner.test.ts` -- expected: all pass
 - `npm run check` -- expected: all pass
+
+## Auto Run Result
+
+Status: done
+
+**Summary.** This adds an SDK-agnostic persona tool catalogue (`sim/tools/`): 28 tools.
+- **Per role:** staff get 14 tools, managers 10, and the Administrator 14 (the manager's 10 plus 4 admin-only).
+- **How they run:** each tool has strict zod input, calls one app store method under the persona's own session and stores, and takes the simulated clock.
+- **Refusals:** `runTool` checks the role, then validates input, runs the tool and records an `action` or `refusal` timeline event. App refusals come back as `{ok:false, error, message}` and are never thrown.
+- **SDK adapter:** `sim/tools/anthropic.ts`, the only SDK importer, turns the tools into `strict: true` `betaZodTool`s. Unsupported JSON-Schema constraints move into the field descriptions, and refusals are rethrown as `ToolError`, so the Tool Runner returns `is_error: true`.
+- **Wiring:** `personaStoresFor` (`sim/env.ts`) builds every store on the persona's client with the simulated clock (backfill, training and the LMS stub). Signed-in cohort members carry their `tools`.
+
+**Files.**
+- New: `sim/tools/{types,clock,catalog,run,anthropic}.ts` and `sim/errors.ts`.
+- Changed: `sim/env.ts`, `sim/cohort.ts` and `sim/dry-run-driver.ts`.
+- Tests: `tests/sim-tools-catalog.test.ts`, `tests/sim-tools-anthropic.test.ts`, `tests/sim-env.test.ts` and `tests/support/sim-tool-fakes.ts`, plus a narrowed boundary test in `tests/sim-runner.test.ts`.
+- Package: `@anthropic-ai/sdk@0.131.0` added as a devDependency.
+
+**Review.** The review had 41 findings.
+- Patched (the triage log has every row). The role guard, the mayExport gate on exports and a movable clock type. Simulated `now` reaches the training and LMS stores. Text inputs are trimmed. Truncated list reads stay valid JSON, and read_team flags archived employees. Recording to the timeline can no longer fail a tool call. The error-description, clock-validation and work-log fixes are in. New tests cover the wiring, read_team, refusals and a fake-model Tool Runner loop.
+- Rejected: 13, each with its reason in the triage log.
+- Deferred: none.
+- Patched entries by verdict: 10 medium, 14 low.
+
+**Follow-up review recommended: true.** Unverified risk: the `strictSchema` transform has not been sent to the real Messages API, because no paid calls are made in tests. A schema the API rejects would first show up as a 400 in Story 9.3's first real run.
+
+**Verification.** `npm run check` and `npm run test:e2e` were run on the patched tree; the PR has the results.
+
+**Residual risk.** The 9.1 attendance RLS decision is still open, so past-dated attendance tools are refused against the shared project. Database-stamped timestamps (created_at, review dates, the backfill trigger's "not in the future" check) use real time.

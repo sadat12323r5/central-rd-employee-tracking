@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAttendanceCommands } from "@/server/attendance-commands";
 import { exportActivity, exportAllActivity } from "@/server/activity-export";
 import { TransferOpenAssignmentError } from "@/server/employees-store";
-import { LeaveOverlapError, LeaveUnavailableError } from "@/server/leave-store";
+import {
+  LeaveCalendarMissingError, LeaveForbiddenError, LeaveOverlapError, LeaveUnavailableError, LeaveValidationFailedError,
+} from "@/server/leave-store";
+import { describeError } from "../sim/errors";
 import { TimesheetValidationError } from "@/domain/timesheet";
 import { csvRowCount, TOOLS, toolsFor } from "../sim/tools/catalog";
 import { createSimClock } from "../sim/tools/clock";
-import { INVALID_TOOL_INPUT, runTool, TOOL_TEXT_MAX } from "../sim/tools/run";
+import { INVALID_TOOL_INPUT, RECORDED_INPUT_MAX, runTool, TOOL_NOT_ALLOWED, TOOL_TEXT_MAX } from "../sim/tools/run";
 import type { SimTool } from "../sim/tools/types";
 import { createMemoryAttendanceStore } from "./support/memory-attendance-store";
 import { ADMIN_SESSION, fakeToolContext, MANAGER_SESSION, STAFF_SESSION } from "./support/sim-tool-fakes";
@@ -14,7 +17,7 @@ import { ADMIN_SESSION, fakeToolContext, MANAGER_SESSION, STAFF_SESSION } from "
 // Story 9.2: the persona tool catalogue, offline: fake stores record every call, so each tool is checked to
 // call the right store method with the persona's own session and the simulated clock.
 
-const EXPORT = { csv: "﻿\"h1\",\"h2\"\r\n\"a\",\"b\"\r\n\"c\",\"multi\r\nline\"", filename: "activity-all-employees-2026-08-01_to_2026-08-31.csv", from: "2026-08-01", to: "2026-08-31" };
+const EXPORT = { csv: "\uFEFF\"h1\",\"h2\"\r\n\"a\",\"b\"\r\n\"c\",\"multi\r\nline\"", filename: "activity-all-employees-2026-08-01_to_2026-08-31.csv", from: "2026-08-01", to: "2026-08-31" };
 
 vi.mock("@/server/activity-export", async importOriginal => ({
   ...(await importOriginal<typeof import("@/server/activity-export")>()),
@@ -22,7 +25,10 @@ vi.mock("@/server/activity-export", async importOriginal => ({
   exportAllActivity: vi.fn(async () => EXPORT),
 }));
 
-beforeEach(() => vi.mocked(exportActivity).mockClear() && vi.mocked(exportAllActivity).mockClear());
+beforeEach(() => {
+  vi.mocked(exportActivity).mockClear();
+  vi.mocked(exportAllActivity).mockClear();
+});
 
 const STAFF_TOOLS = [
   "clock_in", "clock_out", "save_work_log", "record_leave", "edit_leave", "cancel_leave", "add_interview", "update_interview",
@@ -217,14 +223,49 @@ describe("tool to store mapping (Story 9.2)", () => {
     expect(record.summary).toBeUndefined();
   });
 
-  it("caps a long read at 4000 characters", async () => {
+  it("reads the team compactly: open assignment, closed ones still to evaluate, active leave, archived flag", async () => {
+    const assignment = (id: string, status: "open" | "closed", completionDate: string | null) => ({
+      id, employeeId: "BS-2004", departmentId: DEPT_ID, client: "Bank", projectName: `Project ${id.slice(0, 1)}`, role: "Backend",
+      allocation: 50, startDate: "2026-08-03", latestUpdate: "", status, completionDate, createdAt: "x", closedAt: null, provenance: "assignment",
+    });
+    const open = "aaaaaaaa-0000-4000-8000-000000000001";
+    const evaluatedId = "bbbbbbbb-0000-4000-8000-000000000002";
+    const toEvaluate = "cccccccc-0000-4000-8000-000000000003";
+    const { ctx } = fakeToolContext("manager", {
+      results: {
+        "employees.listFor": [{
+          id: "BS-2004", name: "Nusrat Jahan", title: "QA Engineer", archived: true, departmentId: DEPT_ID,
+          assignments: [assignment(open, "open", null), assignment(evaluatedId, "closed", "2026-08-07"), assignment(toEvaluate, "closed", "2026-08-06")],
+          evaluations: [{ assignmentId: evaluatedId }],
+          leave: [
+            { id: LEAVE_ID, startDate: "2026-08-24", endDate: "2026-08-25", cancelledAt: null },
+            { id: OTHER_ID, startDate: "2026-08-12", endDate: "2026-08-12", cancelledAt: "2026-08-05T00:00:00Z" },
+          ],
+        }],
+      },
+    });
+    const outcome = await runTool(byName("read_team"), ctx, {});
+    const [member] = JSON.parse(outcome.ok ? outcome.text : "[]");
+    expect(member).toMatchObject({ id: "BS-2004", archived: true, departmentId: DEPT_ID });
+    expect(member.openAssignment).toEqual({ id: open, client: "Bank", projectName: "Project a", role: "Backend", allocation: 50, startDate: "2026-08-03" });
+    expect(member.closedToEvaluate).toEqual([{ id: toEvaluate, projectName: "Project c", completionDate: "2026-08-06" }]);
+    expect(member.leave).toEqual([{ id: LEAVE_ID, startDate: "2026-08-24", endDate: "2026-08-25" }]);
+  });
+
+  it("shrinks a long list read to valid JSON within 4000 characters", async () => {
     const employee = (n: number) => ({
       id: `BS-${2000 + n}`, name: `Person ${n}`, title: "Engineer", assignments: [], evaluations: [],
       leave: [{ id: LEAVE_ID, startDate: "2026-08-24", endDate: "2026-08-25", cancelledAt: null }],
     });
     const { ctx } = fakeToolContext("admin", { results: { "employees.listFor": Array.from({ length: 200 }, (_, n) => employee(n)) } });
     const outcome = await runTool(byName("read_team"), ctx, {});
-    expect(outcome.ok && outcome.text.length).toBe(TOOL_TEXT_MAX);
+    const text = outcome.ok ? outcome.text : "";
+    expect(text.length).toBeLessThanOrEqual(TOOL_TEXT_MAX);
+    const read = JSON.parse(text);
+    expect(read).toMatchObject({ truncated: true, total: 200 });
+    expect(read.items).toHaveLength(read.shown);
+    expect(read.shown).toBeGreaterThan(0);
+    expect(read.items[0].id).toBe("BS-2000");
   });
 
   it("exports through the app's export functions with the service audit store, the actor and the simulated now", async () => {
@@ -252,10 +293,57 @@ describe("tool to store mapping (Story 9.2)", () => {
     );
   });
 
+  it("refuses an export for a session the app's export gate refuses", async () => {
+    const { ctx, calls } = fakeToolContext("manager");
+    ctx.member.session = STAFF_SESSION;
+    const period = { period: "all", month: null, year: null, from: null, to: null };
+    expect(await runTool(byName("export_department_activity"), ctx, { employeeId: null, ...period }))
+      .toMatchObject({ ok: false, error: "ActivityForbiddenError", message: "Only an Administrator or a department manager can export activity." });
+    const admin = fakeToolContext("admin");
+    admin.ctx.member.session = STAFF_SESSION;
+    expect(await runTool(byName("export_all_activity"), admin.ctx, { ...period, includeArchived: false })).toMatchObject({ ok: false, error: "ActivityForbiddenError" });
+    expect(exportActivity).not.toHaveBeenCalled();
+    expect(exportAllActivity).not.toHaveBeenCalled();
+    expect([...calls, ...admin.calls]).toEqual([]);
+  });
+
+  it("trims text inputs, so blank text is refused", async () => {
+    const { ctx, calls } = fakeToolContext("staff");
+    const input = { company: "  Acme  ", role: "SRE", date: "2026-08-12", stage: "   ", outcome: null };
+    expect(await runTool(byName("add_interview"), ctx, input)).toMatchObject({ ok: false, error: INVALID_TOOL_INPUT });
+    await runTool(byName("add_interview"), ctx, { ...input, stage: " Screen " });
+    expect(calls[0].args[1]).toMatchObject({ company: "Acme", stage: "Screen" });
+  });
+
+  it.each([
+    ["hours that are not quarter hours", { description: "API", hours: 1.3, link: null }, /tasks\.0\.hours/],
+    ["a link that is not http(s)", { description: "API", hours: 1, link: "ftp://x.example" }, /tasks\.0\.link/],
+  ])("refuses a work log with %s", async (_label, task, path) => {
+    const { ctx, calls } = fakeToolContext("staff");
+    const outcome = await runTool(byName("save_work_log"), ctx, { summary: "s", blockers: "", tasks: [task] });
+    expect(outcome).toMatchObject({ ok: false, error: INVALID_TOOL_INPUT });
+    expect(!outcome.ok && outcome.message).toMatch(path);
+    expect(calls).toEqual([]);
+  });
+
   it("counts CSV data rows, quoted line breaks included", () => {
     expect(csvRowCount(EXPORT.csv)).toBe(2);
-    expect(csvRowCount("﻿\"h\"")).toBe(0);
+    expect(csvRowCount("\uFEFF\"h\"")).toBe(0);
     expect(csvRowCount("")).toBe(0);
+  });
+});
+
+describe("createSimClock (Story 9.2)", () => {
+  it("rejects unreal dates and fractional minutes", () => {
+    const clock = createSimClock("2026-08-10", "09:00");
+    expect(() => createSimClock("2026-02-30")).toThrow(/Invalid simulated date/);
+    expect(() => clock.set("2026-02-30")).toThrow(/Invalid simulated date/);
+    expect(() => clock.advance(1.5)).toThrow(/whole minutes/);
+    clock.advance(90);
+    expect(clock.now().toISOString()).toBe("2026-08-10T04:30:00.000Z");
+    clock.set("2026-08-11", "23:30");
+    clock.advance(60);
+    expect(clock.today()).toBe("2026-08-12");
   });
 });
 
@@ -280,11 +368,15 @@ describe("refusals (Story 9.2)", () => {
   it.each([
     ["leave overlap", "staff", "record_leave", { startDate: "2026-08-24", endDate: "2026-08-25" }, "leave.record", new LeaveOverlapError({ startDate: "2026-08-20", endDate: "2026-08-24" }), "LeaveOverlapError"],
     ["a transfer blocked by an open assignment", "manager", "transfer_employee", { employeeId: "BS-2004", toDepartmentId: DEPT_ID }, "employees.transfer", new TransferOpenAssignmentError(), "TransferOpenAssignmentError"],
+    ["an authority refusal", "manager", "record_team_leave", { employeeId: "BS-1001", startDate: "2026-08-24", endDate: "2026-08-25" }, "leave.record", new LeaveForbiddenError(), "LeaveForbiddenError"],
+    ["no holiday calendar", "staff", "record_leave", { startDate: "2026-08-24", endDate: "2026-08-25" }, "leave.record", new LeaveCalendarMissingError(), "LeaveCalendarMissingError"],
+    ["a year the calendar does not cover", "staff", "record_leave", { startDate: "2027-01-04", endDate: "2027-01-05" }, "leave.record", new LeaveValidationFailedError("UNSUPPORTED_YEAR", { year: 2027, supportedYearStart: 2026, supportedYearEnd: 2026 }), "LeaveValidationFailedError"],
     ["a timesheet rule", "staff", "clock_in", { workMode: "Office" }, "attendance-commands.clockIn", new TimesheetValidationError("ALREADY_CLOCKED_IN", "You are already clocked in today."), "TimesheetValidationError"],
   ] as const)("returns the app's refusal for %s without throwing", async (_label, role, name, input, failing, error, className) => {
     const { ctx, calls, events } = fakeToolContext(role, { failures: { [failing]: error } });
     const outcome = await runTool(byName(name), ctx, input);
     expect(outcome).toMatchObject({ ok: false, error: className, message: error.message });
+    if ("code" in error) expect(outcome).toMatchObject({ code: String(error.code) });
     expect(calls).toHaveLength(1);
     expect(events).toEqual([expect.objectContaining({ kind: "refusal", text: `${name}: ${error.message}`, detail: expect.objectContaining({ tool: name, error: className }) })]);
   });
@@ -298,6 +390,50 @@ describe("refusals (Story 9.2)", () => {
       cause: "42501 new row violates row-level security policy",
     });
     expect(events[0]).toMatchObject({ kind: "refusal", text: `record_leave: ${error.message}`, detail: { cause: "42501 new row violates row-level security policy" } });
+  });
+
+  it("refuses a tool outside the persona's role before parsing, as a wiring error", async () => {
+    const { ctx, calls, events } = fakeToolContext("staff");
+    const outcome = await runTool(byName("transfer_employee"), ctx, { not: "even valid" });
+    expect(outcome).toEqual({ ok: false, error: TOOL_NOT_ALLOWED, message: "transfer_employee is not one of the staff tools." });
+    expect(calls).toEqual([]);
+    expect(events).toEqual([expect.objectContaining({ kind: "refusal", detail: expect.objectContaining({ error: TOOL_NOT_ALLOWED }) })]);
+    const manager = fakeToolContext("manager");
+    expect(await runTool(byName("clock_in"), manager.ctx, { workMode: "Office" })).toMatchObject({ ok: false, error: TOOL_NOT_ALLOWED });
+    const admin = fakeToolContext("admin");
+    expect(await runTool(byName("read_my_record"), admin.ctx, {})).toMatchObject({ ok: false, error: TOOL_NOT_ALLOWED });
+    expect(await runTool(byName("create_department"), manager.ctx, { name: "X", parentId: null })).toMatchObject({ ok: false, error: TOOL_NOT_ALLOWED });
+  });
+
+  it("names the tool once in an invalid-input refusal", async () => {
+    const { ctx, events } = fakeToolContext("staff");
+    await runTool(byName("clock_in"), ctx, { workMode: "Beach" });
+    expect(events[0].text).toMatch(/^clock_in: Invalid input: workMode: /);
+    expect(events[0].text.match(/clock_in/g)).toHaveLength(1);
+  });
+
+  it("keeps the outcome when the timeline write fails, and caps a long recorded input", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = fakeToolContext("staff");
+    failing.ctx.timeline = { record: () => { throw new Error("disk full"); } };
+    expect(await runTool(byName("cancel_leave"), failing.ctx, { leaveId: LEAVE_ID })).toMatchObject({ ok: true });
+    expect(failing.calls).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+    warn.mockRestore();
+
+    const { ctx, events } = fakeToolContext("staff");
+    await runTool(byName("add_interview"), ctx, { company: "x".repeat(5000), role: "r", date: "2026-08-12", stage: "s", outcome: null });
+    const recorded = events[0].detail?.input;
+    expect(typeof recorded).toBe("string");
+    expect((recorded as string).length).toBeLessThanOrEqual(RECORDED_INPUT_MAX);
+    expect(events[0].day).toBe("2026-08-10");
+  });
+
+  it("describes non-Error refusals and null codes sensibly", () => {
+    expect(describeError({ message: "plain object", code: null })).toEqual({ error: "Error", message: "plain object" });
+    expect(describeError(Object.assign(new Error("boom"), { code: undefined }))).toEqual({ error: "Error", message: "boom" });
+    expect(describeError(Object.assign(new Error("boom"), { code: "P0001" }))).toMatchObject({ code: "P0001" });
+    expect(describeError("text")).toEqual({ error: "Error", message: "text" });
   });
 
   it("refuses an attendance tool for a persona without attendance commands", async () => {
