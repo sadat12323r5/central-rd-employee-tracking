@@ -31,6 +31,7 @@
     "zod": "^4.1.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^6.9.1",
