@@ -2,7 +2,8 @@
 title: 'Story 9.3: Persona agents and the eight-week orchestration'
 type: 'feature'
 created: '2026-10-19'
-status: 'draft'
+status: 'in-progress'
+baseline_revision: '65a778604de9f152bf16c7da83d832c4b7e0724d'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
