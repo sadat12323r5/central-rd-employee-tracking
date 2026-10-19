@@ -2,7 +2,7 @@
 title: 'Story 9.2: Persona tool layer'
 type: 'feature'
 created: '2026-10-19'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '67bac87d176755a4ce4d957165d0a9ccf0f47eec'
 review_loop_iteration: 0
 followup_review_recommended: false
