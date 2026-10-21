@@ -55,7 +55,8 @@ import { trainingStore, TrainingUnavailableError, type TrainingEntry, type Train
 // here against manager-scope, and again by the employees_insert_* RLS policies); Staff never. The
 // department is required. Status, initials, avatar colour and summary are derived, never taken from the
 // input, and the row never carries an account link or an archived flag: accounts come only from
-// accounts-store (Story 1.3).
+// accounts-store (Story 1.3). Story 9.1: a server-side caller (the simulator) may pass a `summary` create
+// option instead of the derived empty one; employee-actions never passes it.
 //
 // Story 7.2: `updateDetails` edits an existing employee's title, team, reporting manager, office and
 // employment type through the per-request client's rpc to public.update_employee_details (a SECURITY
@@ -84,7 +85,7 @@ export interface EmployeesStore {
    * manager's subtree), EmployeeValidationError (bad input, unknown department), EmployeeExistsError
    * (duplicate Employee ID or email) or EmployeesUnavailableError. Never creates a sign-in account.
    */
-  create(session: SessionIdentity, input: NewEmployeeInput): Promise<{ employeeId: string; name: string }>;
+  create(session: SessionIdentity, input: NewEmployeeInput, options?: EmployeeCreateOptions): Promise<{ employeeId: string; name: string }>;
   /**
    * Story 7.2: saves an employee's title, team, reporting manager, office and employment type (nothing
    * else). Throws EmployeeForbiddenError (Staff, or an employee outside a manager's subtree),
@@ -106,6 +107,15 @@ export interface EmployeesStore {
   transfer(session: SessionIdentity, employeeId: string, toDepartmentId: string): Promise<TransferResult>;
 }
 
+/** The longest `summary` a server-side caller may set on create (Story 9.1). */
+export const EMPLOYEE_SUMMARY_MAX = 500;
+
+/**
+ * Story 9.1: server-only create options. `summary` (trimmed, at most EMPLOYEE_SUMMARY_MAX characters) replaces
+ * the derived empty summary; the simulator uses it for its cohort label. No HTTP path passes it.
+ */
+export type EmployeeCreateOptions = { summary?: string };
+
 /** The caller may not add or edit this employee: a Staff session, or outside a manager's subtree. */
 export class EmployeeForbiddenError extends Error {
   constructor() {
@@ -116,11 +126,12 @@ export class EmployeeForbiddenError extends Error {
 
 /**
  * The input failed validation. `fields` names the offending inputs; values are never included.
- * `"details"` means the database function refused the basic details without naming a field (Story 7.2).
+ * `"details"` means the database function refused the basic details without naming a field (Story 7.2);
+ * `"summary"` is the server-only create option (Story 9.1).
  */
 export class EmployeeValidationError extends Error {
-  readonly fields: (NewEmployeeField | "details")[];
-  constructor(fields: (NewEmployeeField | "details")[]) {
+  readonly fields: (NewEmployeeField | "details" | "summary")[];
+  constructor(fields: (NewEmployeeField | "details" | "summary")[]) {
     super(`Invalid employee details: ${fields.join(", ")}.`);
     this.name = "EmployeeValidationError";
     this.fields = fields;
@@ -531,11 +542,13 @@ export function createEmployeesStore({
   }
 
   return {
-    async create(session, input) {
+    async create(session, input, options = {}) {
       // Staff never add employees: refused before any query.
       if (session.role !== "admin" && session.role !== "manager") throw new EmployeeForbiddenError();
       const employee = normalizeNewEmployee(input);
-      const invalid = invalidNewEmployeeFields(employee);
+      const invalid: (NewEmployeeField | "summary")[] = invalidNewEmployeeFields(employee);
+      const summary = options.summary === undefined ? undefined : String(options.summary).trim();
+      if (summary !== undefined && summary.length > EMPLOYEE_SUMMARY_MAX) invalid.push("summary");
       if (invalid.length > 0) throw new EmployeeValidationError(invalid);
       if (session.role === "manager" && !(await managedDepartmentIds(session)).has(employee.departmentId)) {
         throw new EmployeeForbiddenError();
@@ -548,7 +561,7 @@ export function createEmployeesStore({
           employee_id: employee.employeeId, name: employee.name, title: employee.title, team: employee.team,
           employment_type: employee.employmentType, email: employee.email, joined_on: employee.joinedOn,
           manager: employee.manager, office: employee.office, department_id: employee.departmentId,
-          status: derived.status, initials: derived.initials, avatar_color: derived.avatarColor, summary: derived.summary,
+          status: derived.status, initials: derived.initials, avatar_color: derived.avatarColor, summary: summary ?? derived.summary,
         });
       } catch (cause) {
         throw new EmployeesUnavailableError({ cause });

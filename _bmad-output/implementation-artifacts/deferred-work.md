@@ -124,3 +124,12 @@ Story 8.4 adds `leave` rows (type, dates, working-day count, status) to the acti
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-4-exports-assignments-evaluations-leave.md`
   summary: The 2026-10-16 "Blocked: Story 8.4" entry above and the Epic 5 blocked entry are resolved (provisional calendar adopted; 5.1–5.4 and 8.4 built). Open: bulk exports read every visible record of the four new sources before filtering (cost only); the e2e fixed subject BS-9193 accumulates closed assignments and cancelled leave across runs by design (rows can never be deleted).
   evidence: Triage log in the spec.
+
+## Story 9.1 (recorded 2026-10-19)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-1-simulation-foundations.md`
+  summary: "DECISION NEEDED (System Owner): simulated attendance cannot be written for past dates. The attendance RLS policies `attendance_insert_own` and `attendance_update_own` (20261012000000_attendance.sql) accept only today's Dhaka `work_date`. The simulated period, 2026-08-03 to 2026-09-25, is in the past, so a real `sim:run -- --dry-run` records every staff clock-in as a refusal (42501), and Stories 9.2 and 9.3 will hit the same refusal. Options: (a) an ADDITIVE migration adding insert and update policies scoped to cohort employees. It would allow `employee_id ~ '^BS-2\\d{3}$'`, a summary starting with 'Simulation cohort ', the user's own linked account and `work_date` between 2026-08-03 and 2026-09-25. This loosens the anti-backdating control for bot accounts only. (b) Move the simulated period to start today (this contradicts the fixed-period decision). (c) Accept attendance refusals as findings and simulate attendance only for today."
+  evidence: "tests/sim-live.test.ts asserts the refusal and its 42501 cause. The epic's rules say an action the app refuses is logged and never forced through, so 9.1 ships without loosening the policy."
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-1-simulation-foundations.md`
+  summary: "Retire archives cohort employees (which also blocks their accounts). Each cohort's sim Administrator auth account (an admin role, random forgotten password) and its 'Simulation Cohort <run>' department stay. Consider disabling the bot admin accounts on retire. The cohort range BS-2000..BS-2999 holds 100 runs and blocks are never reused."
+  evidence: "Spec Design Notes and triage log."

@@ -1,9 +1,9 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { buildLog, clockIn, clockOut, todaysEntry, TimesheetValidationError } from "@/domain/timesheet";
+import { TimesheetValidationError } from "@/domain/timesheet";
 import { getSession } from "./auth";
+import { createAttendanceCommands } from "./attendance-commands";
 import { attendanceStore, AttendanceUnavailableError } from "./attendance-store";
 import { ownRecordIdentity } from "./session";
 
@@ -12,6 +12,10 @@ export type ActionState = { error: string; message: string };
 // The employee is always taken from the signed session, never from the submitted form,
 // so staff can only create or change their own records. Story 4.10: a manager, or an Administrator
 // linked to an employee row, records their own attendance ("My record") under the same Staff rules.
+// Story 9.1: the work itself lives in attendance-commands; the time is always the server's `new Date()`,
+// never a value from the form (any now/date/workDate/clockIn field is ignored).
+const commands = () => createAttendanceCommands(attendanceStore);
+
 const SIGNED_OUT = "Your session has ended. Sign in again to record attendance.";
 const NOT_LINKED = "Your account isn't linked to an employee record, so there is nothing to record here.";
 
@@ -43,37 +47,26 @@ async function run(work: (employeeId: string, now: Date) => Promise<string>): Pr
 }
 
 export async function clockInAction(_previous: ActionState, form: FormData): Promise<ActionState> {
-  return run(async (employeeId, now) => {
-    const entries = await attendanceStore.listForEmployee(employeeId);
-    const entry = clockIn(entries, { id: randomUUID(), employeeId, workMode: String(form.get("workMode") || ""), now });
-    await attendanceStore.save(entry);
-    return "Clocked in.";
-  });
+  return run((employeeId, now) => commands().clockIn(employeeId, { workMode: String(form.get("workMode") || "") }, now));
 }
 
 export async function clockOutAction(_previous: ActionState, form: FormData): Promise<ActionState> {
-  return run(async (employeeId, now) => {
+  return run((employeeId, now) => {
     const raw = String(form.get("breakMinutes") ?? "").trim();
     const breakMinutes = raw === "" ? 0 : Number(raw);
-    const entry = todaysEntry(await attendanceStore.listForEmployee(employeeId), employeeId, now);
-    await attendanceStore.save(clockOut(entry, { breakMinutes, now }));
-    return "Clocked out.";
+    return commands().clockOut(employeeId, { breakMinutes }, now);
   });
 }
 
 export async function saveLogAction(_previous: ActionState, form: FormData): Promise<ActionState> {
-  return run(async (employeeId, now) => {
-    const entry = todaysEntry(await attendanceStore.listForEmployee(employeeId), employeeId, now);
-    if (!entry) throw new TimesheetValidationError("NOT_CLOCKED_IN", "Clock in before writing today's log.");
+  return run((employeeId, now) => {
     const descriptions = form.getAll("taskDescription").map(String);
     const hours = form.getAll("taskHours").map(String);
     const links = form.getAll("taskLink").map(String);
-    const log = buildLog(entry, {
+    return commands().saveLog(employeeId, {
       summary: String(form.get("summary") || ""),
       blockers: String(form.get("blockers") || ""),
       tasks: descriptions.map((description, i) => ({ description, hours: hours[i] ?? "", link: links[i] ?? "" })),
     }, now);
-    await attendanceStore.save({ ...entry, log });
-    return "Daily log saved.";
   });
 }
